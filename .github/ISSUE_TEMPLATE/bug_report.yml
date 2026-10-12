@@ -1,0 +1,40 @@
+name: 缺陷报告
+description: 报告可复现的问题，帮助维护者定位并修复。
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请勿粘贴密码、访问令牌、个人联系方式、内部任务数据、成员信息或未公开文件。
+  - type: input
+    id: summary
+    attributes:
+      label: 问题概述
+      description: 用一句话说明发生了什么。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 请提供最小、可复现的操作步骤；必要时使用脱敏示例。
+      placeholder: |
+        1. 打开……
+        2. 点击……
+        3. 看到……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果与实际结果
+      description: 说明你预期看到的行为，以及实际发生的行为。
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 使用环境（可选）
+      description: 例如浏览器和版本；不要填写账号或设备唯一标识。

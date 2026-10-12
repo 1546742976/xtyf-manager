@@ -5,6 +5,7 @@
   <symbol id="ws-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 6a3 3 0 0 1 0 6m1 4a5 5 0 0 1 3 4"/></symbol>
   <symbol id="ws-money" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="15" rx="2"/><path d="M2 11h20M5 6V4a2 2 0 0 1 2-2h12"/></symbol>
   <symbol id="ws-invoice" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3zM9 8h6M9 12h6"/></symbol>
+  <symbol id="ws-discussions" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5z"/><path d="M8 9h8M8 12h5"/></symbol>
   <symbol id="ws-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9 7 7m10 10 2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></symbol>
   <symbol id="ws-exit" viewBox="0 0 24 24"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5m4-4 4-4-4-4m-9 4h13"/></symbol>
 </svg>
@@ -21,6 +22,7 @@
     <div class="ws-nav-group">
       <div class="ws-nav-caption">团队协作</div>
       <a href="{{ url_for('tasks') }}" class="ws-nav-link{% if page == 'tasks' %} is-active{% endif %}"{% if page == 'tasks' %} aria-current="page"{% endif %}><svg><use href="#ws-tasks"/></svg>任务中心</a>
+      <a href="{{ url_for('discussions.index') }}" class="ws-nav-link{% if page == 'discussions' %} is-active{% endif %}"{% if page == 'discussions' %} aria-current="page"{% endif %}><svg><use href="#ws-discussions"/></svg>GitHub 协作</a>
       {% if me.role in ('admin', 'manager') %}
       <a href="{{ url_for('manage') }}" class="ws-nav-link{% if page == 'manage' %} is-active{% endif %}"{% if page == 'manage' %} aria-current="page"{% endif %}><svg><use href="#ws-tasks"/></svg>任务管理</a>
       <a href="{{ url_for('members') }}" class="ws-nav-link{% if page == 'members' %} is-active{% endif %}"{% if page == 'members' %} aria-current="page"{% endif %}><svg><use href="#ws-users"/></svg>成员管理</a>

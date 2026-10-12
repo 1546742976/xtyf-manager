@@ -1,0 +1,242 @@
+"""Transactional task creation, updates, and logical deletion."""
+from __future__ import annotations
+
+import json
+import sqlite3
+from common import now_str
+from modules.task_types import Actor, JsonObject
+from modules.task_validation import active_ids, creates_cycle, normalize_ids, parse_id, valid_tasks, validate_dates
+
+STATUSES = ("未开始", "进行中", "已完成", "阻塞", "已取消")
+PRIORITIES = ("高", "中", "低")
+SCALAR_FIELDS = ("title", "detail", "owner_id", "project_id", "parent_id", "priority", "status", "start_date", "due_date")
+RELATION_FIELDS = ("participant_ids", "group_ids", "predecessor_ids")
+
+
+def _legacy_catalog(db: sqlite3.Connection, table: str, name: str, may_create: bool) -> int | None:
+    clean = name.strip()
+    if not clean:
+        return None
+    row = db.execute(f"SELECT id FROM {table} WHERE name = ?", (clean,)).fetchone()
+    if row:
+        return int(row[0])
+    if not may_create:
+        return None
+    return int(db.execute(f"INSERT INTO {table}(name) VALUES (?)", (clean,)).lastrowid)
+
+
+def _relations(db: sqlite3.Connection, task_id: int) -> dict[str, list[int]]:
+    specs = {
+        "participant_ids": ("task_participants", "member_id"),
+        "group_ids": ("task_groups", "group_id"),
+        "predecessor_ids": ("task_dependencies", "predecessor_id"),
+    }
+    return {key: [int(row[0]) for row in db.execute(
+        f"SELECT {column} FROM {table} WHERE task_id = ? ORDER BY {column}", (task_id,)
+    )] for key, (table, column) in specs.items()}
+
+
+def _resolve_relations(
+    db: sqlite3.Connection, data: JsonObject, role: str, owner_id: int | None
+) -> tuple[dict[str, list[int]], str | None]:
+    values: dict[str, list[int]] = {}
+    for key, label in (("participant_ids", "参与者"), ("group_ids", "组别"), ("predecessor_ids", "前置任务")):
+        parsed, error = normalize_ids(data.get(key), label)
+        if error:
+            return {}, error
+        values[key] = parsed or []
+    if "group_name" in data:
+        legacy_name = str(data.get("group_name") or "").strip()
+        legacy_id = _legacy_catalog(db, "groups", legacy_name, role in ("admin", "manager"))
+        if legacy_name and legacy_id is None:
+            return {}, "组别不存在"
+        legacy = [legacy_id] if legacy_id is not None else []
+        if "group_ids" in data and values["group_ids"] != legacy:
+            return {}, "group_name 与 group_ids 冲突"
+        values["group_ids"] = legacy
+    if "group_ids" not in data and "group_name" not in data and owner_id is not None:
+        values["group_ids"] = [int(row[0]) for row in db.execute(
+            "SELECT group_id FROM member_groups WHERE member_id = ? ORDER BY group_id", (owner_id,)
+        )]
+    return values, None
+
+
+def _validate(
+    db: sqlite3.Connection, task_id: int | None, values: JsonObject, relations: dict[str, list[int]],
+    active_member_ids: list[int], active_group_ids: list[int], active_project_id: int | None,
+) -> str | None:
+    title = str(values.get("title") or "").strip()
+    if not title:
+        return "任务标题不能为空"
+    owner_id = values.get("owner_id")
+    participant_ids = relations["participant_ids"]
+    if participant_ids and owner_id is None:
+        return "有参与者时必须指定负责人"
+    if not active_ids(db, "members", list(dict.fromkeys(active_member_ids))):
+        return "负责人或参与者不存在或已停用"
+    if not active_ids(db, "groups", active_group_ids):
+        return "组别不存在"
+    if active_project_id is not None and not active_ids(db, "projects", [active_project_id]):
+        return "项目不存在"
+    refs = relations["predecessor_ids"]
+    parent_id = values.get("parent_id")
+    if parent_id is not None:
+        refs = refs + [int(parent_id)]
+    refs = list(dict.fromkeys(refs))
+    if not valid_tasks(db, refs, task_id):
+        return "父任务或前置任务不存在、已删除或引用自身"
+    if task_id is not None and parent_id is not None and creates_cycle(db, "tasks", "parent_id", task_id, [int(parent_id)]):
+        return "父子任务形成循环"
+    if task_id is not None and creates_cycle(db, "task_dependencies", "predecessor_id", task_id, relations["predecessor_ids"]):
+        return "前置任务形成循环"
+    if values.get("priority") not in PRIORITIES or values.get("status") not in STATUSES:
+        return "状态或优先级不合法"
+    return validate_dates(values.get("start_date"), values.get("due_date"))
+
+
+def _replace_relations(db: sqlite3.Connection, task_id: int, relations: dict[str, list[int]]) -> None:
+    specs = {
+        "participant_ids": ("task_participants", "member_id"),
+        "group_ids": ("task_groups", "group_id"),
+        "predecessor_ids": ("task_dependencies", "predecessor_id"),
+    }
+    for key, (table, column) in specs.items():
+        db.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
+        db.executemany(
+            f"INSERT INTO {table}(task_id, {column}) VALUES (?, ?)",
+            ((task_id, item) for item in relations[key]),
+        )
+
+
+def _revision(
+    db: sqlite3.Connection, task_id: int, actor: Actor, before: JsonObject,
+    after: JsonObject, version: int, kind: str = "update", reverted_by: int | None = None,
+) -> int:
+    return int(db.execute(
+        "INSERT INTO task_revisions(task_id,actor_id,actor_name,created_at,before_json,after_json,version,reverted_by,kind) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (task_id, actor["id"], actor["name"], now_str(), json.dumps(before, ensure_ascii=False),
+         json.dumps(after, ensure_ascii=False), version, reverted_by, kind),
+    ).lastrowid)
+
+
+def create_task(
+    db: sqlite3.Connection, actor: Actor, data: JsonObject
+) -> tuple[int | None, int | None, str | None, int]:
+    db.execute("BEGIN IMMEDIATE")
+    if actor["role"] != "admin" and data.get("parent_id") not in (None, "", 0, "0"):
+        db.rollback(); return None, None, "仅管理员可设置父任务", 403
+    owner_id = parse_id(data.get("owner_id"), "owner_id")
+    project_id = parse_id(data.get("project_id"), "project_id")
+    if "project" in data:
+        legacy_id = _legacy_catalog(db, "projects", str(data.get("project") or ""), True)
+        if "project_id" in data and project_id != legacy_id:
+            db.rollback(); return None, None, "project 与 project_id 冲突", 400
+        project_id = legacy_id
+    values = {"title": str(data.get("title") or "").strip(), "detail": str(data.get("detail") or "").strip(),
+              "owner_id": owner_id, "project_id": project_id,
+              "parent_id": parse_id(data.get("parent_id"), "parent_id"),
+              "priority": data.get("priority", "中"), "status": data.get("status", "未开始"),
+              "start_date": str(data.get("start_date") or "").strip(), "due_date": str(data.get("due_date") or "").strip()}
+    relations, error = _resolve_relations(db, data, str(actor["role"]), owner_id)
+    member_ids = relations.get("participant_ids", []) + ([owner_id] if owner_id is not None else [])
+    error = error or _validate(db, None, values, relations, member_ids, relations.get("group_ids", []), project_id)
+    if error:
+        db.rollback(); return None, None, error, 400
+    stamp = now_str()
+    try:
+        columns = ",".join(values)
+        placeholders = ",".join("?" for _ in values)
+        cur = db.execute(
+            f"INSERT INTO tasks({columns},progress,created_by,created_at,updated_at,version) VALUES ({placeholders},0,?,?,?,1)",
+            (*values.values(), actor["id"], stamp, stamp),
+        )
+        task_id = int(cur.lastrowid)
+        _replace_relations(db, task_id, relations)
+        after = dict(values) | dict(relations)
+        _revision(db, task_id, actor, {}, after, 1, "create")
+        db.commit()
+        return task_id, 1, None, 200
+    except (sqlite3.Error, TypeError, ValueError):
+        db.rollback()
+        raise
+
+
+def update_task(
+    db: sqlite3.Connection, actor: Actor, task_id: int, data: JsonObject
+) -> tuple[int | None, str | None, int]:
+    db.execute("BEGIN IMMEDIATE")
+    row = db.execute("SELECT * FROM tasks WHERE id = ? AND deleted_at IS NULL", (task_id,)).fetchone()
+    if row is None:
+        db.rollback(); return None, "任务不存在", 404
+    prior = dict(row)
+    participant_ids = _relations(db, task_id)["participant_ids"]
+    management = actor["role"] in ("admin", "manager")
+    if not management and actor["id"] != prior["owner_id"] and actor["id"] not in participant_ids:
+        db.rollback(); return None, "无权限", 403
+    if "parent_id" in data and actor["role"] != "admin":
+        db.rollback(); return None, "仅管理员可设置父任务", 403
+    expected = parse_id(data.get("version", prior["version"]), "version", False)
+    values = {key: prior[key] for key in SCALAR_FIELDS}
+    touched: set[str] = set()
+    for key in SCALAR_FIELDS:
+        if key in data:
+            values[key] = data[key]
+            touched.add(key)
+    for key in ("owner_id", "project_id", "parent_id"):
+        values[key] = parse_id(values[key], key)
+    if "project" in data:
+        legacy_name = str(data.get("project") or "").strip()
+        legacy_id = _legacy_catalog(db, "projects", legacy_name, management)
+        if legacy_name and legacy_id is None:
+            db.rollback(); return None, "项目不存在", 400
+        if "project_id" in data and values["project_id"] != legacy_id:
+            db.rollback(); return None, "project 与 project_id 冲突", 400
+        values["project_id"] = legacy_id
+        touched.add("project_id")
+    for key in ("title", "detail", "start_date", "due_date"):
+        values[key] = str(values[key] or "").strip()
+    relations = _relations(db, task_id)
+    supplied_relations, error = _resolve_relations(db, data, str(actor["role"]), values["owner_id"])
+    if error:
+        db.rollback()
+        return None, error, 400
+    for key in RELATION_FIELDS:
+        if key in data or (key == "group_ids" and "group_name" in data):
+            relations[key] = supplied_relations[key]
+            touched.add(key)
+    old_relations = _relations(db, task_id)
+    active_members = [item for item in relations["participant_ids"] if item not in old_relations["participant_ids"]]
+    if values["owner_id"] != prior["owner_id"] and values["owner_id"] is not None:
+        active_members.append(values["owner_id"])
+    active_groups = [item for item in relations["group_ids"] if item not in old_relations["group_ids"]]
+    active_project = values["project_id"] if values["project_id"] != prior["project_id"] else None
+    error = _validate(db, task_id, values, relations, active_members, active_groups, active_project)
+    if error:
+        db.rollback(); return None, error, 400
+    before = {key: (prior[key] if key in SCALAR_FIELDS else _relations(db, task_id)[key]) for key in touched}
+    after = {key: (values[key] if key in SCALAR_FIELDS else relations[key]) for key in touched}
+    changed = {key for key in touched if before[key] != after[key]}
+    note = str(data.get("note") or "").strip()
+    try:
+        current = db.execute("SELECT version FROM tasks WHERE id=? AND deleted_at IS NULL", (task_id,)).fetchone()
+        if current is None:
+            db.rollback(); return None, "任务不存在", 404
+        if int(current[0]) != expected:
+            db.rollback(); return None, "任务已被其他人修改", 409
+        version = expected
+        if changed:
+            version += 1
+            assignments = ",".join(f"{key}=?" for key in SCALAR_FIELDS)
+            db.execute(f"UPDATE tasks SET {assignments},updated_at=?,version=? WHERE id=? AND version=?",
+                       (*values.values(), now_str(), version, task_id, expected))
+            _replace_relations(db, task_id, relations)
+            _revision(db, task_id, actor, {k: before[k] for k in changed}, {k: after[k] for k in changed}, version)
+        if changed or note:
+            db.execute("INSERT INTO logs(task_id,member_id,member_name,note,changes,created_at) VALUES(?,?,?,?,?,?)",
+                       (task_id, actor["id"], actor["name"], note, "；".join(sorted(changed)), now_str()))
+        db.commit()
+        return version, None, 200
+    except (sqlite3.Error, TypeError, ValueError):
+        db.rollback()
+        raise

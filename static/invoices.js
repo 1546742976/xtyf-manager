@@ -391,6 +391,5 @@ showToast('PDF金额刷新完成','success');
 }
 
 window.IS_FINANCE=window.IS_FINANCE||false;window.ME_NAME=window.ME_NAME||'';
-document.getElementById('whoAmI').textContent=window.ME_NAME;
 if(!window.IS_FINANCE){document.body.classList.add('member');document.querySelectorAll('#detailModal input,#detailModal select,#detailModal textarea').forEach(function(el){el.disabled=true});}
 loadStats().then(function(){loadInvoices()});

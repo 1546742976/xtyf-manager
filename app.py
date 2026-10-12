@@ -32,9 +32,14 @@ from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
                     manager_required, now_str)
 from modules.funds import funds_bp, can_review
 from modules.invoices import bp as invoices_bp
+from modules.discussions import discussions_bp
+from modules.task_api import bp as task_api_bp
+from modules.task_attachments import bp as task_attachments_bp
+from modules.task_catalogs import bp as task_catalogs_bp
+from modules.task_migrations import migrate as migrate_tasks
 
 # ---- 关键路径与端口（secret.key 用于会话签名，首次运行自动生成）----
-SECRET_PATH = os.path.join(BASE_DIR, "secret.key")
+SECRET_PATH = os.environ.get("PROGRESS_SECRET_PATH", os.path.join(BASE_DIR, "secret.key"))
 PORT = int(os.environ.get("PORT", "8520"))
 
 # ---- 全局常量：任务状态枚举（看板/表单/校验共用）----
@@ -43,62 +48,6 @@ STATUSES = ["未开始", "进行中", "已完成", "阻塞", "已取消"]
 PRIORITIES = ["高", "中", "低"]
 # ---- 系统角色：admin=管理员 / manager=项管 / member=成员 ----
 ROLE_NAMES = {"admin": "管理员", "manager": "项管", "member": "成员"}
-# ---- 字段中文名（任务更新日志里显示"字段: 旧值 → 新值"）----
-FIELD_NAMES = {
-    "title": "标题",
-    "detail": "说明",
-    "owner_id": "负责人",
-    "group_name": "组别",
-    "project": "项目",
-    "priority": "优先级",
-    "status": "状态",
-    "start_date": "开始日期",
-    "due_date": "截止日期",
-}
-# ---- 项管/管理员可编辑的任务字段白名单（状态单独校验）----
-MANAGER_FIELDS = ("title", "detail", "owner_id", "group_name", "project",
-                  "priority", "start_date", "due_date")
-
-
-# ---- 工具：安全转整数并夹取上下限（表单输入容错）----
-def parse_int(value, default=0, lo=None, hi=None):
-    try:
-        result = int(value)
-    except (TypeError, ValueError):
-        result = default
-    if lo is not None:
-        result = max(lo, result)
-    if hi is not None:
-        result = min(hi, result)
-    return result
-
-
-def validate_task_dates(start_date, due_date):
-    """合法日期必须符合 YYYY-MM-DD；允许留空。"""
-    values = []
-    for label, raw in (("开始日期", start_date), ("截止日期", due_date)):
-        if raw is not None and not isinstance(raw, str):
-            return f"{label}格式不正确"
-        value = (raw or "").strip()
-        if value:
-            try:
-                values.append(datetime.strptime(value, "%Y-%m-%d").date())
-            except ValueError:
-                return f"{label}格式不正确（应为 YYYY-MM-DD）"
-        else:
-            values.append(None)
-    if values[0] and values[1] and values[0] > values[1]:
-        return "开始日期不能晚于截止日期"
-    return None
-
-
-def validate_task_owner(db, owner_id):
-    if owner_id is None:
-        return None
-    row = db.execute("SELECT id FROM members WHERE id = ? AND is_active = 1", (owner_id,)).fetchone()
-    return None if row else "负责人不存在或已停用"
-
-
 # ---- 会话密钥：读取 secret.key，不存在则生成 64 位随机串并持久化 ----
 def _load_secret():
     if os.path.exists(SECRET_PATH):
@@ -120,10 +69,16 @@ app.permanent_session_lifetime = timedelta(days=30)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+app.config.setdefault("GITHUB_REPOSITORY", os.environ.get("GITHUB_REPOSITORY", "SHM-white/xtyf-manager"))
+app.config.setdefault("TASK_ATTACHMENTS_DIR", os.environ.get("TASK_ATTACHMENTS_DIR", os.path.join(BASE_DIR, "data", "task_attachments")))
 
 # ---- 注册子模块蓝图（三个系统共用同一登录会话与页面风格）----
 app.register_blueprint(funds_bp, url_prefix="/funds")
 app.register_blueprint(invoices_bp, url_prefix="/invoices")
+app.register_blueprint(task_api_bp)
+app.register_blueprint(task_catalogs_bp)
+app.register_blueprint(task_attachments_bp)
+app.register_blueprint(discussions_bp, url_prefix="/discussions")
 
 
 @app.context_processor
@@ -207,16 +162,11 @@ def init_db():
                 ("管理员", "admin", generate_password_hash(initial_password), "管理员", "admin", now_str()),
             )
             db.commit()
+        else:
+            db.commit()
+        migrate_tasks(db)
     finally:
         db.close()
-
-
-# ---- 辅助：ID → 成员姓名（用于日志/变更记录的人类可读显示）----
-def member_name(db, member_id):
-    if not member_id:
-        return "未分配"
-    row = db.execute("SELECT name FROM members WHERE id = ?", (member_id,)).fetchone()
-    return row["name"] if row else "未分配"
 
 
 # ---- 响应头：API 与主页禁止缓存，保证看板"5 秒自动刷新"体验 ----
@@ -333,54 +283,22 @@ def members():
     return render_template("members.html", me=current_user(), page="members", role_names=ROLE_NAMES)
 
 
-# ==================== 看板数据 API ====================
-@app.route("/api/data")
-@login_required
-def api_data():
-    db = get_db()
-    members = [dict(r) for r in db.execute(
-        "SELECT id, name, group_name, role FROM members WHERE is_active = 1 ORDER BY group_name, id"
-    ).fetchall()]
-    tasks = [dict(r) for r in db.execute(
-        "SELECT * FROM tasks ORDER BY CASE WHEN due_date = '' THEN 1 ELSE 0 END, due_date, id DESC"
-    ).fetchall()]
-    # 剩余天数 = 截止日期 - 今天（服务器时区已是北京时间，每天自动变化）
-    # 前端按 days_left 显示：>3 蓝 / <=3 橙 / <0 红 / 无截止灰
-    today = datetime.now().date()
-    for task in tasks:
-        due = (task.get("due_date") or "").strip()
-        if due:
-            try:
-                task["days_left"] = (datetime.strptime(due, "%Y-%m-%d").date() - today).days
-            except ValueError:
-                task["days_left"] = None
-        else:
-            task["days_left"] = None
-    return jsonify(ok=True, me=current_user(), members=members, tasks=tasks,
-                   statuses=STATUSES, priorities=PRIORITIES)
-
-
-# ==================== 成员管理 API（manager+）====================
-@app.route("/api/members")
-@manager_required
-def api_members():
-    rows = get_db().execute(
-        "SELECT id, name, username, group_name, role, is_active FROM members ORDER BY group_name, id"
-    ).fetchall()
-    return jsonify(ok=True, members=[dict(r) for r in rows])
-
-
 # Export only public directory fields, never hashes, tokens, or temporary passwords.
 @app.route("/api/members/export.csv")
 @manager_required
 def export_members_csv():
     rows = get_db().execute(
-        "SELECT id, name, username, group_name, role, is_active "
-        "FROM members ORDER BY group_name, id"
+        "SELECT m.id, m.name, m.username, "
+        "COALESCE((SELECT GROUP_CONCAT(name,';') FROM (SELECT g.name FROM member_groups x "
+        "JOIN groups g ON g.id=x.group_id WHERE x.member_id=m.id ORDER BY x.group_id)),'') AS group_name, "
+        "m.role, m.is_active, "
+        "COALESCE(GROUP_CONCAT(mg.group_id), '') AS group_ids "
+        "FROM members m LEFT JOIN member_groups mg ON mg.member_id=m.id "
+        "GROUP BY m.id ORDER BY m.group_name, m.id"
     ).fetchall()
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["ID", "姓名", "用户名", "组别", "角色", "账号状态"])
+    writer.writerow(["ID", "姓名", "用户名", "组别", "角色", "账号状态", "组别ID"])
     def cell(value):
         # Prevent spreadsheet formula injection for untrusted directory strings.
         value = str(value or "")
@@ -388,204 +306,9 @@ def export_members_csv():
     for row in rows:
         writer.writerow([row["id"], cell(row["name"]), cell(row["username"]), cell(row["group_name"]),
                          cell(ROLE_NAMES.get(row["role"], row["role"])),
-                         "启用" if row["is_active"] else "停用"])
+                         "启用" if row["is_active"] else "停用", cell(row["group_ids"])])
     return Response("\ufeff" + output.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="members.csv"'})
-
-
-# ==================== 任务 API（新建 / 更新 / 删除 / 历史）====================
-@app.route("/api/task", methods=["POST"])
-@manager_required
-def api_task_create():
-    data = request.get_json(silent=True) or {}
-    title = (data.get("title") or "").strip()
-    if not title:
-        return jsonify(ok=False, error="任务标题不能为空"), 400
-    owner_id = parse_int(data.get("owner_id"), 0) or None
-    group_name = (data.get("group_name") or "").strip()
-    db = get_db()
-    if data.get("owner_id") not in (None, "", 0, "0") and not owner_id:
-        return jsonify(ok=False, error="负责人 ID 不合法"), 400
-    err = validate_task_owner(db, owner_id) or validate_task_dates(data.get("start_date"), data.get("due_date"))
-    if err:
-        return jsonify(ok=False, error=err), 400
-    if owner_id and not group_name:
-        row = db.execute("SELECT group_name FROM members WHERE id = ?", (owner_id,)).fetchone()
-        if row:
-            group_name = row["group_name"] or ""
-    status = data.get("status", "未开始")
-    priority = data.get("priority", "中")
-    if status not in STATUSES or priority not in PRIORITIES:
-        return jsonify(ok=False, error="状态或优先级不合法"), 400
-    cur = db.execute(
-        "INSERT INTO tasks (title, detail, owner_id, group_name, project, priority, status, progress, "
-        "start_date, due_date, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (title, (data.get("detail") or "").strip(), owner_id, group_name,
-         (data.get("project") or "").strip(), priority, status,
-         0,
-         (data.get("start_date") or "").strip(), (data.get("due_date") or "").strip(),
-         current_user()["id"], now_str(), now_str()),
-    )
-    db.commit()
-    return jsonify(ok=True, id=cur.lastrowid)
-
-
-# —— 更新任务：权限分级 —— 负责人本人只能改“状态/备注”；manager+ 可改全部字段
-@app.route("/api/task/<int:task_id>", methods=["POST"])
-@login_required
-def api_task_update(task_id):
-    user = current_user()
-    db = get_db()
-    row = db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    if row is None:
-        return jsonify(ok=False, error="任务不存在"), 404
-    data = request.get_json(silent=True) or {}
-    is_manager = user["role"] in ("admin", "manager")
-    is_owner = row["owner_id"] == user["id"]
-    if not (is_manager or is_owner):
-        return jsonify(ok=False, error="无权限"), 403
-
-    old = dict(row)
-    new_values = {}
-    if is_manager:
-        for key in MANAGER_FIELDS:
-            if key in data:
-                value = data[key]
-                if key == "title":
-                    value = (value or "").strip()
-                    if not value:
-                        return jsonify(ok=False, error="任务标题不能为空"), 400
-                elif key == "owner_id":
-                    value = parse_int(value, 0) or None
-                elif isinstance(value, str):
-                    value = value.strip()
-                new_values[key] = value
-    if is_manager:
-        if "owner_id" in data and data["owner_id"] not in (None, "", 0, "0") and not new_values.get("owner_id"):
-            return jsonify(ok=False, error="负责人 ID 不合法"), 400
-        err = validate_task_owner(db, new_values.get("owner_id", old["owner_id"]))
-        if err:
-            return jsonify(ok=False, error=err), 400
-        if new_values.get("priority", old["priority"]) not in PRIORITIES:
-            return jsonify(ok=False, error="优先级不合法"), 400
-        err = validate_task_dates(new_values.get("start_date", old["start_date"]),
-                                  new_values.get("due_date", old["due_date"]))
-        if err:
-            return jsonify(ok=False, error=err), 400
-    if "status" in data:
-        status = data.get("status")
-        if status not in STATUSES:
-            return jsonify(ok=False, error="状态不合法"), 400
-        new_values["status"] = status
-
-    changes = []
-    for key, value in new_values.items():
-        old_value = old.get(key)
-        if key == "owner_id":
-            if old_value != value:
-                changes.append(f"负责人: {member_name(db, old_value)} → {member_name(db, value)}")
-        elif str(old_value) != str(value):
-            changes.append(f"{FIELD_NAMES.get(key, key)}: {old_value} → {value}")
-
-    note = (data.get("note") or "").strip()
-    if not changes and not note:
-        return jsonify(ok=True)
-
-    if new_values:
-        new_values["updated_at"] = now_str()
-        sets = ", ".join(f"{key} = ?" for key in new_values)
-        db.execute(f"UPDATE tasks SET {sets} WHERE id = ?", list(new_values.values()) + [task_id])
-    db.execute(
-        "INSERT INTO logs (task_id, member_id, member_name, note, changes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (task_id, user["id"], user["name"], note, "；".join(changes), now_str()),
-    )
-    db.commit()
-    return jsonify(ok=True)
-
-
-@app.route("/api/task/<int:task_id>/delete", methods=["POST"])
-@manager_required
-def api_task_delete(task_id):
-    db = get_db()
-    db.execute("DELETE FROM logs WHERE task_id = ?", (task_id,))
-    db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    db.commit()
-    return jsonify(ok=True)
-
-
-@app.route("/api/task/<int:task_id>/logs")
-@login_required
-def api_task_logs(task_id):
-    rows = get_db().execute(
-        "SELECT id, member_name, note, changes, created_at FROM logs WHERE task_id = ? ORDER BY id DESC LIMIT 100",
-        (task_id,),
-    ).fetchall()
-    return jsonify(ok=True, logs=[dict(r) for r in rows])
-
-
-# ==================== 成员管理：添加 / 批量导入 / 重置密码 / 角色 / 停用 ====================
-@app.route("/api/member", methods=["POST"])
-@manager_required
-def api_member_create():
-    user = current_user()
-    data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
-        return jsonify(ok=False, error="姓名不能为空"), 400
-    username = (data.get("username") or "").strip() or name
-    generated_password = not bool(data.get("password"))
-    password = data.get("password") or secrets.token_urlsafe(10)
-    if len(password) < 8:
-        return jsonify(ok=False, error="初始密码至少 8 位"), 400
-    group_name = (data.get("group_name") or "").strip()
-    role = data.get("role") or "member"
-    if user["role"] != "admin" or role not in ("admin", "manager", "member"):
-        role = "member"
-    db = get_db()
-    try:
-        cur = db.execute(
-            "INSERT INTO members (name, username, password_hash, group_name, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (name, username, generate_password_hash(password), group_name, role, now_str()),
-        )
-        db.commit()
-    except sqlite3.IntegrityError:
-        return jsonify(ok=False, error=f"用户名 {username} 已存在"), 400
-    return jsonify(ok=True, id=cur.lastrowid,
-                   initial_password=password if generated_password else None)
-
-
-@app.route("/api/members/import", methods=["POST"])
-@manager_required
-def api_members_import():
-    data = request.get_json(silent=True) or {}
-    text = data.get("text") or ""
-    db = get_db()
-    existing = {r["username"] for r in db.execute("SELECT username FROM members").fetchall()}
-    created = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = [p.strip() for p in line.replace("，", ",").replace("\t", ",").split(",")]
-        name = parts[0] if parts else ""
-        if not name:
-            continue
-        group_name = parts[1] if len(parts) > 1 else ""
-        username = parts[2] if len(parts) > 2 and parts[2] else name
-        if username in existing:
-            index = 2
-            while f"{name}{index}" in existing:
-                index += 1
-            username = f"{name}{index}"
-        password = secrets.token_urlsafe(9)
-        db.execute(
-            "INSERT INTO members (name, username, password_hash, group_name, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (name, username, generate_password_hash(password), group_name, "member", now_str()),
-        )
-        existing.add(username)
-        created.append(f"{name}（{username} / {password}）")
-    db.commit()
-    return jsonify(ok=True, created=created)
 
 
 @app.route("/api/member/<int:member_id>/reset", methods=["POST"])
@@ -675,14 +398,27 @@ def api_password():
 @login_required
 def export_csv():
     rows = get_db().execute(
-        "SELECT t.id, t.title, COALESCE(m.name, '未分配') AS owner, t.group_name, t.project, t.priority, "
-        "t.status, t.progress, t.start_date, t.due_date, t.detail, t.updated_at "
-        "FROM tasks t LEFT JOIN members m ON m.id = t.owner_id ORDER BY t.id"
+        "SELECT t.id,t.title,COALESCE(m.name,'未分配') AS owner,"
+        "COALESCE((SELECT GROUP_CONCAT(name,';') FROM (SELECT g.name FROM task_groups x "
+        "JOIN groups g ON g.id=x.group_id WHERE x.task_id=t.id ORDER BY x.group_id)),'') AS group_name,"
+        "COALESCE(p.name,'') AS project,t.priority,"
+        "t.status,t.progress,t.start_date,t.due_date,t.detail,t.updated_at,t.owner_id,t.project_id,"
+        "t.parent_id,t.version,COALESCE(GROUP_CONCAT(DISTINCT tg.group_id),'') AS group_ids,"
+        "COALESCE(GROUP_CONCAT(DISTINCT tp.member_id),'') AS participant_ids,"
+        "COALESCE(GROUP_CONCAT(DISTINCT td.predecessor_id),'') AS predecessor_ids "
+        "FROM tasks t LEFT JOIN members m ON m.id=t.owner_id LEFT JOIN projects p ON p.id=t.project_id "
+        "LEFT JOIN task_groups tg ON tg.task_id=t.id LEFT JOIN task_participants tp ON tp.task_id=t.id "
+        "LEFT JOIN task_dependencies td ON td.task_id=t.id WHERE t.deleted_at IS NULL "
+        "GROUP BY t.id ORDER BY t.id"
     ).fetchall()
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["ID", "任务", "负责人", "组别", "项目", "优先级", "状态", "剩余天数",
-                     "开始日期", "截止日期", "说明", "更新时间"])
+                     "开始日期", "截止日期", "说明", "更新时间", "负责人ID", "组别ID",
+                     "项目ID", "父任务ID", "参与者ID", "前置任务ID", "版本"])
+    def safe_cell(value):
+        value = str(value or "")
+        return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
     today = datetime.now().date()
     for row in rows:
         due = (row["due_date"] or "").strip()
@@ -698,9 +434,12 @@ def export_csv():
                     days_text = f"剩余 {diff} 天"
             except ValueError:
                 days_text = due
-        writer.writerow([row["id"], row["title"], row["owner"], row["group_name"], row["project"],
-                         row["priority"], row["status"], days_text, row["start_date"],
-                         row["due_date"], row["detail"], row["updated_at"]])
+        writer.writerow([safe_cell(value) for value in (
+            row["id"], row["title"], row["owner"], row["group_name"], row["project"],
+            row["priority"], row["status"], days_text, row["start_date"], row["due_date"],
+            row["detail"], row["updated_at"], row["owner_id"], row["group_ids"], row["project_id"],
+            row["parent_id"], row["participant_ids"], row["predecessor_ids"], row["version"],
+        )])
     data = "\ufeff" + output.getvalue()
     filename = f"tasks-{datetime.now().strftime('%Y%m%d')}.csv"
     return Response(data, mimetype="text/csv",

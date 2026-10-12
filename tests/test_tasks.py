@@ -7,6 +7,8 @@ _TEMP = tempfile.TemporaryDirectory()
 os.environ["PROGRESS_DB"] = os.path.join(_TEMP.name, "data.db")
 os.environ["FUNDS_DIR"] = os.path.join(_TEMP.name, "funds")
 os.environ["INVOICES_DIR"] = os.path.join(_TEMP.name, "invoices")
+os.environ["TASK_ATTACHMENTS_DIR"] = os.path.join(_TEMP.name, "task-attachments")
+os.environ["PROGRESS_SECRET_PATH"] = os.path.join(_TEMP.name, "secret.key")
 os.environ["PROGRESS_INITIAL_ADMIN_PASSWORD"] = "ci-test-password-only"
 
 import app as app_module  # noqa: E402

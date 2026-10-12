@@ -9,6 +9,9 @@ Thumbs.db
 
 # 防止误传运行时数据（仅跟踪源码与文档）
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 secret.key
 data/
 
@@ -19,3 +22,4 @@ venv/
 backups/
 *.sqlite*
 *.log
+.omo/

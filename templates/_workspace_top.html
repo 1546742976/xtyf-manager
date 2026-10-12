@@ -1,5 +1,5 @@
 <header class="workspace-topbar">
   <button type="button" class="ws-menu-toggle" data-ws-menu aria-controls="workspace-sidebar" aria-expanded="false" aria-label="打开主导航"><span></span><span></span><span></span></button>
-  <div class="ws-breadcrumb"><a href="{{ url_for('index') }}">工作空间</a><span class="ws-breadcrumb-sep">/</span><strong>{% if page == 'dashboard' %}工作台{% elif page == 'tasks' %}任务中心{% elif page == 'manage' %}任务管理{% elif page == 'members' %}成员管理{% elif page == 'funds' %}资金台账{% elif page == 'invoices' %}发票中心{% else %}账户设置{% endif %}</strong></div>
+  <div class="ws-breadcrumb"><a href="{{ url_for('index') }}">工作空间</a><span class="ws-breadcrumb-sep">/</span><strong>{% if page == 'dashboard' %}工作台{% elif page == 'tasks' %}任务中心{% elif page == 'manage' %}任务管理{% elif page == 'members' %}成员管理{% elif page == 'funds' %}资金台账{% elif page == 'invoices' %}发票中心{% elif page == 'discussions' %}讨论与建议{% else %}账户设置{% endif %}</strong></div>
   <a href="{{ url_for('account') }}" class="ws-top-user" title="账户设置"><span>{{ me.name }}</span><span class="ws-top-avatar">{{ me.name[:1] }}</span></a>
 </header>

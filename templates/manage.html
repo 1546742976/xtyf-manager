@@ -8,34 +8,43 @@
 </div>
 <section class="panel">
   <h2>新建任务</h2>
-  <p class="ux-note">创建后将显示在任务看板中；起始日期不能晚于截止日期。</p>
+  <p class="ux-note">负责人可暂不指定；选了参与成员后必须指定负责人。专业组支持多选，“全栈”任务请选择所有相关组别。</p>
   <!-- 新建任务表单：剩余天数由截止日期自动计算，无需手工填写 -->
 <form id="create-form" class="form-grid">
     <label class="span-2">任务标题<input name="title" required></label>
-    <label>负责人<select name="owner_id" id="create-owner"><option value="">未分配</option></select></label>
-    <label>组别<input name="group_name"></label>
-    <label>项目<input name="project" placeholder="如：英雄机器人 / 视觉 / 运营"></label>
+    <label>负责人<select name="owner_id" id="create-owner"><option value="">未指定</option></select></label>
+    <label>项目<select name="project_id" id="create-project"><option value="">未选择</option></select></label>
+    <fieldset class="span-2"><legend>参与成员（可多选）</legend><div id="create-participants" class="choice-host"></div></fieldset>
+    <fieldset class="span-2"><legend>专业组（可多选）</legend><div id="create-groups" class="choice-host"></div></fieldset>
     <label>优先级<select name="priority">{% for p in priorities %}<option>{{ p }}</option>{% endfor %}</select></label>
     <label>状态<select name="status">{% for s in statuses %}<option>{{ s }}</option>{% endfor %}</select></label>
     <label>开始日期<input name="start_date" type="date"></label>
     <label>截止日期<input name="due_date" type="date"></label>
+    {% if me.role == 'admin' %}<label>父任务（仅管理员）<select name="parent_id" id="create-parent"><option value="">无父任务</option></select></label>{% endif %}
+    <fieldset class="span-2"><legend>前置任务（可多选，仅提醒）</legend><div id="create-dependencies" class="choice-host"></div></fieldset>
     <label class="span-2">说明<textarea name="detail" rows="2"></textarea></label>
-    <div class="span-2"><button class="btn primary" type="submit">创建任务</button></div>
+    <div class="span-2"><button class="btn primary" type="submit">创建任务</button><p class="form-message" role="alert"></p></div>
   </form>
+</section>
+
+<section class="panel">
+  <h2>协作目录</h2><p class="ux-note">任务成员从现有专业组和项目中选择；在此集中维护目录。</p>
+  <div id="catalog-grid" class="catalog-grid"></div>
 </section>
 
 <section class="panel">
   <h2>任务列表 <span class="muted" id="task-count"></span></h2>
   <div class="toolbar">
     <input type="search" aria-label="搜索任务" id="t-filter-q" placeholder="搜索任务 / 负责人 / 项目">
-    <select id="t-filter-group"><option value="">全部组别</option></select>
-    <select id="t-filter-status"><option value="">全部状态</option></select>
+    <label class="toolbar-field"><span>专业组</span><select id="t-filter-group"><option value="">全部组别</option></select></label>
+    <label class="toolbar-field"><span>项目</span><select id="t-filter-project"><option value="">全部项目</option></select></label>
+    <label class="toolbar-field"><span>状态</span><select id="t-filter-status"><option value="">全部状态</option></select></label>
   </div>
   <div class="table-wrap">
     <!-- 任务列表：支持搜索/组别/状态筛选；行内可编辑、删除 -->
 <table id="task-table">
       <thead>
-        <tr><th>ID</th><th>任务</th><th>负责人</th><th>组别</th><th>项目</th><th>优先级</th><th>状态</th><th>剩余天数</th><th>截止</th><th>操作</th></tr>
+        <tr><th>ID</th><th>任务</th><th>负责人</th><th>参与成员</th><th>专业组</th><th>项目</th><th>优先级</th><th>状态</th><th>剩余天数</th><th>操作</th></tr>
       </thead>
       <tbody></tbody>
     </table>
@@ -45,5 +54,11 @@
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='ui-dialog.js') }}"></script>
+<script src="{{ url_for('static', filename='task-tree.js') }}"></script>
+<script src="{{ url_for('static', filename='task-board.js') }}"></script>
+<script src="{{ url_for('static', filename='task-history.js') }}"></script>
+<script src="{{ url_for('static', filename='task-modal.js') }}"></script>
 <script src="{{ url_for('static', filename='manage.js') }}"></script>
+<script src="{{ url_for('static', filename='manage-tasks.js') }}"></script>
 {% endblock %}

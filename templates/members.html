@@ -11,22 +11,22 @@
   <div class="split">
     <form id="member-form" class="form-grid">
       <label>姓名<input name="name" required></label>
-      <label>组别<input name="group_name" placeholder="机械 / 电控 / 视觉 / 运营"></label>
+      <fieldset class="span-2"><legend>专业组（可多选）</legend><div id="member-create-groups" class="choice-host"></div></fieldset>
       <label>用户名（默认姓名）<input name="username"></label>
       <label>初始密码（留空随机生成）<input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位"></label>
       {% if me.role == 'admin' %}
       <label>角色<select name="role"><option value="member">成员</option><option value="manager">项管</option><option value="admin">管理员</option></select></label>
       {% endif %}
-      <div><button class="btn primary" type="submit">添加成员</button></div>
+      <div class="member-form-actions"><button class="btn primary" type="submit">添加成员</button><p class="form-message" role="alert"></p></div>
     </form>
     <form id="import-form" class="form-grid">
-      <label class="span-2">批量导入（每行一人：姓名,组别[,用户名]；生成独立初始密码）<textarea name="text" rows="5" placeholder="张三,机械&#10;李四,电控,lis"></textarea></label>
-      <div><button class="btn" type="submit">批量导入</button></div>
+      <label class="span-2">批量导入（每行：姓名,专业组1;专业组2[,用户名]）<textarea name="text" rows="5" placeholder="张三,视觉;电控&#10;李四,机械,lisi"></textarea></label>
+      <div class="member-form-actions"><button class="btn" type="submit">批量导入</button><p class="form-message" role="alert"></p></div>
     </form>
   </div>
   <div class="toolbar">
     <input type="search" aria-label="搜索成员" id="m-filter-q" placeholder="搜索姓名 / 用户名">
-    <select id="m-filter-group"><option value="">全部组别</option></select>
+    <label class="toolbar-field"><span>专业组</span><select id="m-filter-group"><option value="">全部组别</option></select></label>
     <select id="m-filter-role">
       <option value="">全部角色</option>
       <option value="member">成员</option>
@@ -47,5 +47,11 @@
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='ui-dialog.js') }}"></script>
+<script src="{{ url_for('static', filename='task-tree.js') }}"></script>
+<script src="{{ url_for('static', filename='task-board.js') }}"></script>
+<script src="{{ url_for('static', filename='task-history.js') }}"></script>
+<script src="{{ url_for('static', filename='task-modal.js') }}"></script>
 <script src="{{ url_for('static', filename='manage.js') }}"></script>
+<script src="{{ url_for('static', filename='manage-members.js') }}"></script>
 {% endblock %}

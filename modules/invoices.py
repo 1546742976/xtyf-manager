@@ -296,9 +296,10 @@ def _save_temp_pdf(file):
     path = os.path.join(_user_upload_dir(), uuid.uuid4().hex + '_' + safe_name)
     file.save(path)
     with open(path, 'rb') as stream:
-        if stream.read(5) != b'%PDF-':
-            os.remove(path)
-            raise ValueError('文件不是有效的 PDF 格式')
+        valid_pdf = stream.read(5) == b'%PDF-'
+    if not valid_pdf:
+        os.remove(path)
+        raise ValueError('文件不是有效的 PDF 格式')
     return path
 
 
@@ -787,8 +788,8 @@ def scan_invoices(use_cache=True):
 # ---- 单文件 → 发票字典（合并元数据字段，ID 使用正斜杠相对路径）----
 def _add_invoice(invoices, meta, month, status, filepath):
     filename = os.path.basename(filepath)
-    rel_path = os.path.relpath(filepath, BASE_DIR)
-    inv_id = rel_path.replace('\\', '/')
+    rel_path = os.path.relpath(filepath, BASE_DIR).replace('\\', '/')
+    inv_id = rel_path
     info = parse_invoice_filename(filename)
     if info is None: return
     inv_meta = meta.get(inv_id, {})

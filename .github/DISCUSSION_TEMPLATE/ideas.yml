@@ -1,0 +1,20 @@
+title: "[Idea]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        欢迎分享改进想法。请只使用公开、脱敏的信息；不要提交密码、令牌、成员资料、任务详情、图片原件或未公开文件。
+  - type: textarea
+    id: context
+    attributes:
+      label: 背景与问题
+      description: 这个想法要帮助谁解决什么问题？
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 想法
+      description: 请说明建议、预期收益和需要讨论的取舍。
+    validations:
+      required: true

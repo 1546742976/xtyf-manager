@@ -1,0 +1,71 @@
+"use strict";
+
+let modalReturnFocus = null;
+
+function showModal(html, label = "任务操作窗口") {
+  const modal = document.getElementById("modal");
+  modalReturnFocus = document.activeElement;
+  modal.innerHTML = html;
+  modal.setAttribute("aria-label", label);
+  document.getElementById("modal-mask").classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  modal.querySelector("button, input, select, textarea, a[href]")?.focus();
+}
+
+function hideModal() {
+  document.getElementById("modal-mask")?.classList.add("hidden");
+  document.getElementById("modal")?.replaceChildren();
+  document.body.classList.remove("modal-open");
+  modalReturnFocus?.focus?.();
+}
+
+function modalKeydown(event) {
+  const mask = document.getElementById("modal-mask");
+  if (!mask || mask.classList.contains("hidden")) return;
+  if (event.key === "Escape") {
+    hideModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = [
+    ...document
+      .getElementById("modal")
+      .querySelectorAll("button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]"),
+  ];
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function bindPasswordButton() {
+  document.getElementById("btn-password")?.addEventListener("click", () => {
+    showModal(
+      `<div class="modal-head"><h2>修改密码</h2><button class="btn ghost sm" type="button" data-close>关闭</button></div><form id="pw-form"><label>原密码<input name="old" type="password" required></label><label>新密码（至少 8 位）<input name="new" type="password" minlength="8" required></label><div class="modal-actions"><button class="btn primary">保存</button></div><p class="form-message" role="alert"></p></form>`,
+      "修改密码",
+    );
+    document.querySelector("[data-close]").addEventListener("click", hideModal);
+    document.getElementById("pw-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const result = await api("/api/password", Object.fromEntries(new FormData(form)));
+      if (result?.ok) hideModal();
+      else form.querySelector(".form-message").textContent = result?.error || "修改失败";
+    });
+  });
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const mask = document.getElementById("modal-mask");
+  mask?.addEventListener("click", (event) => {
+    if (event.target === mask) hideModal();
+  });
+  document.addEventListener("keydown", modalKeydown);
+  bindPasswordButton();
+});
