@@ -4,6 +4,7 @@
 用法：/opt/rm-progress/venv/bin/python deploy/seed_data.py
 """
 import sqlite3
+import secrets
 import sys
 from datetime import datetime
 
@@ -77,12 +78,13 @@ def main():
         exists = db.execute("SELECT id FROM members WHERE username = ?", (username,)).fetchone()
         if exists:
             continue
+        initial_password = secrets.token_urlsafe(10)
         db.execute(
             "INSERT INTO members (name, username, password_hash, group_name, role, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (name, username, generate_password_hash("123456"), group_name, role, NOW),
+            (name, username, generate_password_hash(initial_password), group_name, role, NOW),
         )
-        created_members.append(f"{name}（{username}）")
+        created_members.append(f"{name}（{username} / {initial_password}）")
     db.commit()
 
     admin_row = db.execute("SELECT id FROM members WHERE username = 'admin'").fetchone()
@@ -110,6 +112,7 @@ def main():
     db.commit()
     db.close()
 
+    print("新成员初始密码只在本次运行输出中显示，请妥善保存并分别通知；已有用户不会重置。")
     print(f"新增成员 {len(created_members)} 人：")
     for item in created_members:
         print("  +", item)

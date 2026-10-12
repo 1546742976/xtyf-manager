@@ -1,0 +1,190 @@
+<!-- 资金管理页（Bootstrap）：统计卡 + 记录/添加/图表 三页签；全部脚本在页面底部 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>巡天御风 - 资金管理系统</title>
+<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css"
+      onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css'">
+<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css"
+      onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css'">
+<link rel="stylesheet" href="{{ url_for('static', filename='funds.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ui.css') }}">
+</head>
+<body class="ux-funds">
+
+<header class="topbar">
+  <div class="brand">巡天御风<span>管理平台</span></div>
+  <nav class="nav" aria-label="系统导航">
+    <a href="/">看板</a>
+    <a href="/manage">任务管理</a>
+    <a href="/funds/" class="active">资金管理{% if can_review %}<span id="fundsPendingBadge" class="nav-badge" style="display:none">0</span>{% endif %}</a>
+    <a href="/invoices/">发票管理</a>
+    <a href="/account">账户</a>
+  </nav>
+  <div class="userbox">
+    <span class="who">{{ me.name }}</span>
+    <a class="toplink" href="/logout">退出</a>
+  </div>
+</header>
+<div class="page-head"><div><p class="ux-eyebrow">OPERATIONS / FINANCE</p><h1>资金管理</h1><p class="ux-head-sub">统一管理经费收支、审批状态与资金流向。</p></div></div>
+
+<div class="container-fluid px-3 py-3">
+  <div class="row mb-3">
+    <div class="col-md-3 col-6 mb-2"><div class="card stat-card income"><div class="value" id="sIn">--</div><div class="label">总进账</div></div></div>
+    <div class="col-md-3 col-6 mb-2"><div class="card stat-card expense"><div class="value" id="sOut">--</div><div class="label">总支出</div></div></div>
+    <div class="col-md-3 col-6 mb-2"><div class="card stat-card balance"><div class="value" id="sBal">--</div><div class="label">结余</div></div></div>
+    <div class="col-md-3 col-6 mb-2"><div class="card stat-card count"><div class="value" id="sCnt">--</div><div class="label">总记录</div></div></div>
+  </div>
+
+  <!-- 三个页签：记录管理 / 添加记录 / 统计图表 -->
+<ul class="nav nav-tabs mb-3" id="mainTab">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#t-records">记录管理</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#t-add">添加记录</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#t-charts">统计图表</button></li>
+  </ul>
+
+  <div class="tab-content">
+    <div class="tab-pane fade show active" id="t-records">
+      <div class="filter-bar">
+        <div class="row g-2 align-items-end">
+          <div class="col-lg-2 col-md-4 col-6">
+            <label class="form-label">类型</label>
+            <select class="form-select form-select-sm" id="ft"><option value="">全部</option><option value="进">进账</option><option value="出">支出</option></select></div>
+          <div class="col-lg-2 col-md-4 col-6">
+            <label class="form-label">关键字</label>
+            <input class="form-control form-control-sm" id="fkw" placeholder="来源/去向/人员..."></div>
+          <div class="col-lg-1 col-md-3 col-6">
+            <label class="form-label">金额≥</label><input type="number" class="form-control form-control-sm" id="famin" placeholder="0" step="0.01"></div>
+          <div class="col-lg-1 col-md-3 col-6">
+            <label class="form-label">金额≤</label><input type="number" class="form-control form-control-sm" id="famax" placeholder="999999" step="0.01"></div>
+          <div class="col-lg-2 col-md-3 col-6">
+            <label class="form-label">起始</label><input type="date" class="form-control form-control-sm" id="fdf"></div>
+          <div class="col-lg-2 col-md-3 col-6">
+            <label class="form-label">截止</label><input type="date" class="form-control form-control-sm" id="fdt"></div>
+          <div class="col-lg-2 col-md-6 col-12 d-flex gap-1">
+            <button class="btn btn-primary btn-sm flex-fill" onclick="reload()">筛选</button>
+            <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="resetF()">重置</button>
+            <button class="btn btn-outline-success btn-sm" onclick="doExport()" title="导出CSV">导出</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>资金记录</span><span class="text-muted small" id="rcnt">加载中...</span></div>
+        <div class="card-body p-0" style="overflow-x:auto;">
+          <table class="table table-hover mb-0"><thead><tr>
+            <th>#</th><th>类型</th><th style="cursor:pointer" onclick="setSort('amount')">金额</th>
+            <th>类别</th><th>来源/去向</th><th>申请人</th><th>发票</th><th>处理人</th>
+            <th style="cursor:pointer" onclick="setSort('record_date')">日期</th><th>审核</th><th>备注</th><th>操作</th>
+          </tr></thead><tbody id="tbody"></tbody></table>
+          <div class="empty-state" id="empty"><i class="bi bi-inbox" style="font-size:42px;"></i><p>暂无记录，请添加数据</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-pane fade" id="t-add">
+      <div class="row justify-content-center"><div class="col-lg-8">
+        <div class="card"><div class="card-header">新增资金记录</div>
+          <div class="card-body">
+            <form id="addF" onsubmit="handleAdd(event); return false;">
+              <div class="row mb-2">
+                <div class="col-md-4"><label class="form-label required">类型</label>
+                  <select class="form-select" id="aT" required onchange="toggleF()"><option value="">请选择</option><option value="进">进账</option><option value="出">支出</option></select></div>
+                <div class="col-md-4"><label class="form-label required">金额（元）</label>
+                  <input type="number" step="0.01" min="0.01" class="form-control" id="aAmt" required placeholder="0.00"></div>
+                <div class="col-md-4"><label class="form-label">类别</label>
+                  <select class="form-select" id="aCat">
+                    <option value="">未分类</option>
+                    <optgroup label="-- 支出类 --"><option value="材料费">材料费</option><option value="设备费">设备费</option><option value="加工费">加工费</option><option value="差旅费">差旅费</option><option value="办公费">办公费</option><option value="宣传费">宣传费</option><option value="餐饮费">餐饮费</option></optgroup>
+                    <optgroup label="-- 进账类 --"><option value="赞助">赞助</option><option value="拨款">拨款</option><option value="奖金">奖金</option><option value="队费">队费</option></optgroup>
+                    <option value="其他">其他</option></select></div>
+              </div>
+              <div class="row mb-2">
+                <div class="col-md-6"><label class="form-label" id="lSD">来源 / 去向</label>
+                  <input class="form-control" id="aSD" placeholder="例如：学校拨款"></div>
+                <div class="col-md-6"><label class="form-label required">日期</label>
+                  <input type="date" class="form-control" id="aDt" required></div>
+              </div>
+              <div id="expF" style="display:none;">
+                <div class="row mb-2">
+                  <div class="col-md-4"><label class="form-label required" id="lApl">申请人</label><input class="form-control" id="aApplicant" placeholder="经手采购人"></div>
+                  <div class="col-md-4"><label class="form-label required" id="lInv">发票数目</label><input type="number" min="1" class="form-control" id="aInvCnt" value="1"></div>
+                  <div class="col-md-4"><label class="form-label required" id="lHdl">处理人</label><input class="form-control" id="aHandler" placeholder="审核/报销处理人"></div>
+                </div>
+              </div>
+              <div class="mb-2"><label class="form-label">备注</label>
+                <textarea class="form-control" id="aNotes" rows="2" placeholder="补充说明..."></textarea></div>
+              <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-primary px-4">提交</button>
+                <button type="reset" class="btn btn-outline-secondary" onclick="clearF()">清空</button></div>
+            </form>
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+    <div class="tab-pane fade" id="t-charts">
+      <div class="row mb-2"><div class="col-12">
+        <div class="btn-group btn-group-sm">
+          <button class="btn btn-outline-secondary active" onclick="loadChart('monthly',this)">月度收支</button>
+          <button class="btn btn-outline-secondary" onclick="loadChart('category',this)">支出类别</button>
+          <button class="btn btn-outline-secondary" onclick="loadChart('applicant',this)">队员支出排名</button>
+          <button class="btn btn-outline-secondary" onclick="loadChart('source',this)">进账来源分布</button>
+        </div>
+      </div></div>
+      <div class="row">
+        <div class="col-lg-8"><div class="card"><div class="card-header">统计图</div>
+          <div class="card-body text-center">
+            <img id="chartImg" src="" style="display:none;max-width:100%;">
+            <div id="chartEmp" class="empty-state"><i class="bi bi-bar-chart" style="font-size:42px;"></i><p>点击上方按钮加载图表</p></div>
+          </div></div></div>
+        <div class="col-lg-4"><div class="card"><div class="card-header">统计摘要</div>
+          <div class="card-body" id="sumC" style="max-height:350px;overflow-y:auto;"><p class="text-muted text-center">加载中...</p></div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="editMd">
+  <div class="modal-dialog modal-lg"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title">编辑记录</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <form><input type="hidden" id="eId">
+        <div class="row mb-2">
+          <div class="col-md-4"><label class="form-label">类型</label><select class="form-select form-select-sm" id="eT"><option value="进">进账</option><option value="出">支出</option></select></div>
+          <div class="col-md-4"><label class="form-label">金额</label><input type="number" step="0.01" class="form-control form-control-sm" id="eAmt"></div>
+          <div class="col-md-4"><label class="form-label">类别</label><select class="form-select form-select-sm" id="eCat"><option value="">未分类</option><option>材料费</option><option>设备费</option><option>加工费</option><option>差旅费</option><option>办公费</option><option>宣传费</option><option>餐饮费</option><option>赞助</option><option>拨款</option><option>奖金</option><option>队费</option><option>其他</option></select></div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-md-6"><label class="form-label">来源/去向</label><input class="form-control form-control-sm" id="eSD"></div>
+          <div class="col-md-3"><label class="form-label">日期</label><input type="date" class="form-control form-control-sm" id="eDt"></div>
+          <div class="col-md-3"><label class="form-label">发票数</label><input type="number" min="0" class="form-control form-control-sm" id="eInv"></div>
+        </div>
+        <div class="row mb-2">
+          <div class="col-md-6"><label class="form-label">申请人</label><input class="form-control form-control-sm" id="eApl"></div>
+          <div class="col-md-6"><label class="form-label">处理人</label><input class="form-control form-control-sm" id="eHdl"></div>
+        </div>
+        <div class="mb-2"><label class="form-label">备注</label><textarea class="form-control form-control-sm" id="eNts" rows="2"></textarea></div>
+      </form>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">取消</button><button class="btn btn-primary btn-sm" onclick="saveE()">保存</button></div>
+  </div></div>
+</div>
+
+<script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/js/bootstrap.bundle.min.js"
+        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js'"></script>
+
+<!-- ==================== 前端逻辑 ==================== -->
+<script>
+window.XTYF_USER = {
+  name: {{ me.name | tojson }},
+  username: {{ me.username | tojson }},
+  canReview: {{ can_review | tojson }}
+};
+</script>
+<script src="{{ url_for('static', filename='funds.js') }}"></script>
+<div id="funds-feedback" class="ux-toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

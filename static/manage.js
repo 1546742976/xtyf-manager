@@ -1,84 +1,4 @@
-{# 任务管理页：新建任务 + 任务列表 + 成员管理（筛选/批量导入/角色调整） #}
-{% extends "base.html" %}
-{% block title %}任务管理{% endblock %}
-{% block content %}
-<section class="panel">
-  <h2>新建任务</h2>
-  <!-- 新建任务表单：剩余天数由截止日期自动计算，无需手工填写 -->
-<form id="create-form" class="form-grid">
-    <label class="span-2">任务标题<input name="title" required></label>
-    <label>负责人<select name="owner_id" id="create-owner"><option value="">未分配</option></select></label>
-    <label>组别<input name="group_name"></label>
-    <label>项目<input name="project" placeholder="如：英雄机器人 / 视觉 / 运营"></label>
-    <label>优先级<select name="priority">{% for p in priorities %}<option>{{ p }}</option>{% endfor %}</select></label>
-    <label>状态<select name="status">{% for s in statuses %}<option>{{ s }}</option>{% endfor %}</select></label>
-    <label>开始日期<input name="start_date" type="date"></label>
-    <label>截止日期<input name="due_date" type="date"></label>
-    <label class="span-2">说明<textarea name="detail" rows="2"></textarea></label>
-    <div class="span-2"><button class="btn primary" type="submit">创建任务</button></div>
-  </form>
-</section>
 
-<section class="panel">
-  <h2>任务列表 <span class="muted" id="task-count"></span></h2>
-  <div class="toolbar">
-    <input id="t-filter-q" placeholder="搜索任务 / 负责人 / 项目">
-    <select id="t-filter-group"><option value="">全部组别</option></select>
-    <select id="t-filter-status"><option value="">全部状态</option></select>
-  </div>
-  <div class="table-wrap">
-    <!-- 任务列表：支持搜索/组别/状态筛选；行内可编辑、删除 -->
-<table id="task-table">
-      <thead>
-        <tr><th>ID</th><th>任务</th><th>负责人</th><th>组别</th><th>项目</th><th>优先级</th><th>状态</th><th>剩余天数</th><th>截止</th><th>操作</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</section>
-
-<section class="panel">
-  <h2>成员管理 <span class="muted" id="member-count"></span></h2>
-  <div class="split">
-    <form id="member-form" class="form-grid">
-      <label>姓名<input name="name" required></label>
-      <label>组别<input name="group_name" placeholder="机械 / 电控 / 视觉 / 运营"></label>
-      <label>用户名（默认姓名）<input name="username"></label>
-      <label>初始密码（默认 123456）<input name="password"></label>
-      {% if me.role == 'admin' %}
-      <label>角色<select name="role"><option value="member">成员</option><option value="manager">项管</option><option value="admin">管理员</option></select></label>
-      {% endif %}
-      <div><button class="btn primary" type="submit">添加成员</button></div>
-    </form>
-    <form id="import-form" class="form-grid">
-      <label class="span-2">批量导入（每行一人：姓名,组别[,用户名]）<textarea name="text" rows="5" placeholder="张三,机械&#10;李四,电控,lis"></textarea></label>
-      <div><button class="btn" type="submit">批量导入</button></div>
-    </form>
-  </div>
-  <div class="toolbar">
-    <input id="m-filter-q" placeholder="搜索姓名 / 用户名">
-    <select id="m-filter-group"><option value="">全部组别</option></select>
-    <select id="m-filter-role">
-      <option value="">全部角色</option>
-      <option value="member">成员</option>
-      <option value="manager">项管</option>
-      <option value="admin">管理员</option>
-    </select>
-  </div>
-  <div class="table-wrap">
-    <!-- 成员列表：角色下拉（仅管理员）、重置密码、停用/启用 -->
-<table id="member-table">
-      <thead>
-        <tr><th>ID</th><th>姓名</th><th>用户名</th><th>组别</th><th>角色</th><th>状态</th><th>操作</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</section>
-{% endblock %}
-{% block scripts %}
-<script src="{{ url_for('static', filename='app.js') }}"></script>
-<script>
 let allMembers = [];
 
 function roleName(role) {
@@ -107,8 +27,8 @@ function filteredTasksForTable() {
     if (status && t.status !== status) return false;
     if (q) {
       const owner = memberById(t.owner_id);
-      const hay = [t.title, t.project, t.detail, owner ? owner.name : ''].join(' ');
-      if (!hay.includes(q)) return false;
+      const hay = [t.title, t.project, t.detail, owner ? owner.name : ''].join(' ').toLowerCase();
+      if (!hay.includes(q.toLowerCase())) return false;
     }
     return true;
   });
@@ -166,7 +86,7 @@ function filteredMembers() {
   return allMembers.filter((m) => {
     if (group && m.group_name !== group) return false;
     if (role && m.role !== role) return false;
-    if (q && !(m.name.includes(q) || (m.username || '').includes(q))) return false;
+    if (q && ![m.name, m.username || ''].join(' ').toLowerCase().includes(q.toLowerCase())) return false;
     return true;
   });
 }
@@ -258,6 +178,7 @@ document.getElementById('member-form').addEventListener('submit', async (event) 
   const res = await api('/api/member', payload);
   if (res && res.ok) {
     event.target.reset();
+    if (res.initial_password) alert('添加成功。请保存新成员的初始密码并通知本人：\n' + res.initial_password);
     loadManage();
   } else {
     alert((res && res.error) || '添加失败');
@@ -306,12 +227,18 @@ document.querySelector('#member-table').addEventListener('click', async (event) 
   const resetId = event.target.dataset.reset;
   const toggleId = event.target.dataset.toggle;
   if (resetId) {
-    const password = prompt('输入新密码（留空则重置为 123456）', '');
+    const password = prompt('输入新密码（至少 8 位；留空则随机生成）', '');
     if (password === null) return;
-    const res = await api(`/api/member/${resetId}/reset`, { password: password || '123456' });
-    alert(res && res.ok ? '已重置' : ((res && res.error) || '重置失败'));
+    const res = await api(`/api/member/${resetId}/reset`, { password: password || '' });
+    if (res && res.ok) {
+      alert(res.initial_password ? '重置成功。请记录新密码：\n' + res.initial_password : '密码重置成功');
+    } else {
+      alert((res && res.error) || '重置失败');
+    }
   }
   if (toggleId) {
+    const member = allMembers.find((m) => String(m.id) === toggleId);
+    if (member && !confirm((member.is_active ? '停用' : '启用') + '成员：' + member.name + '？')) return;
     const res = await api(`/api/member/${toggleId}/toggle`, {});
     if (res && res.ok) loadManage();
     else alert((res && res.error) || '操作失败');
@@ -319,5 +246,3 @@ document.querySelector('#member-table').addEventListener('click', async (event) 
 });
 
 loadManage();
-</script>
-{% endblock %}

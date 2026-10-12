@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}账户设置{% endblock %}
+{% block content %}
+<div class="ux-page-head">
+  <div><p class="ux-eyebrow">WORKSPACE / ACCOUNT</p><h1>账户设置</h1>
+    <p>查看个人资料并安全更新登录密码。</p></div>
+</div>
+<div class="ux-account-grid">
+  <section class="panel ux-account-profile" aria-label="账户资料">
+    <div class="ux-account-avatar" aria-hidden="true">{{ me.name[:1] }}</div>
+    <h2>个人信息</h2>
+    <dl class="ux-account-info">
+      <dt>姓名</dt><dd>{{ me.name }}</dd>
+      <dt>用户名</dt><dd>{{ me.username }}</dd>
+      <dt>所属组别</dt><dd>{{ me.group_name or '未分组' }}</dd>
+      <dt>系统角色</dt><dd>{{ role_names[me.role] }}</dd>
+    </dl>
+    <p class="ux-note">需要调整角色、用户名或组别时，请联系系统管理员。</p>
+  </section>
+  <section class="panel">
+    <h2>修改登录密码</h2>
+    <p class="ux-note">请输入原密码验证身份。建议使用与其他网站不同的高强度密码。</p>
+    <form id="account-password-form" class="ux-account-form">
+      <label>当前密码<input type="password" name="old" required autocomplete="current-password"></label>
+      <label>新密码<input type="password" name="new" minlength="6" required autocomplete="new-password"></label>
+      <label>确认新密码<input type="password" name="confirm" minlength="6" required autocomplete="new-password"></label>
+      <button class="btn primary" type="submit">保存新密码</button>
+      <p class="ux-account-result" id="account-result" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='account.js') }}"></script>
+{% endblock %}

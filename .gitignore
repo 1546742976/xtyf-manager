@@ -7,7 +7,15 @@ __pycache__/
 Thumbs.db
 .DS_Store
 
-# 防止误传运行时数据（本仓库仅存文档，以下为保险规则）
+# 防止误传运行时数据（仅跟踪源码与文档）
 *.db
 secret.key
 data/
+
+.venv/
+venv/
+.env
+.env.*
+backups/
+*.sqlite*
+*.log

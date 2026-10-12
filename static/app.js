@@ -22,12 +22,16 @@ async function api(url, data) {
     options.headers = { 'Content-Type': 'application/json' };
     options.body = JSON.stringify(data);
   }
-  const res = await fetch(url, options);
-  if (res.status === 401) {
-    location.href = '/login';
-    return null;
+  try {
+    const res = await fetch(url, options);
+    if (res.status === 401) {
+      location.href = '/login';
+      return null;
+    }
+    return await res.json();
+  } catch (_) {
+    return { ok: false, error: '网络连接失败，请重试' };
   }
-  return res.json();
 }
 
 // ===== HTML 转义（所有动态内容渲染前必须经过）=====
@@ -44,7 +48,7 @@ function todayStr() {
 
 // ===== 逾期判断与"剩余天数"文案/颜色（与后端 days_left 字段配套）=====
 function isOverdue(task) {
-  return !!task.due_date && !['已完成', '已取消'].includes(task.status) && task.due_date < todayStr();
+  return Number.isInteger(task.days_left) && task.days_left < 0 && !['已完成', '已取消'].includes(task.status);
 }
 
 function daysLeftText(task) {
@@ -80,10 +84,25 @@ function badge(text, cls) {
   return `<span class="badge ${cls}">${esc(text)}</span>`;
 }
 
-// ===== 数据轮询：每 5 秒；数据指纹未变化则不重绘（防闪烁）=====
+// ===== 数据轮询：同步反馈、避免请求重叠 =====
+let refreshing = false;
+function showSync(ok, message) {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle('sync-error', !ok);
+}
 async function refresh() {
-  const data = await api('/api/data');
-  if (!data || !data.ok) return;
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    const data = await api('/api/data');
+    if (!data || !data.ok) {
+      showSync(false, (data && data.error) || '同步失败');
+      return;
+    }
+    showSync(true, '已同步 · ' + new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
+    updateFilterOptions(data);
   state.me = data.me;
   state.members = data.members;
   state.tasks = data.tasks;
@@ -99,6 +118,9 @@ async function refresh() {
     render();
     if (window.onData) window.onData();
   }
+  } finally {
+    refreshing = false;
+  }
 }
 
 function render() {
@@ -106,22 +128,30 @@ function render() {
   if (document.getElementById('board')) renderBoard();
 }
 
+function updateFilterOptions(data) {
+  const group = document.getElementById('f-group');
+  if (group) {
+    const groups = [...new Set([
+      ...data.members.map((m) => m.group_name), ...data.tasks.map((t) => t.group_name),
+    ].filter(Boolean))].sort();
+    group.innerHTML = '<option value="">全部组别</option>' +
+      groups.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+    if (!groups.includes(state.filters.group)) state.filters.group = '';
+    group.value = state.filters.group;
+  }
+  const status = document.getElementById('f-status');
+  if (status) {
+    status.innerHTML = '<option value="">全部状态</option>' +
+      data.statuses.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+    if (!data.statuses.includes(state.filters.status)) state.filters.status = '';
+    status.value = state.filters.status;
+  }
+}
 function initFilters() {
-  const groups = new Set();
-  state.members.forEach((m) => m.group_name && groups.add(m.group_name));
-  state.tasks.forEach((t) => t.group_name && groups.add(t.group_name));
   const groupSel = document.getElementById('f-group');
-  if (groupSel) {
-    groupSel.innerHTML = '<option value="">全部组别</option>' +
-      [...groups].sort().map((g) => `<option>${esc(g)}</option>`).join('');
-    groupSel.addEventListener('change', () => { state.filters.group = groupSel.value; renderBoard(); });
-  }
+  if (groupSel) groupSel.addEventListener('change', () => { state.filters.group = groupSel.value; renderBoard(); });
   const statusSel = document.getElementById('f-status');
-  if (statusSel) {
-    statusSel.innerHTML = '<option value="">全部状态</option>' +
-      state.statuses.map((s) => `<option>${esc(s)}</option>`).join('');
-    statusSel.addEventListener('change', () => { state.filters.status = statusSel.value; renderBoard(); });
-  }
+  if (statusSel) statusSel.addEventListener('change', () => { state.filters.status = statusSel.value; renderBoard(); });
   const q = document.getElementById('f-q');
   if (q) q.addEventListener('input', () => { state.filters.q = q.value.trim(); renderBoard(); });
   const mine = document.getElementById('f-mine');
@@ -194,7 +224,7 @@ function taskCard(task) {
   if (task.project) meta.push(esc(task.project));
   meta.push(esc(owner ? owner.name : '未分配'));
   if (task.due_date) meta.push(`截止 ${esc(task.due_date)}`);
-  return `<article class="task ${overdue ? 'overdue' : ''}" data-id="${task.id}">
+  return `<article class="task ${overdue ? 'overdue' : ''}" data-id="${task.id}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
     <div class="task-head">
       <h3>${esc(task.title)}</h3>
       ${badge(task.status, STATUS_CLASS[task.status] || 'gray')}
@@ -227,6 +257,12 @@ function renderBoard() {
     </section>`).join('') || '<p class="empty">暂无数据</p>';
   document.querySelectorAll('.task').forEach((el) => {
     el.addEventListener('click', () => openTaskModal(parseInt(el.dataset.id, 10)));
+    el.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openTaskModal(parseInt(el.dataset.id, 10));
+      }
+    });
   });
 }
 
@@ -234,6 +270,7 @@ function renderBoard() {
 function showModal(html) {
   document.getElementById('modal').innerHTML = html;
   document.getElementById('modal-mask').classList.remove('hidden');
+  document.getElementById('modal').querySelector('button, input, select')?.focus();
 }
 
 function hideModal() {
@@ -410,6 +447,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (event.target.id === 'modal-mask') hideModal();
     });
   }
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && mask && !mask.classList.contains('hidden')) hideModal();
+  });
+  document.getElementById('refresh-now')?.addEventListener('click', refresh);
   bindPasswordButton();
   if (document.getElementById('fundsPendingBadge')) {
     refreshFundsBadge();

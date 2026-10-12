@@ -13,6 +13,7 @@
 import base64
 import csv
 import io
+import math
 import os
 import sqlite3
 from datetime import datetime
@@ -42,6 +43,22 @@ plt.rcParams["font.sans-serif"] = [
 plt.rcParams["axes.unicode_minus"] = False
 
 funds_bp = Blueprint("funds", __name__)
+
+
+def can_review(user=None):
+    """审核权限单独配置，默认保留现有财务审核用户名 chy。"""
+    user = user or current_user()
+    reviewers = {name.strip() for name in os.environ.get("FUNDS_REVIEWERS", "chy").split(",") if name.strip()}
+    return bool(user and user.get("role") in ("admin", "manager") and user.get("username") in reviewers)
+
+
+def valid_record_date(value):
+    if not isinstance(value, str):
+        return False
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except ValueError:
+        return False
 
 
 def get_funds_db():
@@ -166,7 +183,7 @@ def _funds_guard():
 # ==================== 页面 ====================
 @funds_bp.route("/")
 def index():
-    return render_template("funds.html", me=current_user())
+    return render_template("funds.html", me=current_user(), can_review=can_review())
 
 
 # ==================== 记录查询 API（筛选：类型/关键字/金额范围/日期；可排序）====================
@@ -193,7 +210,14 @@ def get_records():
         if val:
             op = ">=" if "min" in f else "<="
             q += f" AND amount {op} ?"
-            params.append(float(val))
+            try:
+                numeric = float(val)
+                if not math.isfinite(numeric):
+                    raise ValueError()
+            except (TypeError, ValueError):
+                conn.close()
+                return jsonify({"code": 1, "msg": "金额筛选条件无效"}), 400
+            params.append(numeric)
     for f, col in [("date_from", "record_date"), ("date_to", "record_date")]:
         val = request.args.get(f, "").strip()
         if val:
@@ -226,12 +250,18 @@ def add_record():
         amount = float(data.get("amount", 0))
     except (TypeError, ValueError):
         return jsonify({"code": 1, "msg": "金额格式无效"})
-    if amount <= 0:
-        return jsonify({"code": 1, "msg": "金额必须大于0"})
+    if not math.isfinite(amount) or amount <= 0:
+        return jsonify({"code": 1, "msg": "金额必须是大于0的有限数值"}), 400
+    try:
+        invoice_count = int(data.get("invoice_count", 0))
+        if invoice_count < 0:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({"code": 1, "msg": "发票数目必须是非负整数"}), 400
 
     rd = data.get("record_date", "")
-    if not rd:
-        return jsonify({"code": 1, "msg": "日期不能为空"})
+    if not valid_record_date(rd):
+        return jsonify({"code": 1, "msg": "日期格式不正确（YYYY-MM-DD）"}), 400
 
     user = current_user()
     applicant = (data.get("applicant") or "").strip() or user["name"]
@@ -242,7 +272,7 @@ def add_record():
         if not ok:
             return jsonify({"code": 1, "msg": err})
 
-    auto_review = user.get("username") == "chy"
+    auto_review = can_review(user)
     review_status = "已审核" if auto_review else "待审核"
     reviewed_by = user["name"] if auto_review else ""
     reviewed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if auto_review else ""
@@ -253,7 +283,7 @@ def add_record():
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (
         rt, amount, data.get("category", ""),
         data.get("source_dest", "") if rt == "进" else data.get("source_dest", "").strip(),
-        applicant, int(data.get("invoice_count", 0)),
+        applicant, invoice_count,
         data.get("handler", "").strip(), rd, data.get("notes", ""),
         review_status, reviewed_by, reviewed_at,
     ))
@@ -268,33 +298,54 @@ def add_record():
 @funds_bp.route("/api/records/<int:rid>", methods=["PUT"])
 # ---- 编辑记录（不触碰审核字段）----
 def update_record(rid):
+    """仅在内容实际变化时写库；已审核记录改动后重新进入待审核。"""
     data = request.get_json(silent=True) or {}
-
-    rt = data.get("record_type", "")
-    if rt == "出":
-        ok, err = validate_expense_fields(data)
-        if not ok:
-            return jsonify({"code": 1, "msg": err})
-
     conn = get_funds_db()
-    fields, vals = [], []
-    for f in ["record_type", "category", "source_dest", "applicant", "handler", "record_date", "notes"]:
-        if f in data:
-            fields.append(f"{f}=?")
-            vals.append(data[f])
-    if "amount" in data:
-        fields.append("amount=?")
-        vals.append(float(data["amount"]))
-    if "invoice_count" in data:
-        fields.append("invoice_count=?")
-        vals.append(int(data["invoice_count"]))
-    if fields:
-        vals.append(rid)
-        conn.execute(f'UPDATE records SET {",".join(fields)} WHERE id=?', vals)
-        conn.commit()
+    existing = conn.execute("SELECT * FROM records WHERE id=?", (rid,)).fetchone()
+    if existing is None:
+        conn.close()
+        return jsonify({"code": 1, "msg": "记录不存在"}), 404
+    original = dict(existing)
+    allowed = ("record_type", "category", "source_dest", "applicant",
+               "handler", "record_date", "notes", "amount", "invoice_count")
+    candidate = {k: original[k] for k in allowed}
+    for key in allowed:
+        if key in data:
+            candidate[key] = data[key]
+    if candidate["record_type"] not in ("进", "出"):
+        conn.close()
+        return jsonify({"code": 1, "msg": "资金类型不合法"}), 400
+    if not valid_record_date(candidate["record_date"]):
+        conn.close()
+        return jsonify({"code": 1, "msg": "日期格式不正确（YYYY-MM-DD）"}), 400
+    try:
+        candidate["amount"] = float(candidate["amount"])
+        candidate["invoice_count"] = int(candidate["invoice_count"])
+        if not math.isfinite(candidate["amount"]) or candidate["amount"] <= 0 or candidate["invoice_count"] < 0:
+            raise ValueError()
+    except (ValueError, TypeError):
+        conn.close()
+        return jsonify({"code": 1, "msg": "金额或发票数目不合法"}), 400
+    if candidate["record_type"] == "出":
+        valid, error = validate_expense_fields(candidate)
+        if not valid:
+            conn.close()
+            return jsonify({"code": 1, "msg": error}), 400
+
+    changes = {key: candidate[key] for key in allowed
+               if candidate[key] != original[key]}
+    if not changes:
+        conn.close()
+        return jsonify({"code": 0, "msg": "内容未变化"})
+    # 已审核记录修改后重新待审，避免审核通过后改写金额绕过复核。
+    if original["review_status"] == "已审核":
+        changes.update(review_status="待审核", reviewed_by="", reviewed_at="")
+    sets = ", ".join(f"{key}=?" for key in changes)
+    conn.execute(f"UPDATE records SET {sets} WHERE id=?", [*changes.values(), rid])
+    conn.commit()
     conn.close()
     sync_txt()
-    return jsonify({"code": 0, "msg": "已更新"})
+    return jsonify({"code": 0, "msg": "已更新", "review_required": "review_status" in changes})
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["DELETE"])
@@ -312,11 +363,16 @@ def delete_record(rid):
 # ---- 审核通过：待审核 → 已审核，记录审核人/时间（供 chy 处理待审角标）----
 def review_record(rid):
     user = current_user()
+    if not can_review(user):
+        return jsonify({"code": 403, "msg": "只有指定资金审核人可以审核"}), 403
     conn = get_funds_db()
-    row = conn.execute("SELECT id FROM records WHERE id=?", (rid,)).fetchone()
+    row = conn.execute("SELECT id, review_status FROM records WHERE id=?", (rid,)).fetchone()
     if row is None:
         conn.close()
         return jsonify({"code": 1, "msg": "记录不存在"})
+    if row["review_status"] != "待审核":
+        conn.close()
+        return jsonify({"code": 1, "msg": "该记录无需重复审核"}), 400
     conn.execute(
         "UPDATE records SET review_status='已审核', reviewed_by=?, reviewed_at=? WHERE id=?",
         (user["name"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rid),
@@ -330,6 +386,8 @@ def review_record(rid):
 @funds_bp.route("/api/pending_review")
 # ---- 待审核数量：chy 顶栏导航角标轮询此接口 ----
 def pending_review():
+    if not can_review():
+        return jsonify({"code": 403, "msg": "无权查看待审核数量"}), 403
     conn = get_funds_db()
     count = conn.execute("SELECT COUNT(*) FROM records WHERE review_status='待审核'").fetchone()[0]
     conn.close()

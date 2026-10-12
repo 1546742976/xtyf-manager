@@ -12,7 +12,7 @@ echo ============================================================
 echo   RoboMaster XunTian YuFeng -- Progress Tracker V1.0
 echo ============================================================
 echo   Local:  http://127.0.0.1:8520
-echo   First login: admin / admin123
+echo   First-run admin password is printed to console
 echo ============================================================
 echo.
 
@@ -27,7 +27,7 @@ if errorlevel 1 (
 pip show flask >nul 2>&1
 if errorlevel 1 (
     echo [INFO] Installing dependencies...
-    pip install flask
+    pip install -r requirements.txt
     if errorlevel 1 (
         echo [ERROR] Failed to install dependencies.
         pause

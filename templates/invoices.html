@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>巡天御风管理系统 · 发票管理</title>
+<link rel="stylesheet" href="/static/invoices.css">
+<link rel="stylesheet" href="/static/ui.css">
+</head>
+<body class="ux-invoices">
+<script>/*__APP_CONFIG__*/</script>
+
+<header class="topbar">
+<div class="brand">巡天御风<span>管理平台</span></div>
+<nav class="nav" aria-label="系统导航">
+<a href="/">看板</a>
+<a href="/manage" class="finance-only">任务管理</a>
+<a href="/funds/" class="finance-only">资金管理</a>
+<a href="/invoices/" class="active">发票管理</a>
+<a href="/account">账户</a>
+</nav>
+<div class="userbox">
+<span class="who" id="whoAmI"></span>
+<a class="toplink" href="/logout">退出</a>
+</div>
+</header>
+<div class="page-head">
+<div><p class="ux-eyebrow">OPERATIONS / INVOICES</p><h1>发票管理</h1><p class="ux-head-sub">上传、查重、整理与追踪每张发票的报销进度。</p></div>
+<div class="actions">
+<button onclick="StatsModal.show()">统计</button>
+<button class="finance-only" onclick="exportCSV()">导出CSV</button>
+<button class="finance-only" onclick="exportZip()">导出压缩包</button>
+<button class="finance-only" onclick="scanDuplicates()">查重</button>
+<button class="finance-only btn-warn" onclick="organizeFiles()" id="organizeBtn">整理文件</button>
+<button class="finance-only btn-accent" onclick="refreshPDF()" id="refreshBtn">刷新PDF金额</button>
+</div>
+</div>
+
+<div class="container">
+
+<div class="dropzone" id="dropZone" role="button" tabindex="0" aria-label="选择 PDF 发票文件" onclick="document.getElementById('fileInput').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('fileInput').click()}">
+<div class="dz-icon">&#128229;</div>
+<div class="dz-text">拖入一个或多个PDF发票到此处，或<strong>点击选择文件</strong><br>
+<span style="color:#aaa;font-size:11px">支持批量上传，提取金额、日期及发票号 · 入库前可检查重复文件</span></div>
+</div>
+<input type="file" id="fileInput" accept=".pdf" multiple style="display:none" onchange="handleFiles(this.files)">
+
+<div class="stats-grid" id="statsGrid"></div>
+
+<div class="batch-bar finance-only" id="batchBar">
+<span id="batchCount">已选 0 张</span>
+<select id="batchStatus"><option value="">-- 批量改状态 --</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
+<select id="batchSubmitter"><option value="">-- 批量设提交人 --</option></select>
+<button onclick="doBatchUpdate()">执行</button>
+<button class="cancel" onclick="clearSelection()">取消选择</button>
+</div>
+
+<div class="toolbar">
+<select id="filterStatus" onchange="applyFilters()"><option value="">全部状态</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
+<select id="filterMonth" onchange="applyFilters()"><option value="">全部月份</option></select>
+<select id="filterCategory" onchange="applyFilters()"><option value="">全部分类</option></select>
+<select id="filterSubmitter" onchange="applyFilters()"><option value="">全部提交人</option></select>
+<div class="sep"></div>
+<input type="date" id="filterDateFrom" onchange="applyFilters()" title="开始日期" style="width:125px">
+<span style="color:#888;font-size:11px">至</span>
+<input type="date" id="filterDateTo" onchange="applyFilters()" title="结束日期" style="width:125px">
+<div class="sep"></div>
+<input type="search" class="search" aria-label="搜索发票" id="searchInput" placeholder="搜索 供应商/金额/备注/提交人/发票号..." oninput="debounceSearch()">
+<button class="text-btn finance-only" onclick="scanDuplicates()">查重</button>
+<button class="text-btn finance-only" onclick="organizeFiles()">整理文件</button>
+</div>
+
+<div class="table-wrap">
+<table>
+<thead><tr>
+<th class="col-check" style="width:32px"><input type="checkbox" id="selectAll" onclick="toggleSelectAll()" title="全选"></th>
+<th>月份</th><th>日期</th><th>状态</th><th>提交人</th><th>类别</th>
+<th>供应商</th><th style="text-align:right">金额</th><th>发票号</th><th>操作</th>
+</tr></thead>
+<tbody id="invoiceTableBody"></tbody>
+</table>
+<div id="pagination" class="pagination"></div>
+<div id="emptyMsg" class="empty" style="display:none">暂无发票数据</div>
+</div>
+</div>
+
+<!-- 统计弹窗 (略) -->
+<div class="modal" id="statsModal"><div class="modal-content wide">
+<div class="modal-header"><h2>发票统计</h2><button class="modal-close" onclick="StatsModal.close()">&times;</button></div>
+<div class="stats-grid" id="modalStatsGrid"></div>
+<div class="chart-row three"><div class="chart-box"><h3>状态分布</h3><div id="statusChart"></div></div><div class="chart-box"><h3>按月份</h3><div id="monthChart"></div></div><div class="chart-box"><h3>按类别</h3><div id="categoryChart"></div></div></div>
+<div class="chart-row"><div class="chart-box"><h3>按提交人</h3><div id="submitterChart"></div></div></div>
+</div></div>
+
+<!-- 详情弹窗 -->
+<div class="modal" id="detailModal"><div class="modal-content">
+<div class="modal-header"><h2>发票详情</h2><button class="modal-close" onclick="DetailModal.close()">&times;</button></div>
+<div class="detail-grid">
+<div class="field"><label>月份</label><input id="detMonth" readonly></div>
+<div class="field"><label>开票日期</label><input id="detDate" readonly></div>
+<div class="field"><label>状态</label><select id="detStatus"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select></div>
+<div class="field"><label>报销日期</label><input type="date" id="detReimbursedDate"></div>
+<div class="field"><label>提交人</label><input id="detSubmitter" placeholder="输入提交人姓名"></div>
+<div class="field"><label>类别</label><input id="detCategory" placeholder="类别"></div>
+<div class="field"><label>供应商</label><input id="detVendor" readonly></div>
+<div class="field"><label>金额</label><input id="detAmount" readonly></div>
+<div class="field full"><label>备注</label><textarea id="detNotes" placeholder="添加备注..." rows="2"></textarea></div>
+<div class="field"><label>发票号码</label><input id="detInvNum" placeholder="发票号码"></div>
+<div class="field"><label>标签</label><input id="detTags" placeholder="逗号分隔"></div>
+<div class="field"><label>文件名</label><input id="detFilename" readonly></div>
+<div class="field"><label>金额来源</label><input id="detSource" readonly></div>
+<div class="field full"><label>文件路径</label><input id="detPath" readonly style="font-size:11px;color:#888"></div>
+</div>
+<div class="detail-actions">
+<button class="btn-danger finance-only" onclick="DetailModal.clearMeta()">清除元数据</button>
+<button class="btn-cancel" onclick="DetailModal.close()">取消</button>
+<button class="btn-save finance-only" onclick="DetailModal.save()">保存</button>
+</div>
+</div></div>
+
+<!-- 批量上传确认弹窗 -->
+<div class="modal" id="batchUploadModal"><div class="modal-content xwide">
+<div class="modal-header"><h2>批量确认发票入库 (<span id="buTotal">0</span> 张)</h2><button class="modal-close" onclick="BUModal.close()">&times;</button></div>
+<div class="finance-only" style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
+<label style="font-size:12px;color:#888;white-space:nowrap">统一提交人:</label>
+<input type="text" id="buSubmitter" placeholder="填写所有发票的来源人" style="flex:1;padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:13px">
+<label style="font-size:12px;color:#888;white-space:nowrap">统一状态:</label>
+<select id="buStatus" style="padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:12px"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
+</div>
+<div style="max-height:55vh;overflow-y:auto">
+<table class="upload-list" id="buTable"><thead><tr><th style="width:30px">#</th><th>文件名</th><th>金额</th><th>日期</th><th>月份</th><th>供应商</th><th>发票号</th><th>类别</th><th>提交人</th><th>重复</th></tr></thead><tbody id="buTbody"></tbody></table>
+</div>
+<div class="detail-actions" style="position:sticky;bottom:0;background:#fff;padding-top:10px">
+<button class="btn-cancel" onclick="BUModal.close()">取消</button>
+<button class="btn-save" onclick="BUModal.confirm()">全部确认入库</button>
+</div>
+</div></div>
+
+<!-- 删除重复确认弹窗 -->
+<div class="modal" id="delDupModal"><div class="modal-content">
+<div class="modal-header"><h2>删除重复发票</h2><button class="modal-close" onclick="DelDupModal.close()">&times;</button></div>
+<div class="dup-warning">
+<div class="dup-title" style="font-size:14px">发现 <span id="delDupCount">0</span> 个重复项</div>
+<div style="color:#888;margin-top:6px;font-size:12px">每组重复将保留较早的一个文件，删除其余副本<br>此操作<b>不可恢复</b>，建议先确认后再执行</div>
+</div>
+<div style="max-height:200px;overflow-y:auto;margin-bottom:14px;font-size:11px;color:#666" id="delDupList"></div>
+<div class="detail-actions">
+<button class="btn-cancel" onclick="DelDupModal.close()">保留重复文件</button>
+<button class="btn-danger" onclick="DelDupModal.confirm()" style="background:#d93025;color:#fff;border:none;padding:8px 18px;border-radius:5px;cursor:pointer">确认删除重复文件</button>
+</div>
+</div></div>
+
+<div class="toast" id="toast"></div>
+<!-- 进度条 -->
+<div id="progressBar" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:14px;padding:28px 36px;box-shadow:0 12px 40px rgba(0,0,0,0.2);z-index:10000;text-align:center;min-width:320px">
+<div style="font-size:14px;color:#333;margin-bottom:14px" id="progressText">处理中...</div>
+<div style="width:100%;height:8px;background:#e0e0e0;border-radius:4px;overflow:hidden">
+<div id="progressFill" style="height:100%;width:0;background:linear-gradient(90deg,#1a73e8,#4fc3f7);border-radius:4px;transition:width 0.3s"></div>
+</div>
+<div style="font-size:11px;color:#999;margin-top:8px" id="progressPercent">0%</div>
+</div>
+
+<script src="/static/invoices.js"></script>
+</body>
+</html>

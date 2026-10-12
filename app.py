@@ -28,7 +28,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 # ---- 本项目的公共模块与子模块（子模块的蓝图注册见下方 app.register_blueprint）----
 from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
                     manager_required, now_str)
-from modules.funds import funds_bp
+from modules.funds import funds_bp, can_review
 from modules.invoices import bp as invoices_bp
 
 # ---- 关键路径与端口（secret.key 用于会话签名，首次运行自动生成）----
@@ -71,6 +71,32 @@ def parse_int(value, default=0, lo=None, hi=None):
     return result
 
 
+def validate_task_dates(start_date, due_date):
+    """合法日期必须符合 YYYY-MM-DD；允许留空。"""
+    values = []
+    for label, raw in (("开始日期", start_date), ("截止日期", due_date)):
+        if raw is not None and not isinstance(raw, str):
+            return f"{label}格式不正确"
+        value = (raw or "").strip()
+        if value:
+            try:
+                values.append(datetime.strptime(value, "%Y-%m-%d").date())
+            except ValueError:
+                return f"{label}格式不正确（应为 YYYY-MM-DD）"
+        else:
+            values.append(None)
+    if values[0] and values[1] and values[0] > values[1]:
+        return "开始日期不能晚于截止日期"
+    return None
+
+
+def validate_task_owner(db, owner_id):
+    if owner_id is None:
+        return None
+    row = db.execute("SELECT id FROM members WHERE id = ? AND is_active = 1", (owner_id,)).fetchone()
+    return None if row else "负责人不存在或已停用"
+
+
 # ---- 会话密钥：读取 secret.key，不存在则生成 64 位随机串并持久化 ----
 def _load_secret():
     if os.path.exists(SECRET_PATH):
@@ -89,11 +115,19 @@ app = Flask(__name__)
 app.secret_key = _load_secret()
 app.json.ensure_ascii = False
 app.permanent_session_lifetime = timedelta(days=30)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
 # ---- 注册子模块蓝图（三个系统共用同一登录会话与页面风格）----
 app.register_blueprint(funds_bp, url_prefix="/funds")
 app.register_blueprint(invoices_bp, url_prefix="/invoices")
+
+
+@app.context_processor
+def inject_funds_reviewer():
+    """各模板的待审核角标与实际权限一致。"""
+    return {"can_review_funds": can_review()}
 
 # ---- 进度库表结构（data.db）：members 成员 / tasks 任务 / logs 更新日志 ----
 SCHEMA = """
@@ -150,10 +184,14 @@ def init_db():
         db.executescript(SCHEMA)
         count = db.execute("SELECT COUNT(*) AS c FROM members").fetchone()[0]
         if count == 0:
+            initial_password = os.environ.get("PROGRESS_INITIAL_ADMIN_PASSWORD") or secrets.token_urlsafe(18)
+            if not os.environ.get("PROGRESS_INITIAL_ADMIN_PASSWORD"):
+                print("[初始化] admin 初始随机密码：" + initial_password, flush=True)
+                print("[初始化] 请登录后修改密码并保护服务器日志。", flush=True)
             db.execute(
                 "INSERT INTO members (name, username, password_hash, group_name, role, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                ("管理员", "admin", generate_password_hash("admin123"), "管理员", "admin", now_str()),
+                ("管理员", "admin", generate_password_hash(initial_password), "管理员", "admin", now_str()),
             )
             db.commit()
     finally:
@@ -191,6 +229,7 @@ def login():
     ).fetchone()
     if row is None or not check_password_hash(row["password_hash"], password):
         return jsonify(ok=False, error="用户名或密码错误"), 400
+    session.clear()
     session.permanent = True
     session["uid"] = row["id"]
     return jsonify(ok=True)
@@ -207,6 +246,14 @@ def logout():
 @login_required
 def index():
     return render_template("board.html", me=current_user(), page="board", role_names=ROLE_NAMES)
+
+
+@app.route("/account")
+@login_required
+def account():
+    """所有登录角色的账户设置页面，统一各模块的密码修改入口。"""
+    return render_template("account.html", me=current_user(),
+                           page="account", role_names=ROLE_NAMES)
 
 
 @app.route("/manage")
@@ -267,12 +314,19 @@ def api_task_create():
     owner_id = parse_int(data.get("owner_id"), 0) or None
     group_name = (data.get("group_name") or "").strip()
     db = get_db()
+    if data.get("owner_id") not in (None, "", 0, "0") and not owner_id:
+        return jsonify(ok=False, error="负责人 ID 不合法"), 400
+    err = validate_task_owner(db, owner_id) or validate_task_dates(data.get("start_date"), data.get("due_date"))
+    if err:
+        return jsonify(ok=False, error=err), 400
     if owner_id and not group_name:
         row = db.execute("SELECT group_name FROM members WHERE id = ?", (owner_id,)).fetchone()
         if row:
             group_name = row["group_name"] or ""
-    status = data.get("status") if data.get("status") in STATUSES else "未开始"
-    priority = data.get("priority") if data.get("priority") in PRIORITIES else "中"
+    status = data.get("status", "未开始")
+    priority = data.get("priority", "中")
+    if status not in STATUSES or priority not in PRIORITIES:
+        return jsonify(ok=False, error="状态或优先级不合法"), 400
     cur = db.execute(
         "INSERT INTO tasks (title, detail, owner_id, group_name, project, priority, status, progress, "
         "start_date, due_date, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -316,6 +370,18 @@ def api_task_update(task_id):
                 elif isinstance(value, str):
                     value = value.strip()
                 new_values[key] = value
+    if is_manager:
+        if "owner_id" in data and data["owner_id"] not in (None, "", 0, "0") and not new_values.get("owner_id"):
+            return jsonify(ok=False, error="负责人 ID 不合法"), 400
+        err = validate_task_owner(db, new_values.get("owner_id", old["owner_id"]))
+        if err:
+            return jsonify(ok=False, error=err), 400
+        if new_values.get("priority", old["priority"]) not in PRIORITIES:
+            return jsonify(ok=False, error="优先级不合法"), 400
+        err = validate_task_dates(new_values.get("start_date", old["start_date"]),
+                                  new_values.get("due_date", old["due_date"]))
+        if err:
+            return jsonify(ok=False, error=err), 400
     if "status" in data:
         status = data.get("status")
         if status not in STATUSES:
@@ -377,7 +443,10 @@ def api_member_create():
     if not name:
         return jsonify(ok=False, error="姓名不能为空"), 400
     username = (data.get("username") or "").strip() or name
-    password = data.get("password") or "123456"
+    generated_password = not bool(data.get("password"))
+    password = data.get("password") or secrets.token_urlsafe(10)
+    if len(password) < 8:
+        return jsonify(ok=False, error="初始密码至少 8 位"), 400
     group_name = (data.get("group_name") or "").strip()
     role = data.get("role") or "member"
     if user["role"] != "admin" or role not in ("admin", "manager", "member"):
@@ -391,7 +460,8 @@ def api_member_create():
         db.commit()
     except sqlite3.IntegrityError:
         return jsonify(ok=False, error=f"用户名 {username} 已存在"), 400
-    return jsonify(ok=True, id=cur.lastrowid)
+    return jsonify(ok=True, id=cur.lastrowid,
+                   initial_password=password if generated_password else None)
 
 
 @app.route("/api/members/import", methods=["POST"])
@@ -417,12 +487,13 @@ def api_members_import():
             while f"{name}{index}" in existing:
                 index += 1
             username = f"{name}{index}"
+        password = secrets.token_urlsafe(9)
         db.execute(
             "INSERT INTO members (name, username, password_hash, group_name, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (name, username, generate_password_hash("123456"), group_name, "member", now_str()),
+            (name, username, generate_password_hash(password), group_name, "member", now_str()),
         )
         existing.add(username)
-        created.append(f"{name}（{username} / 123456）")
+        created.append(f"{name}（{username} / {password}）")
     db.commit()
     return jsonify(ok=True, created=created)
 
@@ -438,11 +509,14 @@ def api_member_reset(member_id):
     if user["role"] != "admin" and row["role"] != "member":
         return jsonify(ok=False, error="无权限"), 403
     data = request.get_json(silent=True) or {}
-    password = data.get("password") or "123456"
+    generated_password = not bool(data.get("password"))
+    password = data.get("password") or secrets.token_urlsafe(10)
+    if len(password) < 8:
+        return jsonify(ok=False, error="密码至少 8 位"), 400
     db.execute("UPDATE members SET password_hash = ? WHERE id = ?",
                (generate_password_hash(password), member_id))
     db.commit()
-    return jsonify(ok=True)
+    return jsonify(ok=True, initial_password=password if generated_password else None)
 
 
 @app.route("/api/member/<int:member_id>/role", methods=["POST"])

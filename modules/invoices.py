@@ -18,13 +18,16 @@
   [7] 后台任务(SSE 实时进度)依赖进程内内存 _jobs —— 因此 gunicorn 必须固定 1 worker
   [8] 新增 /api/export_zip：一键打包全部发票下载（排除 .uploads、往届发票.zip）
 
-前端：create_index_html() 内嵌整页 HTML/CSS/JS（见文件后半部分）；
+前端：templates/invoices.html 保存 HTML/CSS/JS（见文件后半部分）；
       页面通过 /*__APP_CONFIG__*/ 注入 window.IS_FINANCE / window.ME_NAME
       来区分"成员视角"（上传+只看自己的）与"财务视角"（全量管理）。
 """
 import os
 import re
 import json
+import csv
+import io
+import math
 import shutil
 import hashlib
 import uuid
@@ -789,11 +792,12 @@ def get_stats(invoices):
 def index():
     user = current_user()
     html = create_index_html()
+    # 用户名注入 script 前进行 HTML 特殊字符转义，避免 </script> 破坏脚本标签。
+    safe_name = json.dumps(user['name'], ensure_ascii=False).replace('<', r'\u003c').replace('>', r'\u003e').replace('&', r'\u0026')
     html = html.replace(
         '/*__APP_CONFIG__*/',
         'window.IS_FINANCE=%s;window.ME_NAME=%s;' % (
-            'true' if _is_finance(user) else 'false',
-            json.dumps(user['name'], ensure_ascii=False),
+            'true' if _is_finance(user) else 'false', safe_name,
         ),
     )
     return Response(html, mimetype='text/html')
@@ -829,14 +833,22 @@ def api_invoices():
 
     min_amt = request.args.get('min_amount', '')
     max_amt = request.args.get('max_amount', '')
-    if min_amt: result = [i for i in result if i['amount'] >= float(min_amt)]
-    if max_amt: result = [i for i in result if i['amount'] <= float(max_amt)]
+    try:
+        low = float(min_amt) if min_amt else None
+        high = float(max_amt) if max_amt else None
+        if (low is not None and not math.isfinite(low)) or (high is not None and not math.isfinite(high)):
+            raise ValueError()
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        if page < 1 or per_page < 1 or per_page > 100:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({'error': '筛选或分页参数无效'}), 400
+    if low is not None: result = [i for i in result if i['amount'] >= low]
+    if high is not None: result = [i for i in result if i['amount'] <= high]
 
     inv_id = request.args.get('id', '')
     if inv_id: result = [i for i in result if i['id'] == inv_id]
-
-    page = int(request.args.get('page', 1))
-    per_page = int(request.args.get('per_page', 50))
     total = len(result)
     start = (page - 1) * per_page
     end = start + per_page
@@ -1594,6 +1606,28 @@ def api_export():
     return jsonify({'success': True, 'path': csv_path, 'count': len(invoices)})
 
 
+@bp.route('/api/export/download')
+@finance_required
+def api_export_download():
+    """真正下载 CSV，不再只把文件生成到服务器目录。"""
+    output = io.StringIO(newline='')
+    writer = csv.writer(output)
+    writer.writerow(['月份', '文件夹', '状态', '提交人', '序号', '类别', '金额', '金额来源',
+                     '供应商', '开票日期', '报销日期', '备注', '发票号码', '文件名', '文件路径'])
+    for inv in scan_invoices():
+        writer.writerow([
+            inv.get('month', ''), inv.get('folder', ''), inv.get('status', ''),
+            inv.get('submitter', ''), inv.get('seq', ''), inv.get('category', ''),
+            inv.get('amount', 0), inv.get('source', ''), inv.get('vendor', ''),
+            inv.get('date', ''), inv.get('reimbursed_date', ''), inv.get('notes', ''),
+            inv.get('invoice_number', ''), inv.get('filename', ''), inv.get('rel_path', ''),
+        ])
+    buffer = io.BytesIO(output.getvalue().encode('utf-8-sig'))
+    buffer.seek(0)
+    return send_file(buffer, mimetype='text/csv; charset=utf-8', as_attachment=True,
+                     download_name='invoices_' + datetime.now().strftime('%Y%m%d') + '.csv')
+
+
 # ---- 打包发票 zip：排除 .uploads / __pycache__ / 往届发票.zip ----
 def build_invoices_zip(out_path):
     skipped_dirs = {'.uploads', '__pycache__', '_待清理'}
@@ -1628,691 +1662,12 @@ def api_export_zip():
 
 # ==================== 前端整页 HTML（内嵌 CSS/JS；/*__APP_CONFIG__*/ 为角色注入点）====================
 def create_index_html():
-    return r'''<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>巡天御风管理系统 · 发票管理</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#f2f4f8;color:#1f2430;min-width:1024px}
-body.member .finance-only{display:none!important}
-body.member .col-check{display:none!important}
-.topbar{display:flex;align-items:center;gap:16px;padding:10px 18px;background:#0f172a;color:#e2e8f0;position:sticky;top:0;z-index:50;flex-wrap:wrap}
-.topbar .brand{font-weight:700;font-size:16px;letter-spacing:.5px}
-.topbar .brand span{color:#7dd3fc;font-weight:400}
-.topbar .nav{display:flex;gap:4px;flex:1}
-.topbar .nav a{color:#cbd5e1;padding:6px 12px;border-radius:8px;text-decoration:none;font-size:14px;transition:background .15s}
-.topbar .nav a:hover{background:rgba(255,255,255,.08)}
-.topbar .nav a.active{background:rgba(125,211,252,.18);color:#7dd3fc}
-.topbar .userbox{display:flex;align-items:center;gap:10px}
-.topbar .userbox .who{color:#94a3b8;font-size:13px}
-.topbar .userbox a.toplink{color:#fff;border:1px solid rgba(255,255,255,.45);border-radius:8px;padding:4px 10px;font-size:13px;text-decoration:none}
-.topbar .userbox a.toplink:hover{background:rgba(255,255,255,.12)}
-.page-head{background:#fff;border-bottom:1px solid #e3e7ee;padding:12px 26px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.page-head h1{font-size:18px;font-weight:700}
-.page-head .actions{display:flex;gap:8px;flex-wrap:wrap}
-.page-head .actions button{background:#fff;border:1px solid #e3e7ee;color:#1f2430;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:12px;white-space:nowrap;transition:.15s}
-.page-head .actions button:hover{border-color:#c7cdd8;background:#f8fafc}
-.page-head .actions button.btn-accent{background:#2563eb;border-color:#2563eb;color:#fff;font-weight:600}
-.page-head .actions button.btn-accent:hover{background:#1d4ed8}
-.page-head .actions button.btn-warn{background:#f59e0b;border-color:#f59e0b;color:#fff;font-weight:600}
-.page-head .actions button.btn-warn:hover{background:#d97706}
-.container{max-width:1500px;margin:0 auto;padding:18px}
-/* 拖入区域 */
-.dropzone{border:2px dashed #c2d9f9;border-radius:10px;padding:22px;text-align:center;background:#f8fafd;margin-bottom:16px;transition:.2s;cursor:pointer}
-.dropzone.drag-over{border-color:#1a73e8;background:#e8f0fe}
-.dropzone .dz-icon{font-size:36px;margin-bottom:6px}
-.dropzone .dz-text{color:#888;font-size:13px}
-.dropzone .dz-text strong{color:#1a73e8}
-.dropzone:hover{border-color:#1a73e8;background:#eef4fd}
-/* 统计卡 */
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px;margin-bottom:16px}
-.stat-card{background:#fff;border-radius:10px;padding:13px 16px;box-shadow:0 1px 3px rgba(0,0,0,0.06);border-left:4px solid transparent;transition:.15s}
-.stat-card:hover{box-shadow:0 2px 8px rgba(0,0,0,0.1)}
-.stat-card .label{font-size:11px;color:#999;margin-bottom:4px}
-.stat-card .value{font-size:20px;font-weight:700}
-.stat-card.accent-blue{border-left-color:#1a73e8}
-.stat-card.accent-green{border-left-color:#0d904f}
-.stat-card.accent-orange{border-left-color:#f9ab00}
-.stat-card.accent-red{border-left-color:#d93025}
-.stat-card.accent-purple{border-left-color:#9334e6}
-/* 工具栏 */
-.toolbar{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:12px;background:#fff;padding:11px 16px;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,0.06)}
-.toolbar select,.toolbar input[type=text],.toolbar input[type=date]{padding:6px 9px;border:1px solid #ddd;border-radius:5px;font-size:12px;outline:none;background:#fff}
-.toolbar select:focus,.toolbar input:focus{border-color:#1a73e8}
-.toolbar .search{flex:1;min-width:150px}
-.toolbar .sep{width:1px;height:20px;background:#ddd;margin:0 3px}
-.toolbar .text-btn{background:none;border:none;color:#1a73e8;cursor:pointer;font-size:12px;padding:4px 7px;border-radius:4px;white-space:nowrap}
-.toolbar .text-btn:hover{background:#e8f0fe}
-/* 批量 */
-.batch-bar{display:none;align-items:center;gap:8px;padding:8px 14px;background:#e8f0fe;border-radius:8px;margin-bottom:10px;font-size:12px}
-.batch-bar.show{display:flex}
-.batch-bar select{padding:5px 8px;border:1px solid #c2d9f9;border-radius:4px;font-size:12px;background:#fff}
-.batch-bar button{padding:5px 12px;background:#1a73e8;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px}
-.batch-bar button:hover{opacity:.9}
-.batch-bar .cancel{background:transparent;color:#666;border:1px solid #ccc}
-/* 表格 */
-.table-wrap{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,0.06);overflow-x:auto}
-table{width:100%;border-collapse:collapse;min-width:1150px}
-th{background:#fafafa;text-align:left;padding:9px 10px;font-size:11px;color:#888;border-bottom:2px solid #eee;font-weight:600;white-space:nowrap}
-td{padding:7px 10px;border-bottom:1px solid #f0f0f0;font-size:12px}
-tr:hover{background:#f8fafd}
-tr.row-selected{background:#e8f0fe}
-tr.row-dup{background:#fff3e0}
-.amount-col{font-weight:600;text-align:right}
-.amount-col.missing{color:#aaa}
-/* 徽章 */
-.badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:10px;font-weight:600;line-height:1.6}
-.badge.status-reimbursed{background:#e6f4ea;color:#137333}
-.badge.status-pending{background:#fef7e0;color:#b06000}
-.badge.status-unreimbursed{background:#fce8e6;color:#c5221f}
-.badge.tag-pdf{background:#fff3e0;color:#e65100;font-size:9px}
-.badge.tag-filename{background:#e8f5e9;color:#2e7d32;font-size:9px}
-.badge.tag-unknown{background:#f3e5f5;color:#7b1fa2;font-size:9px}
-.badge.tag-dup{background:#fce8e6;color:#d93025;font-size:9px;animation:pulse 1.5s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-.clickable{color:#1a73e8;cursor:pointer}
-.clickable:hover{text-decoration:underline}
-/* 分页 */
-.pagination{display:flex;justify-content:center;align-items:center;gap:5px;padding:12px;flex-wrap:wrap}
-.pagination button,.pagination span{font-size:11px}
-.pagination button{padding:4px 10px;border:1px solid #ddd;border-radius:5px;background:#fff;cursor:pointer}
-.pagination button:hover{border-color:#1a73e8;color:#1a73e8}
-.pagination button.active{background:#1a73e8;color:#fff;border-color:#1a73e8}
-.pagination button:disabled{opacity:.4;cursor:default}
-.pagination .info{color:#888;margin:0 6px}
-/* 弹窗 */
-.modal{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.3);z-index:1000;justify-content:center;align-items:center}
-.modal.show{display:flex}
-.modal-content{background:#fff;border-radius:12px;width:90%;max-width:650px;max-height:88vh;overflow-y:auto;padding:22px 26px;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
-.modal-content.wide{max-width:1050px}
-.modal-content.xwide{max-width:1200px}
-.modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;position:sticky;top:0;background:#fff;z-index:2;padding-bottom:8px;border-bottom:1px solid #eee}
-.modal-header h2{font-size:18px}
-.modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:#999;padding:2px}
-.modal-close:hover{color:#333}
-/* 详情网格 */
-.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px}
-.detail-grid .field label{display:block;font-size:11px;color:#888;margin-bottom:3px}
-.detail-grid .field input,.detail-grid .field select,.detail-grid .field textarea{width:100%;padding:7px 9px;border:1px solid #ddd;border-radius:5px;font-size:12px;outline:none}
-.detail-grid .field textarea{resize:vertical;min-height:48px}
-.detail-grid .field input:focus,.detail-grid .field select:focus,.detail-grid .field textarea:focus{border-color:#1a73e8}
-.detail-grid .field.full{grid-column:1/-1}
-.detail-grid .field input[readonly]{background:#f9f9f9;color:#666}
-.detail-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid #eee}
-.detail-actions button{padding:7px 16px;border-radius:5px;font-size:12px;cursor:pointer}
-.btn-save{background:#1a73e8;color:#fff;border:none}
-.btn-save:hover{background:#1557b0}
-.btn-cancel{background:#fff;color:#666;border:1px solid #ddd}
-.btn-cancel:hover{background:#f5f5f5}
-.btn-danger{background:transparent;color:#d93025;border:1px solid #fce8e6;margin-right:auto}
-.btn-danger:hover{background:#fce8e6}
-/* 查重结果 */
-.dup-warning{background:#fef7e0;border:1px solid #f9ab00;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px}
-.dup-warning .dup-title{font-weight:600;color:#b06000;margin-bottom:4px}
-.dup-warning .dup-item{color:#666;margin:2px 0;font-size:11px}
-.dup-warning .dup-skip{color:#1a73e8;cursor:pointer;text-decoration:underline;margin-top:4px;display:inline-block}
-/* 批量上传列表 */
-.upload-list{width:100%;font-size:12px;margin-bottom:14px}
-.upload-list th{background:#fafafa;padding:7px 8px;font-size:10px;position:sticky;top:0}
-.upload-list td{padding:6px 8px;font-size:11px}
-.upload-list input[type=text],.upload-list select{padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:11px;width:100%}
-.upload-list .dup-row td{background:#fff3e0}
-/* Toast */
-.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);padding:9px 22px;border-radius:7px;font-size:13px;z-index:9999;opacity:0;transition:opacity .3s;pointer-events:none;color:#fff}
-.toast.show{opacity:1}
-.toast.success{background:#1e8e3e}
-.toast.error{background:#d93025}
-.toast.info{background:#1a73e8}
-.empty{text-align:center;padding:50px 20px;color:#aaa;font-size:13px}
-.inline-select{padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:11px;background:#fff;cursor:pointer;outline:none;color:#333}
-.inline-select:focus{border-color:#1a73e8}
-.btn-sm{padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;font-size:10px;white-space:nowrap}
-.btn-sm:hover{background:#f0f0f0}
-/* 统计图表 */
-.chart-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
-.chart-box{background:#fafbfd;border:1px solid #f0f0f0;border-radius:8px;padding:12px 14px}
-.chart-box h3{font-size:13px;color:#666;margin-bottom:12px;font-weight:600}
-.chart-bar{display:grid;grid-template-columns:100px 1fr 170px;gap:8px;align-items:center;margin-bottom:8px;font-size:11px}
-.chart-bar .name{color:#555;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chart-bar .bar-wrap{background:#f0f0f0;border-radius:3px;height:16px;overflow:hidden}
-.chart-bar .bar-fill{height:100%;background:linear-gradient(90deg,#1a73e8,#4fc3f7);border-radius:3px;min-width:2px}
-.chart-bar.accent-green .bar-fill{background:#0d904f}
-.chart-bar.accent-orange .bar-fill{background:#f9ab00}
-.chart-bar.accent-red .bar-fill{background:#d93025}
-.chart-bar .bar-value{color:#666;white-space:nowrap;font-size:10px}
-@media(max-width:1024px){
-.chart-row,.chart-row.three{grid-template-columns:1fr}
-.detail-grid{grid-template-columns:1fr}
-.container{padding:10px}
-}
-</style>
-</head>
-<body>
-<script>/*__APP_CONFIG__*/</script>
+    """从独立 HTML 文件读取前端，保留角色配置注入。"""
+    html_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "templates", "invoices.html")
+    with open(html_path, encoding="utf-8") as file:
+        return file.read()
 
-<header class="topbar">
-<div class="brand">巡天御风<span>管理系统</span></div>
-<nav class="nav">
-<a href="/">看板</a>
-<a href="/funds/" class="finance-only">资金管理</a>
-<a href="/invoices/" class="active">发票管理</a>
-</nav>
-<div class="userbox">
-<span class="who" id="whoAmI"></span>
-<a class="toplink" href="/logout">退出</a>
-</div>
-</header>
-<div class="page-head">
-<h1>发票管理</h1>
-<div class="actions">
-<button onclick="StatsModal.show()">统计</button>
-<button class="finance-only" onclick="exportCSV()">导出CSV</button>
-<button class="finance-only" onclick="exportZip()">导出压缩包</button>
-<button class="finance-only" onclick="scanDuplicates()">查重</button>
-<button class="finance-only btn-warn" onclick="organizeFiles()" id="organizeBtn">整理文件</button>
-<button class="finance-only btn-accent" onclick="refreshPDF()" id="refreshBtn">刷新PDF金额</button>
-</div>
-</div>
-
-<div class="container">
-
-<div class="dropzone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-<div class="dz-icon">&#128229;</div>
-<div class="dz-text">拖入一个或多个PDF发票到此处，或<strong>点击选择文件</strong><br>
-<span style="color:#aaa;font-size:11px">支持批量上传，AI自动识别金额/日期/发票号 · 上传时自动查重</span></div>
-</div>
-<input type="file" id="fileInput" accept=".pdf" multiple style="display:none" onchange="handleFiles(this.files)">
-
-<div class="stats-grid" id="statsGrid"></div>
-
-<div class="batch-bar finance-only" id="batchBar">
-<span id="batchCount">已选 0 张</span>
-<select id="batchStatus"><option value="">-- 批量改状态 --</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
-<select id="batchSubmitter"><option value="">-- 批量设提交人 --</option></select>
-<button onclick="doBatchUpdate()">执行</button>
-<button class="cancel" onclick="clearSelection()">取消选择</button>
-</div>
-
-<div class="toolbar">
-<select id="filterStatus" onchange="applyFilters()"><option value="">全部状态</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
-<select id="filterMonth" onchange="applyFilters()"><option value="">全部月份</option></select>
-<select id="filterCategory" onchange="applyFilters()"><option value="">全部分类</option></select>
-<select id="filterSubmitter" onchange="applyFilters()"><option value="">全部提交人</option></select>
-<div class="sep"></div>
-<input type="date" id="filterDateFrom" onchange="applyFilters()" title="开始日期" style="width:125px">
-<span style="color:#888;font-size:11px">至</span>
-<input type="date" id="filterDateTo" onchange="applyFilters()" title="结束日期" style="width:125px">
-<div class="sep"></div>
-<input type="text" class="search" id="searchInput" placeholder="搜索 供应商/金额/备注/提交人/发票号..." oninput="debounceSearch()">
-<button class="text-btn finance-only" onclick="scanDuplicates()">查重</button>
-<button class="text-btn finance-only" onclick="organizeFiles()">整理文件</button>
-</div>
-
-<div class="table-wrap">
-<table>
-<thead><tr>
-<th class="col-check" style="width:32px"><input type="checkbox" id="selectAll" onclick="toggleSelectAll()" title="全选"></th>
-<th>月份</th><th>日期</th><th>状态</th><th>提交人</th><th>类别</th>
-<th>供应商</th><th style="text-align:right">金额</th><th>发票号</th><th>操作</th>
-</tr></thead>
-<tbody id="invoiceTableBody"></tbody>
-</table>
-<div id="pagination" class="pagination"></div>
-<div id="emptyMsg" class="empty" style="display:none">暂无发票数据</div>
-</div>
-</div>
-
-<!-- 统计弹窗 (略) -->
-<div class="modal" id="statsModal"><div class="modal-content wide">
-<div class="modal-header"><h2>发票统计</h2><button class="modal-close" onclick="StatsModal.close()">&times;</button></div>
-<div class="stats-grid" id="modalStatsGrid"></div>
-<div class="chart-row three"><div class="chart-box"><h3>状态分布</h3><div id="statusChart"></div></div><div class="chart-box"><h3>按月份</h3><div id="monthChart"></div></div><div class="chart-box"><h3>按类别</h3><div id="categoryChart"></div></div></div>
-<div class="chart-row"><div class="chart-box"><h3>按提交人</h3><div id="submitterChart"></div></div></div>
-</div></div>
-
-<!-- 详情弹窗 -->
-<div class="modal" id="detailModal"><div class="modal-content">
-<div class="modal-header"><h2>发票详情</h2><button class="modal-close" onclick="DetailModal.close()">&times;</button></div>
-<div class="detail-grid">
-<div class="field"><label>月份</label><input id="detMonth" readonly></div>
-<div class="field"><label>开票日期</label><input id="detDate" readonly></div>
-<div class="field"><label>状态</label><select id="detStatus"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select></div>
-<div class="field"><label>报销日期</label><input type="date" id="detReimbursedDate"></div>
-<div class="field"><label>提交人</label><input id="detSubmitter" placeholder="输入提交人姓名"></div>
-<div class="field"><label>类别</label><input id="detCategory" placeholder="类别"></div>
-<div class="field"><label>供应商</label><input id="detVendor" readonly></div>
-<div class="field"><label>金额</label><input id="detAmount" readonly></div>
-<div class="field full"><label>备注</label><textarea id="detNotes" placeholder="添加备注..." rows="2"></textarea></div>
-<div class="field"><label>发票号码</label><input id="detInvNum" placeholder="发票号码"></div>
-<div class="field"><label>标签</label><input id="detTags" placeholder="逗号分隔"></div>
-<div class="field"><label>文件名</label><input id="detFilename" readonly></div>
-<div class="field"><label>金额来源</label><input id="detSource" readonly></div>
-<div class="field full"><label>文件路径</label><input id="detPath" readonly style="font-size:11px;color:#888"></div>
-</div>
-<div class="detail-actions">
-<button class="btn-danger finance-only" onclick="DetailModal.clearMeta()">清除元数据</button>
-<button class="btn-cancel" onclick="DetailModal.close()">取消</button>
-<button class="btn-save finance-only" onclick="DetailModal.save()">保存</button>
-</div>
-</div></div>
-
-<!-- 批量上传确认弹窗 -->
-<div class="modal" id="batchUploadModal"><div class="modal-content xwide">
-<div class="modal-header"><h2>批量确认发票入库 (<span id="buTotal">0</span> 张)</h2><button class="modal-close" onclick="BUModal.close()">&times;</button></div>
-<div class="finance-only" style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
-<label style="font-size:12px;color:#888;white-space:nowrap">统一提交人:</label>
-<input type="text" id="buSubmitter" placeholder="填写所有发票的来源人" style="flex:1;padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:13px">
-<label style="font-size:12px;color:#888;white-space:nowrap">统一状态:</label>
-<select id="buStatus" style="padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:12px"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
-</div>
-<div style="max-height:55vh;overflow-y:auto">
-<table class="upload-list" id="buTable"><thead><tr><th style="width:30px">#</th><th>文件名</th><th>金额</th><th>日期</th><th>月份</th><th>供应商</th><th>发票号</th><th>类别</th><th>提交人</th><th>重复</th></tr></thead><tbody id="buTbody"></tbody></table>
-</div>
-<div class="detail-actions" style="position:sticky;bottom:0;background:#fff;padding-top:10px">
-<button class="btn-cancel" onclick="BUModal.close()">取消</button>
-<button class="btn-save" onclick="BUModal.confirm()">全部确认入库</button>
-</div>
-</div></div>
-
-<!-- 删除重复确认弹窗 -->
-<div class="modal" id="delDupModal"><div class="modal-content">
-<div class="modal-header"><h2>删除重复发票</h2><button class="modal-close" onclick="DelDupModal.close()">&times;</button></div>
-<div class="dup-warning">
-<div class="dup-title" style="font-size:14px">发现 <span id="delDupCount">0</span> 个重复项</div>
-<div style="color:#888;margin-top:6px;font-size:12px">每组重复将保留较早的一个文件，删除其余副本<br>此操作<b>不可恢复</b>，建议先确认后再执行</div>
-</div>
-<div style="max-height:200px;overflow-y:auto;margin-bottom:14px;font-size:11px;color:#666" id="delDupList"></div>
-<div class="detail-actions">
-<button class="btn-cancel" onclick="DelDupModal.close()">保留重复文件</button>
-<button class="btn-danger" onclick="DelDupModal.confirm()" style="background:#d93025;color:#fff;border:none;padding:8px 18px;border-radius:5px;cursor:pointer">确认删除重复文件</button>
-</div>
-</div></div>
-
-<div class="toast" id="toast"></div>
-<!-- 进度条 -->
-<div id="progressBar" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:14px;padding:28px 36px;box-shadow:0 12px 40px rgba(0,0,0,0.2);z-index:10000;text-align:center;min-width:320px">
-<div style="font-size:14px;color:#333;margin-bottom:14px" id="progressText">处理中...</div>
-<div style="width:100%;height:8px;background:#e0e0e0;border-radius:4px;overflow:hidden">
-<div id="progressFill" style="height:100%;width:0;background:linear-gradient(90deg,#1a73e8,#4fc3f7);border-radius:4px;transition:width 0.3s"></div>
-</div>
-<div style="font-size:11px;color:#999;margin-top:8px" id="progressPercent">0%</div>
-</div>
-
-<script>
-var App={currentPage:1,totalPages:1,selected:{},stats:null,searchTimer:null,_dupCache:null};
-function showToast(msg,type){var t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+(type||'info');setTimeout(function(){t.classList.remove('show')},3000)}
-
-async function loadStats(){
-var r=await fetch('/invoices/api/stats');App.stats=await r.json();var s=App.stats,ss=s.status_stats||{};
-document.getElementById('statsGrid').innerHTML=[
-{l:'发票总数',v:s.total_count,cls:'accent-blue'},
-{l:'总金额',v:'\xA5'+(s.total_amount||0).toLocaleString(),cls:'accent-blue'},
-{l:'已报销',v:(ss['已报销']||{}).count+' / \xA5'+((ss['已报销']||{}).amount||0).toLocaleString(),cls:'accent-green'},
-{l:'正在报销',v:(ss['正在报销']||{}).count+' / \xA5'+((ss['正在报销']||{}).amount||0).toLocaleString(),cls:'accent-orange'},
-{l:'未报销',v:(ss['未报销']||{}).count+' / \xA5'+((ss['未报销']||{}).amount||0).toLocaleString(),cls:'accent-red'},
-{l:'提交人',v:Object.keys(s.submitter_stats||{}).filter(function(k){return k!=='未指定'}).length+' 人',cls:'accent-purple'},
-].map(function(c){return '<div class="stat-card '+c.cls+'"><div class="label">'+c.l+'</div><div class="value">'+c.v+'</div></div>'}).join('');
-['filterMonth','filterCategory'].forEach(function(id){setOptions(id,Object.keys(s[id.replace('filter','').toLowerCase()+'_stats']||{}).sort().reverse())});
-['filterSubmitter','batchSubmitter'].forEach(function(id){setOptions(id,Object.keys(s.submitter_stats||{}).filter(function(k){return k!=='未指定'}))});
-}
-function setOptions(id,arr){var sel=document.getElementById(id);if(!sel)return;var cur=sel.value,first=sel.options[0];sel.innerHTML='';sel.appendChild(first);arr.forEach(function(v){var o=document.createElement('option');o.value=v;o.textContent=v;if(v===cur)o.selected=true;sel.appendChild(o)})}
-
-async function loadInvoices(page,highlightDups){
-page=page||1;App.currentPage=page;
-var p=new URLSearchParams();
-['filterStatus','filterMonth','filterCategory','filterSubmitter'].forEach(function(id){var el=document.getElementById(id);if(el&&el.value)p.set(id.replace('filter','').toLowerCase(),el.value)});
-var df=document.getElementById('filterDateFrom'),dt=document.getElementById('filterDateTo');
-if(df.value)p.set('date_from',df.value);
-if(dt.value)p.set('date_to',dt.value);
-var kw=document.getElementById('searchInput').value.trim();
-if(kw)p.set('search',kw);
-p.set('page',page);p.set('per_page','50');
-var r=await fetch('/invoices/api/invoices?'+p.toString()),data=await r.json();
-App.totalPages=Math.ceil(data.total/data.per_page)||1;
-var tb=document.getElementById('invoiceTableBody'),em=document.getElementById('emptyMsg');
-
-var dupPaths=highlightDups?Object.values(App._dupCache||{}).flat():[];
-
-if(data.data.length===0){tb.innerHTML='';em.style.display='block'}else{em.style.display='none';
-tb.innerHTML=data.data.map(function(inv){
-var sc=App.selected[inv.id]?' row-selected':'';
-if(dupPaths.length&&dupPaths.indexOf(inv.rel_path)>=0)sc+=' row-dup';
-var ah=inv.amount>0?'\xA5'+inv.amount.toLocaleString():'<span class="amount-col missing">\xA50.00</span>';
-var st=inv.source==='PDF'?'<span class="badge tag-pdf">PDF</span>':inv.source==='PDF(\u7f13\u5b58)'?'<span class="badge tag-pdf">PDF\u7f13\u5b58</span>':inv.source==='文件名'?'<span class="badge tag-filename">文件名</span>':'<span class="badge tag-unknown">待识别</span>';
-var eid = jsEscape(inv.id);
-var erp = encodeURIComponent(inv.rel_path||'');
-var subHtml=inv.submitter?'<span class="clickable" onclick="DetailModal.open(\''+eid+'\')">'+escHtml(inv.submitter)+'</span>':'<span style="color:#ccc;cursor:pointer" onclick="DetailModal.open(\''+eid+'\')">-</span>';
-var invNum=inv.invoice_number?('<span class="clickable" title="'+escHtml(inv.invoice_number)+'">'+inv.invoice_number.substring(inv.invoice_number.length-8)+'</span>'):'-';
-var scol = inv.status==='已报销'?'#e6f4ea':inv.status==='正在报销'?'#fef7e0':'#fce8e6';
-var unsel = inv.status==='未报销'?' selected':'';
-var insel = inv.status==='正在报销'?' selected':'';
-var resel = inv.status==='已报销'?' selected':'';
-return '<tr class="'+sc+'" data-id="'+escHtml(inv.id)+'">'+
-'<td class="col-check"><input type="checkbox" '+(App.selected[inv.id]?'checked':'')+' onclick="toggleOne(\''+eid+'\',this.checked)"></td>'+
-'<td><span class="clickable" onclick="openFolder(\''+encodeURIComponent(inv.month)+'/'+encodeURIComponent(inv.status)+'\')">'+inv.month+'</span></td>'+
-'<td>'+(inv.date||'-')+'</td>'+
-'<td>'+(IS_FINANCE?'<select class="inline-select" onchange="quickSetStatus(\''+eid+'\',this.value)" style="background:'+scol+'"><option value="\u672a\u62a5\u9500"'+unsel+'>\u672a\u62a5\u9500</option><option value="\u6b63\u5728\u62a5\u9500"'+insel+'>\u6b63\u5728\u62a5\u9500</option><option value="\u5df2\u62a5\u9500"'+resel+'>\u5df2\u62a5\u9500</option></select>':'<span class="badge" style="background:'+scol+'">'+inv.status+'</span>')+'</td>'+
-'<td>'+subHtml+'</td>'+
-'<td>'+(inv.category||'-')+'</td>'+
-'<td><span class="clickable" onclick="openFile(\''+erp+'\')">'+escHtml(inv.vendor)+'</span></td>'+
-'<td class="amount-col">'+ah+'</td>'+
-'<td style="font-size:10px">'+invNum+'</td>'+
-'<td><button class="btn-sm" onclick="openFile(\''+erp+'\')">\u6253\u5f00</button> <button class="btn-sm" onclick="DetailModal.open(\''+eid+'\')">'+(IS_FINANCE?'\u7f16\u8f91':'\u67e5\u770b')+'</button></td></tr>';
-}).join('');document.getElementById('selectAll').checked=false}
-renderPagination(data.total,page);updateBatchBar()
-}
-function applyFilters(){loadInvoices(1);loadStats()}
-function debounceSearch(){clearTimeout(App.searchTimer);App.searchTimer=setTimeout(function(){loadInvoices(1)},400)}
-function renderPagination(total,page){var pg=document.getElementById('pagination'),tp=App.totalPages;if(tp<=1){pg.innerHTML='';return}var h='<span class="info">共 '+total+' 条 / '+tp+' 页</span>';h+='<button '+(page<=1?'disabled':'')+' onclick="loadInvoices('+(page-1)+')">上一页</button>';for(var i=1;i<=tp;i++){if(i===1||i===tp||(i>=page-2&&i<=page+2))h+='<button class="'+(i===page?'active':'')+'" onclick="loadInvoices('+i+')">'+i+'</button>';else if(i===page-3||i===page+3)h+='<span>...</span>'}h+='<button '+(page>=tp?'disabled':'')+' onclick="loadInvoices('+tp+')">末页</button>';pg.innerHTML=h}
-
-function toggleOne(id,checked){if(checked)App.selected[id]=true;else delete App.selected[id];updateBatchBar()}
-function toggleSelectAll(){var c=document.getElementById('selectAll').checked,cbs=document.querySelectorAll('#invoiceTableBody input[type=checkbox]');cbs.forEach(function(cb){var tr=cb.closest('tr');if(!tr)return;var id=tr.getAttribute('data-id');if(!id)return;if(c)App.selected[id]=true;else delete App.selected[id];cb.checked=c});updateBatchBar()}
-function updateBatchBar(){var b=document.getElementById('batchBar'),n=Object.keys(App.selected).length;if(n>0){b.classList.add('show');document.getElementById('batchCount').textContent='已选 '+n+' 张'}else{b.classList.remove('show')}}
-function clearSelection(){App.selected={};updateBatchBar();loadInvoices(App.currentPage)}
-function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-function jsEscape(s){return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n').replace(/\r/g,'')}
-
-async function doBatchUpdate(){
-var ids=Object.keys(App.selected);if(!ids.length)return;
-var u={},st=document.getElementById('batchStatus'),su=document.getElementById('batchSubmitter');
-if(st.value)u.status=st.value;
-if(su.value)u.submitter=su.value;
-if(!Object.keys(u).length){showToast('请选择要修改的字段','error');return}
-var r=await fetch('/invoices/api/invoice/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:ids,updates:u})});
-var d=await r.json();
-if(d.success){showToast('已更新 '+d.count+' 张'+(d.moved?'，已移动 '+d.moved+' 个文件':''),'success');clearSelection();App.stats=null;loadStats();loadInvoices(App.currentPage)}}
-
-async function quickSetStatus(id,status){
-var r=await fetch('/invoices/api/invoice/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,status:status})});
-var d=await r.json();
-if(d.success){App.stats=null;loadStats();loadInvoices(App.currentPage);showToast(d.moved?'状态已更新，文件已移动':'状态已更新','success')}}
-
-// ====== 进度条 ======
-var Progress={show:function(msg){document.getElementById('progressText').textContent=msg||'处理中...';document.getElementById('progressFill').style.width='0%';document.getElementById('progressPercent').textContent='0%';document.getElementById('progressBar').style.display='block'},update:function(pct,msg){document.getElementById('progressFill').style.width=(pct||0)+'%';document.getElementById('progressPercent').textContent=Math.round(pct||0)+'%';if(msg)document.getElementById('progressText').textContent=msg},hide:function(){document.getElementById('progressBar').style.display='none'}};
-
-// ====== XMLHttpRequest 工具 ======
-function xhrUpload(url,formData,onProgress){
-return new Promise(function(resolve,reject){
-var xhr=new XMLHttpRequest();
-xhr.open('POST',url);
-xhr.upload.onprogress=function(e){if(e.lengthComputable&&onProgress)onProgress(Math.round(e.loaded/e.total*100))};
-xhr.onload=function(){try{resolve(JSON.parse(xhr.responseText))}catch(e){reject(new Error('解析响应失败'))}};
-xhr.onerror=function(){reject(new Error('网络错误'))};
-xhr.ontimeout=function(){reject(new Error('请求超时'))};
-xhr.timeout=180000;
-xhr.send(formData);
-});}
-
-// ====== 拖入 ======
-var dropZone=document.getElementById('dropZone');
-dropZone.addEventListener('dragover',function(e){e.preventDefault();dropZone.classList.add('drag-over')});
-dropZone.addEventListener('dragleave',function(){dropZone.classList.remove('drag-over')});
-dropZone.addEventListener('drop',function(e){e.preventDefault();dropZone.classList.remove('drag-over');handleFiles(e.dataTransfer.files)});
-document.getElementById('fileInput').addEventListener('change',function(){handleFiles(this.files);this.value=''});
-
-async function handleFiles(files){
-if(!files||!files.length)return;
-var pdfs=[];for(var i=0;i<files.length;i++){if(files[i].name.toLowerCase().endsWith('.pdf'))pdfs.push(files[i])}
-if(!pdfs.length){showToast('请选择PDF文件','error');return}
-
-if(pdfs.length===1){
-var fd=new FormData();fd.append('file',pdfs[0]);
-Progress.show('上传并解析: '+pdfs[0].name);
-try{
-var d=await xhrUpload('/invoices/api/upload',fd,function(pct){Progress.update(pct,'上传中 '+pct+'%')});
-Progress.update(90,'AI解析中...');
-Progress.hide();
-if(d.success){quickConfirm(d)}else{showToast(d.error,'error')}
-}catch(e){Progress.hide();showToast('上传失败: '+e.message,'error')}
-}else{
-Progress.show('准备上传 '+pdfs.length+' 个PDF');
-var fd2=new FormData();
-for(var j=0;j<pdfs.length;j++)fd2.append('files',pdfs[j]);
-try{
-var d2=await xhrUpload('/invoices/api/upload/batch',fd2,function(pct){
-Progress.update(Math.min(pct*0.6,60),'上传中 '+pct+'% ('+pdfs.length+'个文件)');
-});
-Progress.update(80,'AI解析发票信息...');
-setTimeout(function(){Progress.update(90,'完成解析')},200);
-Progress.hide();
-if(d2.success){BUModal.open(d2.results)}else{showToast('上传失败: '+(d2.error||'未知错误'),'error')}
-}catch(e){Progress.hide();showToast('上传失败: '+e.message,'error')}
-}
-}
-
-function cleanupTmp(paths){if(!paths||!paths.length)return;fetch('/invoices/api/upload/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tmp_paths:paths})})}
-
-async function quickConfirm(d){
-var sub=IS_FINANCE?prompt('请输入提交人（来源人）：'):ME_NAME;
-if(!sub||!sub.trim()){showToast('需要填写提交人才能入库','error');cleanupTmp([d.tmp_path]);return}
-var body={tmp_path:d.tmp_path,original_name:d.original_name,month:d.info.month||'未归类',status:'未报销',submitter:sub.trim(),category:d.info.category||'',notes:'',amount:d.info.amount||0,vendor:d.info.vendor||'',date:d.info.date||'',invoice_number:d.info.invoice_number||'',skip_duplicate_check:!d.has_duplicate||confirm('检测到可能重复，仍要入库吗？')};
-Progress.show('正在入库...');
-try{var r=await fetch('/invoices/api/upload/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var dd=await r.json();Progress.hide();if(dd.success){showToast(dd.message,'success');App.stats=null;loadStats();loadInvoices(1)}else if(dd.code==='DUPLICATE'){showToast('存在重复发票，已拦截','error');cleanupTmp([d.tmp_path])}else{showToast(dd.error,'error');cleanupTmp([d.tmp_path])}}
-catch(e){Progress.hide();showToast('入库失败: '+e.message,'error')}
-}
-
-// ====== 批量上传弹窗 ======
-var BUModal={
-_data:[],
-open:function(results){
-BUModal._data=results;
-document.getElementById('buTotal').textContent=results.length;
-document.getElementById('buSubmitter').value='';
-var tbody=document.getElementById('buTbody');
-tbody.innerHTML=results.map(function(r,idx){
-if(!r.success)return '<tr><td>'+(idx+1)+'</td><td colspan="9" style="color:#d93025">'+r.original_name+': '+r.error+'</td></tr>';
-var d=r.info||{};
-var dupClass=r.has_duplicate?' dup-row':'';
-var dupInfo=r.has_duplicate?'<span class="badge tag-dup" title="'+r.duplicates.map(function(dd){return dd.path}).join('\n')+'">重复!</span>':'-';
-return '<tr class="'+dupClass+'">'+
-'<td>'+(idx+1)+'</td>'+
-'<td title="'+escHtml(r.original_name)+'">'+escHtml(r.original_name.substring(0,25))+'</td>'+
-'<td><input type="number" step="0.01" value="'+(d.amount||'')+'" style="width:70px" class="bu-amount-'+idx+'"></td>'+
-'<td><input type="text" value="'+(d.date||'')+'" style="width:90px" class="bu-date-'+idx+'"></td>'+
-'<td><input type="text" value="'+(d.month||'')+'" style="width:55px" class="bu-month-'+idx+'"></td>'+
-'<td><input type="text" value="'+escHtml(d.vendor||'')+'" style="width:120px" class="bu-vendor-'+idx+'"></td>'+
-'<td><input type="text" value="'+(d.invoice_number||'')+'" style="width:100px" class="bu-inum-'+idx+'"></td>'+
-'<td><input type="text" value="'+(d.category||'')+'" style="width:60px" class="bu-cat-'+idx+'"></td>'+
-'<td><input type="text" value="'+(IS_FINANCE?'':escHtml(ME_NAME))+'" placeholder="来源人" style="width:70px" class="bu-sub-'+idx+'"'+(IS_FINANCE?'':' readonly')+'></td>'+
-'<td>'+dupInfo+'</td></tr>';
-}).join('');
-document.getElementById('batchUploadModal').classList.add('show');
-},
-close:function(){
-document.getElementById('batchUploadModal').classList.remove('show');
-var paths=BUModal._data.filter(function(r){return r.success}).map(function(r){return r.tmp_path});
-BUModal._data=[];
-cleanupTmp(paths);
-},
-confirm:async function(){
-var dupN=BUModal._data.filter(function(r){return r.success&&r.has_duplicate}).length;
-if(dupN>0&&!confirm('有 '+dupN+' 张疑似重复发票, 仍要入库吗?'))return;
-var globalSub=IS_FINANCE?document.getElementById('buSubmitter').value.trim():ME_NAME;
-var globalStatus=IS_FINANCE?document.getElementById('buStatus').value:'未报销';
-var items=[];
-for(var i=0;i<BUModal._data.length;i++){
-var r=BUModal._data[i];
-if(!r.success)continue;
-var sub=document.querySelector('.bu-sub-'+i);
-items.push({tmp_path:r.tmp_path,original_name:r.original_name,status:globalStatus,submitter:(sub&&sub.value.trim())||globalSub,category:document.querySelector('.bu-cat-'+i).value,notes:'',amount:parseFloat(document.querySelector('.bu-amount-'+i).value)||0,vendor:document.querySelector('.bu-vendor-'+i).value,date:document.querySelector('.bu-date-'+i).value,month:document.querySelector('.bu-month-'+i).value||'未归类',invoice_number:document.querySelector('.bu-inum-'+i).value});
-}
-if(!globalSub&&!items.every(function(it){return it.submitter})){showToast('请填写提交人','error');return}
-Progress.show('正在入库 '+items.length+' 张发票...');
-try{
-var r2=await fetch('/invoices/api/upload/confirm/batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:items})});
-var d2=await r2.json();
-Progress.hide();
-if(d2.success){showToast(d2.message,'success');BUModal.close();App.stats=null;loadStats();loadInvoices(1)}
-else{showToast('入库失败','error')}
-}catch(e){Progress.hide();showToast('入库失败: '+e.message,'error')}
-}
-};
-document.getElementById('batchUploadModal').addEventListener('click',function(e){if(e.target===this)BUModal.close()});
-
-// ====== 实时进度 SSE ======
-function startJob(type, onResult){
-Progress.show('准备中...');
-fetch('/invoices/api/job/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:type})})
-.then(function(r){return r.json()})
-.then(function(d){
-if(d.error){Progress.hide();showToast(d.error,'error');return}
-var src=new EventSource('/invoices/api/job/stream/'+d.job_id);
-src.onmessage=function(e){
-var data=JSON.parse(e.data);
-Progress.update(data.progress, data.message);
-if(data.status==='done'){
-src.close();
-Progress.hide();
-if(onResult)onResult(data);
-}else if(data.status==='error'){
-src.close();
-Progress.hide();
-showToast('操作失败: '+data.message,'error');
-}
-};
-src.onerror=function(){src.close();Progress.hide();showToast('连接中断','error')};
-})
-.catch(function(e){Progress.hide();showToast('启动失败: '+e.message,'error')});
-}
-
-// ====== 查重 ======
-function scanDuplicates(){
-startJob('scan_dups', function(data){
-var res=data.result||{};
-var dups=res.duplicates||{};
-var dupCount=res.dup_count||0;
-var allPaths=res.all_dup_paths||[];
-App._dupCache=allPaths.length?{_all:allPaths}:null;
-if(dupCount===0){
-showToast('未发现重复发票','success');
-loadInvoices(App.currentPage,false);
-}else{
-var msg='发现 '+dupCount+' 个重复项（'+Object.keys(dups).length+' 组）';
-if(allPaths.length>0)msg+='，'+allPaths.length+' 个文件已高亮';
-showToast(msg,'error');
-loadInvoices(App.currentPage,true);
-// 显示删除确认弹窗
-DelDupModal.show(dups, allPaths);
-}
-});
-}
-
-var DelDupModal={
-_data:null,
-show:function(dups, allPaths){
-DelDupModal._data={dups:dups,allPaths:allPaths};
-document.getElementById('delDupCount').textContent=Object.keys(dups).length+' 组';
-var list=[];
-Object.entries(dups).forEach(function(e){
-var num=e[0];
-var paths=e[1];
-list.push('<div style="margin-bottom:6px;padding:4px 8px;background:#fff8e1;border-radius:4px"><b>发票号:</b> '+escHtml(num)+' ('+paths.length+'个文件)</div>');
-paths.forEach(function(p,pi){
-if(pi===0)list.push('<div style="margin-left:16px;color:#0d904f">  \u2714 保留: '+escHtml(p)+'</div>');
-else list.push('<div style="margin-left:16px;color:#d93025">  \u2716 删除: '+escHtml(p)+'</div>');
-});
-});
-document.getElementById('delDupList').innerHTML=list.join('');
-document.getElementById('delDupModal').classList.add('show');
-},
-close:function(){
-document.getElementById('delDupModal').classList.remove('show');
-DelDupModal._data=null;
-},
-confirm:async function(){
-if(!confirm('确定要删除重复文件吗？此操作不可恢复！'))return;
-DelDupModal.close();
-startJob('delete_dups', function(){
-showToast('重复文件已删除','success');
-App._dupCache=null;
-App.stats=null;
-loadStats();
-loadInvoices(1,false);
-});
-}
-};
-document.getElementById('delDupModal').addEventListener('click',function(e){if(e.target===this)DelDupModal.close()});
-
-// ====== 详情弹窗 (保持不变) ======
-var DetailModal={
-_id:'',
-open:async function(id){DetailModal._id=id;var r=await fetch('/invoices/api/invoices?id='+encodeURIComponent(id)),d=await r.json(),inv=d.data.length?d.data[0]:null;if(!inv){showToast('未找到发票','error');return}
-document.getElementById('detMonth').value=inv.month;
-document.getElementById('detDate').value=inv.date||'';
-document.getElementById('detStatus').value=inv.status||'未报销';
-document.getElementById('detReimbursedDate').value=inv.reimbursed_date||'';
-document.getElementById('detSubmitter').value=inv.submitter||'';
-document.getElementById('detCategory').value=inv.category||'';
-document.getElementById('detVendor').value=inv.vendor;
-document.getElementById('detAmount').value='\xA5'+inv.amount.toLocaleString();
-document.getElementById('detNotes').value=inv.notes||'';
-document.getElementById('detInvNum').value=inv.invoice_number||'';
-document.getElementById('detTags').value=(inv.tags||[]).join(', ');
-document.getElementById('detFilename').value=inv.filename;
-document.getElementById('detSource').value=inv.source||'未知';
-document.getElementById('detPath').value=inv.rel_path||'';
-document.getElementById('detailModal').classList.add('show')},
-close:function(){document.getElementById('detailModal').classList.remove('show');DetailModal._id=''},
-save:async function(){
-var u={status:document.getElementById('detStatus').value,submitter:document.getElementById('detSubmitter').value.trim(),notes:document.getElementById('detNotes').value.trim(),category_override:document.getElementById('detCategory').value.trim(),reimbursed_date:document.getElementById('detReimbursedDate').value,invoice_number:document.getElementById('detInvNum').value.trim(),tags:document.getElementById('detTags').value.split(',').map(function(s){return s.trim()}).filter(Boolean)};
-var r=await fetch('/invoices/api/invoice/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({id:DetailModal._id},u))});
-var d=await r.json();
-if(d.success){showToast('保存成功'+(d.moved?'，文件已移动':''),'success');DetailModal.close();App.stats=null;loadStats();loadInvoices(App.currentPage)}},
-clearMeta:async function(){if(!confirm('确定要清除该发票的元数据？'))return;var r=await fetch('/invoices/api/invoice/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:DetailModal._id,status:'',submitter:'',notes:'',category_override:'',reimbursed_date:'',tags:[],invoice_number:''})});if((await r.json()).success){showToast('已清除','success');DetailModal.close();App.stats=null;loadStats();loadInvoices(App.currentPage)}}
-};
-document.getElementById('detailModal').addEventListener('click',function(e){if(e.target===this)DetailModal.close()});
-
-// ====== 统计弹窗 (精简) ======
-var StatsModal={show:async function(){
-if(!App.stats){var r=await fetch('/invoices/api/stats');App.stats=await r.json()}var s=App.stats,ss=s.status_stats||{};
-document.getElementById('modalStatsGrid').innerHTML=[{l:'发票总数',v:s.total_count,cls:'accent-blue'},{l:'总金额',v:'\xA5'+(s.total_amount||0).toLocaleString(),cls:'accent-blue'},{l:'已报销',v:(ss['已报销']||{}).count+'张 / \xA5'+((ss['已报销']||{}).amount||0).toLocaleString(),cls:'accent-green'},{l:'正在报销',v:(ss['正在报销']||{}).count+'张 / \xA5'+((ss['正在报销']||{}).amount||0).toLocaleString(),cls:'accent-orange'},{l:'未报销',v:(ss['未报销']||{}).count+'张 / \xA5'+((ss['未报销']||{}).amount||0).toLocaleString(),cls:'accent-red'}].map(function(o){return '<div class="stat-card '+o.cls+'"><div class="label">'+o.l+'</div><div class="value">'+o.v+'</div></div>'}).join('');
-var months=Object.entries(s.month_stats||{}).sort(),maxM=Math.max.apply(null,months.map(function(e){return e[1].amount}))||1;document.getElementById('monthChart').innerHTML=months.map(function(e){return '<div class="chart-bar"><div class="name">'+e[0]+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+(e[1].amount/maxM*100).toFixed(1)+'%"></div></div><div class="bar-value">\xA5'+e[1].amount.toLocaleString()+' ('+e[1].count+'张)</div></div>'}).join('');
-document.getElementById('statusChart').innerHTML=['未报销','正在报销','已报销'].map(function(st){var d=ss[st]||{count:0,amount:0},cls=st==='已报销'?'accent-green':st==='正在报销'?'accent-orange':'accent-red',pct=s.total_count?(d.count/s.total_count*100).toFixed(1):0;return '<div class="chart-bar '+cls+'"><div class="name">'+st+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Math.max(pct,2)+'%"></div></div><div class="bar-value">\xA5'+d.amount.toLocaleString()+' ('+d.count+'张)</div></div>'}).join('');
-var cats=Object.entries(s.category_stats||{}).sort(function(a,b){return b[1].amount-a[1].amount}),maxC=Math.max.apply(null,cats.map(function(e){return e[1].amount}))||1;document.getElementById('categoryChart').innerHTML=cats.map(function(e){return '<div class="chart-bar"><div class="name">'+e[0]+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+(e[1].amount/maxC*100).toFixed(1)+'%"></div></div><div class="bar-value">\xA5'+e[1].amount.toLocaleString()+' ('+e[1].count+'张)</div></div>'}).join('');
-var subs=Object.entries(s.submitter_stats||{}).sort(function(a,b){return b[1].amount-a[1].amount}),maxS=Math.max.apply(null,subs.map(function(e){return e[1].amount}))||1;document.getElementById('submitterChart').innerHTML=subs.length===0?'<div style="color:#aaa;text-align:center;padding:20px">暂无提交人数据</div>':subs.map(function(e){return '<div class="chart-bar"><div class="name">'+e[0]+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+(e[1].amount/maxS*100).toFixed(1)+'%"></div></div><div class="bar-value">\xA5'+e[1].amount.toLocaleString()+' ('+e[1].count+'张)</div></div>'}).join('');
-document.getElementById('statsModal').classList.add('show')},close:function(){document.getElementById('statsModal').classList.remove('show')}};
-document.getElementById('statsModal').addEventListener('click',function(e){if(e.target===this)StatsModal.close()});
-
-// ====== 文件操作 ======
-async function openFile(relPath){var r=await fetch('/invoices/api/open_file?rel_path='+encodeURIComponent(relPath)),d=await r.json();if(d.success&&d.url){var a=document.createElement('a');a.href=d.url;a.target='_blank';document.body.appendChild(a);a.click();a.remove()}else{showToast((d&&d.error)||'打开失败','error')}}
-function openFolder(folder){showToast('服务端部署不支持直接打开文件夹','error')}
-async function exportCSV(){try{var r=await fetch('/invoices/api/export'),d=await r.json();showToast('导出成功！共 '+d.count+' 条 -> 发票汇总.csv','success')}catch(e){showToast('导出失败','error')}}
-function exportZip(){showToast('正在打包全部发票，请稍候...','info');window.location.href='/invoices/api/export_zip'}
-
-async function organizeFiles(){
-var btn=document.getElementById('organizeBtn');
-try{
-var pv=await fetch('/invoices/api/organize/preview'),pd=await pv.json();
-if(pd.count===0){showToast('没有需要整理的文件','info');return}
-if(!confirm('整理预览: 共 '+pd.count+' 个文件将被归档到对应的 月份/状态 文件夹并标准化命名, 是否继续?'))return;
-}catch(e){}
-btn.disabled=true;btn.textContent='整理中...';
-startJob('organize', function(){
-btn.disabled=false;btn.textContent='整理文件';
-App.stats=null;loadStats();loadInvoices(1);
-showToast('整理完成','success');
-});
-}
-
-async function refreshPDF(){
-var b1=document.getElementById('refreshBtn');b1.disabled=true;b1.textContent='识别中...';
-startJob('refresh', function(){
-b1.disabled=false;b1.textContent='刷新PDF金额';
-App.stats=null;loadStats();loadInvoices(App.currentPage);
-showToast('PDF金额刷新完成','success');
-});
-}
-
-window.IS_FINANCE=window.IS_FINANCE||false;window.ME_NAME=window.ME_NAME||'';
-document.getElementById('whoAmI').textContent=window.ME_NAME;
-if(!window.IS_FINANCE){document.body.classList.add('member');document.querySelectorAll('#detailModal input,#detailModal select,#detailModal textarea').forEach(function(el){el.disabled=true});}
-loadStats().then(function(){loadInvoices()});
-</script>
-</body>
-</html>'''
 
 
 # ===================== 集成适配 =====================
