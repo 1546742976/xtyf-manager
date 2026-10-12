@@ -111,6 +111,9 @@ def migrate(db: sqlite3.Connection) -> None:
         for statement in COLLABORATION_SCHEMA.split(";"):
             if statement.strip():
                 db.execute(statement)
+        # Catalog archiving preserves historical task and member relationships.
+        _add_column(db, "groups", "deleted_at TEXT")
+        _add_column(db, "projects", "deleted_at TEXT")
         applied_v1 = db.execute(
             "SELECT 1 FROM schema_migrations WHERE version=1"
         ).fetchone()

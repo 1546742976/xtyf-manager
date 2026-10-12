@@ -24,8 +24,8 @@ def _relation_map(
 
 def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject], list[JsonObject], list[JsonObject], list[JsonObject]]:
     """Load the complete workspace in a constant number of queries."""
-    groups = [dict(row) for row in db.execute("SELECT id,name FROM groups ORDER BY name,id").fetchall()]
-    projects = [dict(row) for row in db.execute("SELECT id,name FROM projects ORDER BY name,id").fetchall()]
+    groups = [dict(row) for row in db.execute("SELECT id,name,CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END AS is_active FROM groups ORDER BY name,id").fetchall()]
+    projects = [dict(row) for row in db.execute("SELECT id,name,CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END AS is_active FROM projects ORDER BY name,id").fetchall()]
     group_names = {int(group["id"]): str(group["name"]) for group in groups}
     project_names = {int(project["id"]): str(project["name"]) for project in projects}
     member_rows = db.execute(

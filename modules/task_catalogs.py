@@ -20,7 +20,9 @@ def _path_id_error(item_id: int) -> tuple[Response, int] | None:
 
 
 def _catalog_response(table: str) -> Response:
-    rows = [dict(row) for row in get_db().execute(f"SELECT id,name FROM {table} ORDER BY name,id")]
+    rows = [dict(row) for row in get_db().execute(
+        f"SELECT id,name,CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END AS is_active FROM {table} ORDER BY name,id"
+    )]
     return jsonify(ok=True, **{table: rows})
 
 
@@ -63,7 +65,7 @@ def _catalog_write(table: str, item_id: int | None = None) -> Response | tuple[R
         db.rollback()
         return jsonify(ok=False, error="名称已存在"), 409
     return jsonify(ok=True, id=item_id, **{table: [dict(row) for row in db.execute(
-        f"SELECT id,name FROM {table} ORDER BY name,id"
+        f"SELECT id,name,CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END AS is_active FROM {table} ORDER BY name,id"
     )]})
 
 
@@ -85,6 +87,57 @@ def groups_edit(item_id: int):
     if (response := _path_id_error(item_id)) is not None:
         return response
     return _catalog_write("groups", item_id)
+
+
+def _archive_catalog(table: str, item_id: int, archive: bool):
+    actor = current_user()
+    if actor["role"] != "admin":
+        return jsonify(ok=False, error="仅管理员可删除或恢复组别"), 403
+    if (response := _path_id_error(item_id)) is not None:
+        return response
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    row = db.execute(f"SELECT id,name,deleted_at FROM {table} WHERE id=?", (item_id,)).fetchone()
+    if row is None:
+        db.rollback()
+        return jsonify(ok=False, error="组别不存在"), 404
+    if archive:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or body.get("confirm_name") != row["name"]:
+            db.rollback()
+            return jsonify(ok=False, error="请确认要删除的组别名称"), 400
+    if (row["deleted_at"] is not None) == archive:
+        db.rollback()
+        return jsonify(ok=False, error="组别已处于目标状态"), 409
+    db.execute(f"UPDATE {table} SET deleted_at=? WHERE id=?",
+               (now_str() if archive else None, item_id))
+    db.commit()
+    # Existing task references remain readable; archived groups are no longer assignable.
+    return jsonify(ok=True, id=item_id, is_active=0 if archive else 1)
+
+
+@bp.route("/api/groups/<int:item_id>/delete", methods=["POST"])
+@login_required
+def groups_delete(item_id: int):
+    return _archive_catalog("groups", item_id, True)
+
+
+@bp.route("/api/groups/<int:item_id>/restore", methods=["POST"])
+@login_required
+def groups_restore(item_id: int):
+    return _archive_catalog("groups", item_id, False)
+
+
+@bp.route("/api/projects/<int:item_id>/delete", methods=["POST"])
+@login_required
+def projects_delete(item_id: int):
+    return _archive_catalog("projects", item_id, True)
+
+
+@bp.route("/api/projects/<int:item_id>/restore", methods=["POST"])
+@login_required
+def projects_restore(item_id: int):
+    return _archive_catalog("projects", item_id, False)
 
 
 @bp.route("/api/projects", methods=["GET"])
@@ -152,8 +205,11 @@ def member_groups(member_id: int):
         return jsonify(ok=False, error="请求格式不正确"), 400
     group_ids, error = normalize_ids(data.get("group_ids"), "组别")
     db = get_db()
-    if error or group_ids is None or not active_ids(db, "groups", group_ids):
+    if error or group_ids is None:
         return jsonify(ok=False, error=error or "组别不存在"), 400
+    existing = {int(r[0]) for r in db.execute("SELECT group_id FROM member_groups WHERE member_id=?", (member_id,))}
+    if not active_ids(db, "groups", [x for x in group_ids if x not in existing]):
+        return jsonify(ok=False, error="专业组已删除或不存在"), 400
     if db.execute("SELECT 1 FROM members WHERE id=?", (member_id,)).fetchone() is None:
         return jsonify(ok=False, error="成员不存在"), 404
     _set_member_groups(db, member_id, group_ids)
@@ -171,8 +227,11 @@ def member_projects(member_id: int):
         return jsonify(ok=False, error="请求格式不正确"), 400
     project_ids, error = normalize_ids(data.get("project_ids"), "造车组别")
     db = get_db()
-    if error or project_ids is None or not active_ids(db, "projects", project_ids):
+    if error or project_ids is None:
         return jsonify(ok=False, error=error or "造车组别不存在"), 400
+    existing = {int(r[0]) for r in db.execute("SELECT project_id FROM member_projects WHERE member_id=?", (member_id,))}
+    if not active_ids(db, "projects", [x for x in project_ids if x not in existing]):
+        return jsonify(ok=False, error="造车组别已删除或不存在"), 400
     if db.execute("SELECT 1 FROM members WHERE id=?", (member_id,)).fetchone() is None:
         return jsonify(ok=False, error="成员不存在"), 404
     _set_member_projects(db, member_id, project_ids)
@@ -185,14 +244,16 @@ def member_projects(member_id: int):
 def members_get():
     db = get_db()
     rows = [dict(row) for row in db.execute(
-        "SELECT id,name,username,group_name,role,is_active FROM members ORDER BY group_name,id"
+        "SELECT id,name,username,group_name,role,is_active,deleted_at FROM members "
+        "WHERE deleted_at IS NULL OR ? ORDER BY group_name,id",
+        (current_user()["role"] == "admin" and request.args.get("include_deleted") == "1",)
     )]
     group_map: dict[int, list[int]] = {int(row["id"]): [] for row in rows}
     for member_id, group_id in db.execute("SELECT member_id,group_id FROM member_groups ORDER BY group_id"):
         group_map.setdefault(int(member_id), []).append(int(group_id))
     names = {int(row["id"]): str(row["name"]) for row in db.execute("SELECT id,name FROM groups")}
     projects = _member_project_ids(db)
-    return jsonify(ok=True, members=[row | {
+    return jsonify(ok=True, members=[row | {"is_deleted": row["deleted_at"] is not None,
         "project_ids": projects.get(int(row["id"]), []),
         "group_ids": group_map[int(row["id"])],
         "group_name": ";".join(names[group_id] for group_id in group_map[int(row["id"])]),

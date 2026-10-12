@@ -36,6 +36,7 @@ from modules.discussions import discussions_bp
 from modules.task_api import bp as task_api_bp
 from modules.task_attachments import bp as task_attachments_bp
 from modules.task_catalogs import bp as task_catalogs_bp
+from modules.member_profiles import bp as member_profiles_bp
 from modules.task_migrations import migrate as migrate_tasks
 
 # ---- 关键路径与端口（secret.key 用于会话签名，首次运行自动生成）----
@@ -77,6 +78,7 @@ app.register_blueprint(funds_bp, url_prefix="/funds")
 app.register_blueprint(invoices_bp, url_prefix="/invoices")
 app.register_blueprint(task_api_bp)
 app.register_blueprint(task_catalogs_bp)
+app.register_blueprint(member_profiles_bp)
 app.register_blueprint(task_attachments_bp)
 app.register_blueprint(discussions_bp, url_prefix="/discussions")
 
@@ -97,7 +99,8 @@ CREATE TABLE IF NOT EXISTS members (
     role TEXT NOT NULL DEFAULT 'member',
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
-    session_version INTEGER NOT NULL DEFAULT 0
+    session_version INTEGER NOT NULL DEFAULT 0,
+    deleted_at TEXT
 );
 CREATE TABLE IF NOT EXISTS login_attempts (
     attempt_key TEXT PRIMARY KEY,
@@ -150,6 +153,8 @@ def init_db():
         cols = {row[1] for row in db.execute("PRAGMA table_info(members)")}
         if "session_version" not in cols:
             db.execute("ALTER TABLE members ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
+        if "deleted_at" not in cols:
+            db.execute("ALTER TABLE members ADD COLUMN deleted_at TEXT")
         count = db.execute("SELECT COUNT(*) AS c FROM members").fetchone()[0]
         if count == 0:
             initial_password = os.environ.get("PROGRESS_INITIAL_ADMIN_PASSWORD") or secrets.token_urlsafe(18)
@@ -319,9 +324,13 @@ def export_members_csv():
 def api_member_reset(member_id):
     user = current_user()
     db = get_db()
-    row = db.execute("SELECT id, role FROM members WHERE id = ?", (member_id,)).fetchone()
+    row = db.execute("SELECT id, role, deleted_at FROM members WHERE id = ?", (member_id,)).fetchone()
     if row is None:
         return jsonify(ok=False, error="成员不存在"), 404
+    if row["deleted_at"] is not None:
+        return jsonify(ok=False, error="请先恢复已删除成员"), 409
+    if member_id == user["id"]:
+        return jsonify(ok=False, error="修改本人密码请验证原密码"), 400
     if user["role"] != "admin" and row["role"] != "member":
         return jsonify(ok=False, error="无权限"), 403
     data = request.get_json(silent=True) or {}
@@ -348,9 +357,11 @@ def api_member_role(member_id):
     if role not in ROLE_NAMES:
         return jsonify(ok=False, error="角色不合法"), 400
     db = get_db()
-    row = db.execute("SELECT id FROM members WHERE id = ?", (member_id,)).fetchone()
+    row = db.execute("SELECT id, deleted_at FROM members WHERE id = ?", (member_id,)).fetchone()
     if row is None:
         return jsonify(ok=False, error="成员不存在"), 404
+    if row["deleted_at"] is not None:
+        return jsonify(ok=False, error="请先恢复已删除成员"), 409
     db.execute("UPDATE members SET role = ?, session_version = session_version + 1 WHERE id = ?", (role, member_id))
     db.commit()
     return jsonify(ok=True)
@@ -363,11 +374,13 @@ def api_member_toggle(member_id):
     db = get_db()
     if member_id == user["id"]:
         return jsonify(ok=False, error="不能停用自己"), 400
-    row = db.execute("SELECT id, role, is_active FROM members WHERE id = ?", (member_id,)).fetchone()
+    row = db.execute("SELECT id, role, is_active, deleted_at FROM members WHERE id = ?", (member_id,)).fetchone()
     if row is None:
         return jsonify(ok=False, error="成员不存在"), 404
     if user["role"] != "admin" and row["role"] != "member":
         return jsonify(ok=False, error="无权限"), 403
+    if row["deleted_at"] is not None:
+        return jsonify(ok=False, error="请先恢复已删除成员"), 409
     db.execute("UPDATE members SET is_active = ?, session_version = session_version + 1 WHERE id = ?",
                (0 if row["is_active"] else 1, member_id))
     db.commit()

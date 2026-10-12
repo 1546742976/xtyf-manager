@@ -94,7 +94,7 @@ function options(items, selected, emptyLabel = "") {
   const empty = emptyLabel ? `<option value="">${esc(emptyLabel)}</option>` : "";
   return (
     empty +
-    items.map((item) => `<option value="${Number(item.id)}" ${Number(item.id) === Number(selected) ? "selected" : ""}>${esc(item.name)}</option>`).join("")
+    items.map((item) => `<option value="${Number(item.id)}" ${Number(item.id) === Number(selected) ? "selected" : ""} ${item.is_active === 0 && Number(item.id) !== Number(selected) ? "disabled" : ""}>${esc(item.name)}${item.is_active === 0 ? "（已删除）" : ""}</option>`).join("")
   );
 }
 function checkedValues(form, name) {
@@ -102,7 +102,7 @@ function checkedValues(form, name) {
 }
 function choiceGrid(name, items, selected = [], labeler = (item) => item.name, disabled = false) {
   const values = new Set((selected || []).map(Number));
-  return `<div class="choice-grid">${items.map((item) => `<label class="choice-item${item.is_active === 0 ? " is-inactive" : ""}"><input type="checkbox" name="${esc(name)}" value="${Number(item.id)}" ${values.has(Number(item.id)) ? "checked" : ""} ${disabled ? "disabled" : ""}><span>${esc(labeler(item))}${item.is_active === 0 ? "（已停用）" : ""}</span></label>`).join("") || '<span class="muted">暂无可选项</span>'}</div>`;
+  return `<div class="choice-grid">${items.map((item) => `<label class="choice-item${item.is_active === 0 ? " is-inactive" : ""}"><input type="checkbox" name="${esc(name)}" value="${Number(item.id)}" ${values.has(Number(item.id)) ? "checked" : ""} ${disabled || (item.is_active === 0 && !values.has(Number(item.id))) ? "disabled" : ""}><span>${esc(labeler(item))}${item.is_active === 0 ? "（已删除）" : ""}</span></label>`).join("") || '<span class="muted">暂无可选项</span>'}</div>`;
 }
 
 let refreshing = false;

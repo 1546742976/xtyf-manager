@@ -30,6 +30,7 @@
     <input type="search" aria-label="搜索成员" id="m-filter-q" placeholder="搜索姓名 / 用户名">
     <label class="toolbar-field"><span>专业组</span><select id="m-filter-group"><option value="">全部组别</option></select></label>
     <label class="toolbar-field"><span>造车组别</span><select id="m-filter-project"><option value="">全部造车组别</option></select></label>
+    {% if me.role == "admin" %}<label class="toolbar-field"><input type="checkbox" id="m-show-deleted"> 显示已删除成员</label>{% endif %}
     <select id="m-filter-role">
       <option value="">全部角色</option>
       <option value="member">成员</option>
@@ -49,7 +50,7 @@
 </section>
 <section class="panel">
   <h2>专业组字典</h2>
-  <p class="ux-note">专业组代表技能方向（视觉、电控、机械等），只绑定成员，可新增、重命名；不决定任务的造车归属。</p>
+  <p class="ux-note">专业组代表技能方向。管理员可删除和恢复：删除后停止新分配，成员与历史记录仍保留关联。</p>
   <div class="catalog-grid">
     <section class="catalog-block">
       <h3>组别设置</h3>
@@ -61,7 +62,7 @@
       <ul id="member-group-catalog" class="catalog-list" aria-live="polite"></ul>
     </section>
     <section class="catalog-block">
-      <h3>造车组别字典</h3>
+      <h3>造车组别字典</h3><p class="ux-note">删除后不再允许分配新任务，既有任务归属保留；管理员可随时恢复。</p>
       <form id="member-project-create-form" class="catalog-form">
         <label><span>新造车组别</span><input name="name" maxlength="80" required placeholder="例如：英雄"></label>
         <button class="btn" type="submit">新增组别</button>

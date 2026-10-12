@@ -71,7 +71,8 @@ def active_ids(db: sqlite3.Connection, table: str, ids: list[int]) -> bool:
     if not ids:
         return True
     placeholders = ",".join("?" for _ in ids)
-    predicate = " AND is_active = 1" if table == "members" else ""
+    predicate = (" AND is_active = 1 AND deleted_at IS NULL" if table == "members"
+                 else " AND deleted_at IS NULL" if table in ("groups", "projects") else "")
     count = db.execute(
         f"SELECT COUNT(*) FROM {table} WHERE id IN ({placeholders}){predicate}", ids
     ).fetchone()[0]

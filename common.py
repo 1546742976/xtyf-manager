@@ -45,7 +45,7 @@ def current_user():
         return None
     row = get_db().execute(
         "SELECT id, name, username, role, group_name, session_version "
-        "FROM members WHERE id = ? AND is_active = 1",
+        "FROM members WHERE id = ? AND is_active = 1 AND deleted_at IS NULL",
         (uid,),
     ).fetchone()
     if row is None or session.get("session_version") != row["session_version"]:
