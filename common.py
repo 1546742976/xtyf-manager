@@ -44,10 +44,13 @@ def current_user():
     if not uid:
         return None
     row = get_db().execute(
-        "SELECT id, name, username, role, group_name FROM members WHERE id = ? AND is_active = 1",
+        "SELECT id, name, username, role, group_name, session_version "
+        "FROM members WHERE id = ? AND is_active = 1",
         (uid,),
     ).fetchone()
-    return dict(row) if row else None
+    if row is None or session.get("session_version") != row["session_version"]:
+        return None
+    return dict(row)
 
 
 # ---- 装饰器：要求已登录。API 路径（含 /api/）返回 401 JSON，普通页面重定向到登录页 ----

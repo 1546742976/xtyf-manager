@@ -26,7 +26,9 @@ class TestWorkflows(unittest.TestCase):
             self.assertEqual(response.status_code, 200, url)
             self.assertIn(fragment, response.get_data(as_text=True), url)
         for asset in ('ui.css', 'funds.js', 'invoices.js', 'manage.js', 'account.js'):
-            self.assertEqual(self.admin.get('/static/' + asset).status_code, 200)
+            response = self.admin.get('/static/' + asset)
+            self.assertEqual(response.status_code, 200)
+            response.close()
 
     def test_account_password_validation(self):
         bad = self.admin.post('/api/password', json={

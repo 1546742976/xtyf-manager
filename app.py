@@ -17,6 +17,8 @@
 import csv
 import io
 import os
+import hashlib
+import time
 import secrets
 import sqlite3
 from datetime import datetime, timedelta
@@ -139,7 +141,14 @@ CREATE TABLE IF NOT EXISTS members (
     group_name TEXT DEFAULT '',
     role TEXT NOT NULL DEFAULT 'member',
     is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    session_version INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS login_attempts (
+    attempt_key TEXT PRIMARY KEY,
+    failures INTEGER NOT NULL,
+    first_failed_at INTEGER NOT NULL,
+    locked_until INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,6 +191,10 @@ def init_db():
     db = sqlite3.connect(DB_PATH)
     try:
         db.executescript(SCHEMA)
+        # 兼容已有 data.db，不丢账号、不清空密码。
+        cols = {row[1] for row in db.execute("PRAGMA table_info(members)")}
+        if "session_version" not in cols:
+            db.execute("ALTER TABLE members ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
         count = db.execute("SELECT COUNT(*) AS c FROM members").fetchone()[0]
         if count == 0:
             initial_password = os.environ.get("PROGRESS_INITIAL_ADMIN_PASSWORD") or secrets.token_urlsafe(18)
@@ -215,6 +228,36 @@ def add_no_cache(resp):
 
 
 # ==================== 登录 / 登出 ====================
+_LOGIN_WINDOW = 15 * 60
+_LOGIN_FAILURE_LIMIT = 6
+
+
+def _login_attempt_key(username):
+    """IP 与用户名共同计数，不信任未经验证的代理转发地址头。"""
+    raw = (request.remote_addr or '') + '\x00' + username.casefold()
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def _failed_login(db, attempt_key, row, now):
+    if row and now - row['first_failed_at'] < _LOGIN_WINDOW:
+        failures = row['failures'] + 1
+        first = row['first_failed_at']
+    else:
+        failures, first = 1, now
+    locked_until = now + _LOGIN_WINDOW if failures >= _LOGIN_FAILURE_LIMIT else 0
+    db.execute(
+        "INSERT INTO login_attempts (attempt_key, failures, first_failed_at, locked_until) "
+        "VALUES (?, ?, ?, ?) ON CONFLICT(attempt_key) DO UPDATE SET "
+        "failures=excluded.failures, first_failed_at=excluded.first_failed_at, "
+        "locked_until=excluded.locked_until",
+        (attempt_key, failures, first, locked_until),
+    )
+    # 防止有人不停枚举不存在的用户名导致计数表无限增长。
+    db.execute("DELETE FROM login_attempts WHERE first_failed_at < ?", (now - 2 * _LOGIN_WINDOW,))
+    db.commit()
+    return locked_until > now
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
@@ -224,14 +267,29 @@ def login():
     data = request.get_json(silent=True) or request.form
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
-    row = get_db().execute(
+    db = get_db()
+    attempt_key = _login_attempt_key(username)
+    now = int(time.time())
+    attempt = db.execute(
+        "SELECT failures, first_failed_at, locked_until FROM login_attempts WHERE attempt_key=?",
+        (attempt_key,),
+    ).fetchone()
+    if attempt and attempt["locked_until"] > now:
+        return jsonify(ok=False, error="尝试次数过多，请 15 分钟后重试"), 429
+    row = db.execute(
         "SELECT * FROM members WHERE username = ? AND is_active = 1", (username,)
     ).fetchone()
     if row is None or not check_password_hash(row["password_hash"], password):
+        locked = _failed_login(db, attempt_key, attempt, now)
+        if locked:
+            return jsonify(ok=False, error="尝试次数过多，请 15 分钟后重试"), 429
         return jsonify(ok=False, error="用户名或密码错误"), 400
+    db.execute("DELETE FROM login_attempts WHERE attempt_key=?", (attempt_key,))
+    db.commit()
     session.clear()
     session.permanent = True
     session["uid"] = row["id"]
+    session["session_version"] = row["session_version"]
     return jsonify(ok=True)
 
 
@@ -513,7 +571,7 @@ def api_member_reset(member_id):
     password = data.get("password") or secrets.token_urlsafe(10)
     if len(password) < 8:
         return jsonify(ok=False, error="密码至少 8 位"), 400
-    db.execute("UPDATE members SET password_hash = ? WHERE id = ?",
+    db.execute("UPDATE members SET password_hash = ?, session_version = session_version + 1 WHERE id = ?",
                (generate_password_hash(password), member_id))
     db.commit()
     return jsonify(ok=True, initial_password=password if generated_password else None)
@@ -535,7 +593,7 @@ def api_member_role(member_id):
     row = db.execute("SELECT id FROM members WHERE id = ?", (member_id,)).fetchone()
     if row is None:
         return jsonify(ok=False, error="成员不存在"), 404
-    db.execute("UPDATE members SET role = ? WHERE id = ?", (role, member_id))
+    db.execute("UPDATE members SET role = ?, session_version = session_version + 1 WHERE id = ?", (role, member_id))
     db.commit()
     return jsonify(ok=True)
 
@@ -552,7 +610,7 @@ def api_member_toggle(member_id):
         return jsonify(ok=False, error="成员不存在"), 404
     if user["role"] != "admin" and row["role"] != "member":
         return jsonify(ok=False, error="无权限"), 403
-    db.execute("UPDATE members SET is_active = ? WHERE id = ?",
+    db.execute("UPDATE members SET is_active = ?, session_version = session_version + 1 WHERE id = ?",
                (0 if row["is_active"] else 1, member_id))
     db.commit()
     return jsonify(ok=True)
@@ -566,15 +624,17 @@ def api_password():
     data = request.get_json(silent=True) or {}
     old_password = data.get("old") or ""
     new_password = data.get("new") or ""
-    if len(new_password) < 6:
-        return jsonify(ok=False, error="新密码至少 6 位"), 400
+    if len(new_password) < 8:
+        return jsonify(ok=False, error="新密码至少 8 位"), 400
     db = get_db()
     row = db.execute("SELECT password_hash FROM members WHERE id = ?", (user["id"],)).fetchone()
     if row is None or not check_password_hash(row["password_hash"], old_password):
         return jsonify(ok=False, error="原密码错误"), 400
-    db.execute("UPDATE members SET password_hash = ? WHERE id = ?",
+    db.execute("UPDATE members SET password_hash = ?, session_version = session_version + 1 WHERE id = ?",
                (generate_password_hash(new_password), user["id"]))
+    version = db.execute("SELECT session_version FROM members WHERE id=?", (user["id"],)).fetchone()[0]
     db.commit()
+    session["session_version"] = version
     return jsonify(ok=True)
 
 
