@@ -183,7 +183,9 @@ def _funds_guard():
 # ==================== 页面 ====================
 @funds_bp.route("/")
 def index():
-    return render_template("funds.html", me=current_user(), can_review=can_review())
+    return render_template("funds.html", me=current_user(), page="funds",
+                           role_names={"admin": "管理员", "manager": "项管", "member": "成员"},
+                           can_review=can_review())
 
 
 # ==================== 记录查询 API（筛选：类型/关键字/金额范围/日期；可排序）====================

@@ -6,29 +6,21 @@
 <title>巡天御风管理系统 · 发票管理</title>
 <link rel="stylesheet" href="/static/invoices.css">
 <link rel="stylesheet" href="/static/ui.css">
+<link rel="stylesheet" href="/static/workspace.css">
 </head>
-<body class="ux-invoices">
-<script>/*__APP_CONFIG__*/</script>
+<body class="ux-invoices ws-app{% if not is_finance %} member{% endif %}">
+<script>window.IS_FINANCE={{ is_finance|tojson }};window.ME_NAME={{ me.name|tojson }};</script>
 
-<header class="topbar">
-<div class="brand">巡天御风<span>管理平台</span></div>
-<nav class="nav" aria-label="系统导航">
-<a href="/">看板</a>
-<a href="/manage" class="finance-only">任务管理</a>
-<a href="/funds/" class="finance-only">资金管理</a>
-<a href="/invoices/" class="active">发票管理</a>
-<a href="/account">账户</a>
-</nav>
-<div class="userbox">
-<span class="who" id="whoAmI"></span>
-<a class="toplink" href="/logout">退出</a>
-</div>
-</header>
+{% include "_workspace_sidebar.html" %}
+<div class="workspace-main">
+{% include "_workspace_top.html" %}
+<main id="main-content" class="workspace-content">
+
 <div class="page-head">
-<div><p class="ux-eyebrow">OPERATIONS / INVOICES</p><h1>发票管理</h1><p class="ux-head-sub">上传、查重、整理与追踪每张发票的报销进度。</p></div>
+<div><p class="ux-eyebrow">FINANCE / INVOICES</p><h1>{{ '发票中心' if is_finance else '我的发票' }}</h1><p class="ux-head-sub">上传、查重、整理与追踪每张发票的报销进度。</p></div>
 <div class="actions">
 <button onclick="StatsModal.show()">统计</button>
-<button class="finance-only" onclick="exportCSV()">导出CSV</button>
+<button class="finance-only" onclick="exportCSV()">导出发票 CSV</button>
 <button class="finance-only" onclick="exportZip()">导出压缩包</button>
 <button class="finance-only" onclick="scanDuplicates()">查重</button>
 <button class="finance-only btn-warn" onclick="organizeFiles()" id="organizeBtn">整理文件</button>
@@ -84,6 +76,8 @@
 </div>
 </div>
 
+</main>
+</div>
 <!-- 统计弹窗 (略) -->
 <div class="modal" id="statsModal"><div class="modal-content wide">
 <div class="modal-header"><h2>发票统计</h2><button class="modal-close" onclick="StatsModal.close()">&times;</button></div>
@@ -160,6 +154,7 @@
 <div style="font-size:11px;color:#999;margin-top:8px" id="progressPercent">0%</div>
 </div>
 
+<script src="/static/workspace.js"></script>
 <script src="/static/invoices.js"></script>
 </body>
 </html>

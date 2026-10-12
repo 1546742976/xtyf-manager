@@ -11,24 +11,16 @@
       onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css'">
 <link rel="stylesheet" href="{{ url_for('static', filename='funds.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='ui.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}">
 </head>
-<body class="ux-funds">
+<body class="ux-funds ws-app">
 
-<header class="topbar">
-  <div class="brand">巡天御风<span>管理平台</span></div>
-  <nav class="nav" aria-label="系统导航">
-    <a href="/">看板</a>
-    <a href="/manage">任务管理</a>
-    <a href="/funds/" class="active">资金管理{% if can_review %}<span id="fundsPendingBadge" class="nav-badge" style="display:none">0</span>{% endif %}</a>
-    <a href="/invoices/">发票管理</a>
-    <a href="/account">账户</a>
-  </nav>
-  <div class="userbox">
-    <span class="who">{{ me.name }}</span>
-    <a class="toplink" href="/logout">退出</a>
-  </div>
-</header>
-<div class="page-head"><div><p class="ux-eyebrow">OPERATIONS / FINANCE</p><h1>资金管理</h1><p class="ux-head-sub">统一管理经费收支、审批状态与资金流向。</p></div></div>
+{% include "_workspace_sidebar.html" %}
+<div class="workspace-main">
+{% include "_workspace_top.html" %}
+<main id="main-content" class="workspace-content">
+
+<div class="page-head"><div><p class="ux-eyebrow">FINANCE / LEDGER</p><h1>资金台账</h1><p class="ux-head-sub">统一管理经费收支、审批状态与资金流向。</p></div><div class="actions"><button type="button" onclick="doExport()">导出资金 CSV</button></div></div>
 
 <div class="container-fluid px-3 py-3">
   <div class="row mb-3">
@@ -66,7 +58,7 @@
           <div class="col-lg-2 col-md-6 col-12 d-flex gap-1">
             <button class="btn btn-primary btn-sm flex-fill" onclick="reload()">筛选</button>
             <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="resetF()">重置</button>
-            <button class="btn btn-outline-success btn-sm" onclick="doExport()" title="导出CSV">导出</button></div>
+            </div>
         </div>
       </div>
       <div class="card">
@@ -147,6 +139,8 @@
   </div>
 </div>
 
+</main>
+</div>
 <div class="modal fade" id="editMd">
   <div class="modal-dialog modal-lg"><div class="modal-content">
     <div class="modal-header"><h5 class="modal-title">编辑记录</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
@@ -184,6 +178,7 @@ window.XTYF_USER = {
   canReview: {{ can_review | tojson }}
 };
 </script>
+<script src="{{ url_for('static', filename='workspace.js') }}"></script>
 <script src="{{ url_for('static', filename='funds.js') }}"></script>
 <div id="funds-feedback" class="ux-toast" role="status" aria-live="polite" hidden></div>
 </body>

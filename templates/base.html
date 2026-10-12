@@ -1,44 +1,30 @@
-<!-- 通用布局：深蓝顶栏 + 导航 + 弹窗骨架；board/manage/login 均继承本文件 -->
+<!-- Shared authenticated workspace shell; login keeps its standalone layout. -->
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f2f5fb">
-  <title>{% block title %}进度系统{% endblock %} | 巡天御风管理系统</title>
+  <meta name="theme-color" content="#15263f">
+  <title>{% block title %}工作台{% endblock %} | 巡天御风管理系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='ui.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}">
 </head>
-<body>
+<body class="{% if me %}ws-app{% endif %}">
   <a href="#main-content" class="ux-skip-link">跳至主内容</a>
-  <header class="topbar">
-    <div class="brand">巡天御风<span>管理平台</span></div>
-    {% if me %}
-    <nav class="nav" aria-label="系统导航">
-      <a href="{{ url_for('index') }}" class="{% if page == 'board' %}active{% endif %}">看板</a>
-      {% if me.role in ('admin', 'manager') %}
-      <a href="{{ url_for('manage') }}" class="{% if page == 'manage' %}active{% endif %}">任务管理</a>
-      <a href="/funds/">资金管理{% if can_review_funds %}<span id="fundsPendingBadge" class="nav-badge" style="display:none">0</span>{% endif %}</a>
-      <a href="/invoices/">发票管理</a>
-      {% else %}
-      <a href="/invoices/">我的发票</a>
-      {% endif %}
-      <a href="{{ url_for('export_csv') }}">导出CSV</a>
-      <a href="{{ url_for('account') }}" class="{% if page == 'account' %}active{% endif %}">账户</a>
-    </nav>
-    <div class="userbox">
-      <span class="who">{{ me.name }}{% if me.role != 'member' %} · {{ role_names[me.role] }}{% endif %}</span>
-      <a class="btn ghost sm" href="{{ url_for('account') }}">账户设置</a>
-      <a class="btn ghost sm" href="{{ url_for('logout') }}">退出</a>
-    </div>
-    {% endif %}
-  </header>
-  <main class="container" id="main-content">
+  {% if me %}
+  {% include "_workspace_sidebar.html" %}
+  <div class="workspace-main">
+    {% include "_workspace_top.html" %}
+  {% endif %}
+  <main class="container workspace-content" id="main-content">
     {% block content %}{% endblock %}
   </main>
+  {% if me %}</div>{% endif %}
   <div class="modal-mask hidden" id="modal-mask">
-    <div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="操作窗口"></div>
+    <div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="任务操作窗口"></div>
   </div>
+  {% if me %}<script src="{{ url_for('static', filename='workspace.js') }}"></script>{% endif %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

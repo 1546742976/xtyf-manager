@@ -7,6 +7,7 @@ function roleName(role) {
 
 function renderCreateOwner() {
   const select = document.getElementById('create-owner');
+  if (!select) return;
   select.innerHTML = '<option value="">未分配</option>' + state.members.map((m) =>
     `<option value="${m.id}">${esc(m.name)}${m.group_name ? '（' + esc(m.group_name) + '）' : ''}</option>`
   ).join('');
@@ -36,6 +37,7 @@ function filteredTasksForTable() {
 
 function buildTaskFilterOptions() {
   const groupSelect = document.getElementById('t-filter-group');
+  if (!groupSelect) return;
   const groups = [...new Set(state.tasks.map((t) => t.group_name).filter(Boolean))].sort();
   groupSelect.innerHTML = '<option value="">全部组别</option>' + groups.map((g) => `<option>${esc(g)}</option>`).join('');
   if (groups.includes(taskFilters.group)) groupSelect.value = taskFilters.group;
@@ -49,6 +51,7 @@ function buildTaskFilterOptions() {
 function renderTaskTable() {
   const tasks = filteredTasksForTable();
   const tbody = document.querySelector('#task-table tbody');
+  if (!tbody) return;
   document.getElementById('task-count').textContent = `共 ${tasks.length} / ${state.tasks.length} 条`;
   tbody.innerHTML = tasks.map((t) => {
     const owner = memberById(t.owner_id);
@@ -93,6 +96,7 @@ function filteredMembers() {
 
 function buildMemberFilterOptions() {
   const select = document.getElementById('m-filter-group');
+  if (!select) return;
   const groups = [...new Set(allMembers.map((m) => m.group_name).filter(Boolean))].sort();
   select.innerHTML = '<option value="">全部组别</option>' + groups.map((g) => `<option>${esc(g)}</option>`).join('');
   if (groups.includes(memberFilters.group)) select.value = memberFilters.group;
@@ -103,6 +107,7 @@ function renderMemberTable() {
   const members = filteredMembers();
   document.getElementById('member-count').textContent = `共 ${members.length} / ${allMembers.length} 人`;
   const tbody = document.querySelector('#member-table tbody');
+  if (!tbody) return;
   tbody.innerHTML = members.map((m) => `<tr>
     <td>${m.id}</td>
     <td>${esc(m.name)}</td>
@@ -133,32 +138,32 @@ window.onData = () => {
   renderCreateOwner();
 };
 
-document.getElementById('t-filter-q').addEventListener('input', (event) => {
+document.getElementById('t-filter-q')?.addEventListener('input', (event) => {
   taskFilters.q = event.target.value.trim();
   renderTaskTable();
 });
-document.getElementById('t-filter-group').addEventListener('change', (event) => {
+document.getElementById('t-filter-group')?.addEventListener('change', (event) => {
   taskFilters.group = event.target.value;
   renderTaskTable();
 });
-document.getElementById('t-filter-status').addEventListener('change', (event) => {
+document.getElementById('t-filter-status')?.addEventListener('change', (event) => {
   taskFilters.status = event.target.value;
   renderTaskTable();
 });
-document.getElementById('m-filter-q').addEventListener('input', (event) => {
+document.getElementById('m-filter-q')?.addEventListener('input', (event) => {
   memberFilters.q = event.target.value.trim();
   renderMemberTable();
 });
-document.getElementById('m-filter-group').addEventListener('change', (event) => {
+document.getElementById('m-filter-group')?.addEventListener('change', (event) => {
   memberFilters.group = event.target.value;
   renderMemberTable();
 });
-document.getElementById('m-filter-role').addEventListener('change', (event) => {
+document.getElementById('m-filter-role')?.addEventListener('change', (event) => {
   memberFilters.role = event.target.value;
   renderMemberTable();
 });
 
-document.getElementById('create-form').addEventListener('submit', async (event) => {
+document.getElementById('create-form')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const payload = {};
   new FormData(event.target).forEach((value, key) => { payload[key] = value; });
@@ -171,7 +176,7 @@ document.getElementById('create-form').addEventListener('submit', async (event) 
   }
 });
 
-document.getElementById('member-form').addEventListener('submit', async (event) => {
+document.getElementById('member-form')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const payload = {};
   new FormData(event.target).forEach((value, key) => { payload[key] = value; });
@@ -185,7 +190,7 @@ document.getElementById('member-form').addEventListener('submit', async (event) 
   }
 });
 
-document.getElementById('import-form').addEventListener('submit', async (event) => {
+document.getElementById('import-form')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = new FormData(event.target).get('text');
   const res = await api('/api/members/import', { text });
@@ -198,7 +203,7 @@ document.getElementById('import-form').addEventListener('submit', async (event) 
   }
 });
 
-document.querySelector('#task-table').addEventListener('click', async (event) => {
+document.querySelector('#task-table')?.addEventListener('click', async (event) => {
   const editId = event.target.dataset.edit;
   const delId = event.target.dataset.del;
   if (editId) {
@@ -211,7 +216,7 @@ document.querySelector('#task-table').addEventListener('click', async (event) =>
   }
 });
 
-document.querySelector('#member-table').addEventListener('change', async (event) => {
+document.querySelector('#member-table')?.addEventListener('change', async (event) => {
   const target = event.target;
   if (!target.classList.contains('role-select')) return;
   const res = await api(`/api/member/${target.dataset.roleId}/role`, { role: target.value });
@@ -223,7 +228,7 @@ document.querySelector('#member-table').addEventListener('change', async (event)
   }
 });
 
-document.querySelector('#member-table').addEventListener('click', async (event) => {
+document.querySelector('#member-table')?.addEventListener('click', async (event) => {
   const resetId = event.target.dataset.reset;
   const toggleId = event.target.dataset.toggle;
   if (resetId) {

@@ -18,9 +18,9 @@
   [7] 后台任务(SSE 实时进度)依赖进程内内存 _jobs —— 因此 gunicorn 必须固定 1 worker
   [8] 新增 /api/export_zip：一键打包全部发票下载（排除 .uploads、往届发票.zip）
 
-前端：templates/invoices.html 保存 HTML/CSS/JS（见文件后半部分）；
-      页面通过 /*__APP_CONFIG__*/ 注入 window.IS_FINANCE / window.ME_NAME
-      来区分"成员视角"（上传+只看自己的）与"财务视角"（全量管理）。
+前端：templates/invoices.html 由 Jinja2 渲染，通过 tojson 注入
+      window.IS_FINANCE / window.ME_NAME，保证用户名的脚本上下文转义。
+      "成员视角"与"财务视角"仅控制显示；数据权限继续由后端校验。
 """
 import os
 import re
@@ -37,11 +37,11 @@ import tempfile
 import zipfile
 from datetime import datetime
 from functools import wraps
-from flask import (Blueprint, Response, jsonify, redirect, request,
+from flask import (Blueprint, Response, jsonify, redirect, request, render_template,
                    send_file, send_from_directory, stream_with_context)
 from urllib.parse import quote
 
-from common import current_user, get_db
+from common import ROLE_NAMES, current_user, get_db
 
 BASE_DIR = os.environ.get(
     'INVOICES_DIR',
@@ -858,16 +858,9 @@ def get_stats(invoices):
 @bp.route('/')
 def index():
     user = current_user()
-    html = create_index_html()
-    # 用户名注入 script 前进行 HTML 特殊字符转义，避免 </script> 破坏脚本标签。
-    safe_name = json.dumps(user['name'], ensure_ascii=False).replace('<', r'\u003c').replace('>', r'\u003e').replace('&', r'\u0026')
-    html = html.replace(
-        '/*__APP_CONFIG__*/',
-        'window.IS_FINANCE=%s;window.ME_NAME=%s;' % (
-            'true' if _is_finance(user) else 'false', safe_name,
-        ),
-    )
-    return Response(html, mimetype='text/html')
+    # Jinja tojson protects the user name inside the inline app config script.
+    return render_template("invoices.html", me=user, page="invoices",
+                           role_names=ROLE_NAMES, is_finance=_is_finance(user))
 
 
 # ==================== 列表 / 统计 / 提交人 ====================

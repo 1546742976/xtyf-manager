@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}成员管理{% endblock %}
+{% block content %}
+<div class="ux-page-head">
+  <div><p class="ux-eyebrow">TEAM / MEMBERS</p><h1>成员管理</h1><p>集中维护团队成员、账号、角色和登录权限。</p></div>
+  <div class="ux-page-actions"><a class="btn" href="{{ url_for('manage') }}">任务管理</a><a class="btn" href="{{ url_for('export_members_csv') }}">导出成员 CSV</a></div>
+</div>
+
+<section class="panel">
+  <h2>成员管理 <span class="muted" id="member-count"></span></h2>
+  <div class="split">
+    <form id="member-form" class="form-grid">
+      <label>姓名<input name="name" required></label>
+      <label>组别<input name="group_name" placeholder="机械 / 电控 / 视觉 / 运营"></label>
+      <label>用户名（默认姓名）<input name="username"></label>
+      <label>初始密码（留空随机生成）<input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位"></label>
+      {% if me.role == 'admin' %}
+      <label>角色<select name="role"><option value="member">成员</option><option value="manager">项管</option><option value="admin">管理员</option></select></label>
+      {% endif %}
+      <div><button class="btn primary" type="submit">添加成员</button></div>
+    </form>
+    <form id="import-form" class="form-grid">
+      <label class="span-2">批量导入（每行一人：姓名,组别[,用户名]；生成独立初始密码）<textarea name="text" rows="5" placeholder="张三,机械&#10;李四,电控,lis"></textarea></label>
+      <div><button class="btn" type="submit">批量导入</button></div>
+    </form>
+  </div>
+  <div class="toolbar">
+    <input type="search" aria-label="搜索成员" id="m-filter-q" placeholder="搜索姓名 / 用户名">
+    <select id="m-filter-group"><option value="">全部组别</option></select>
+    <select id="m-filter-role">
+      <option value="">全部角色</option>
+      <option value="member">成员</option>
+      <option value="manager">项管</option>
+      <option value="admin">管理员</option>
+    </select>
+  </div>
+  <div class="table-wrap">
+    <!-- 成员列表：角色下拉（仅管理员）、重置密码、停用/启用 -->
+<table id="member-table">
+      <thead>
+        <tr><th>ID</th><th>姓名</th><th>用户名</th><th>组别</th><th>角色</th><th>状态</th><th>操作</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='manage.js') }}"></script>
+{% endblock %}
