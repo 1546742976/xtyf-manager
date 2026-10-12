@@ -1,0 +1,41 @@
+<!-- 通用布局：深蓝顶栏 + 导航 + 弹窗骨架；board/manage/login 均继承本文件 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <title>{% block title %}进度系统{% endblock %} | 巡天御风管理系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">巡天御风<span>管理系统</span></div>
+    {% if me %}
+    <nav class="nav">
+      <a href="{{ url_for('index') }}" class="{% if page == 'board' %}active{% endif %}">看板</a>
+      {% if me.role in ('admin', 'manager') %}
+      <a href="{{ url_for('manage') }}" class="{% if page == 'manage' %}active{% endif %}">任务管理</a>
+      <a href="/funds/">资金管理{% if me.username == 'chy' %}<span id="fundsPendingBadge" class="nav-badge" style="display:none">0</span>{% endif %}</a>
+      <a href="/invoices/">发票管理</a>
+      {% else %}
+      <a href="/invoices/">我的发票</a>
+      {% endif %}
+      <a href="{{ url_for('export_csv') }}">导出CSV</a>
+    </nav>
+    <div class="userbox">
+      <span class="who">{{ me.name }}{% if me.role != 'member' %} · {{ role_names[me.role] }}{% endif %}</span>
+      <button class="btn ghost sm" id="btn-password" type="button">改密码</button>
+      <a class="btn ghost sm" href="{{ url_for('logout') }}">退出</a>
+    </div>
+    {% endif %}
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <div class="modal-mask hidden" id="modal-mask">
+    <div class="modal" id="modal"></div>
+  </div>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

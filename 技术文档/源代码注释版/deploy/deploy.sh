@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# ============================================================
+# 一键部署脚本（在树莓派上执行）
+#   1) 安装系统依赖（python3-venv/pip/sqlite3/rsync/中文图表字体）
+#   2) rsync 源目录(~/progress_system) → 运行目录(/opt/rm-progress)
+#      —— 数据(data/)、数据库、secret.key、backups 全部保留，不会被覆盖
+#   3) 更新 venv 依赖（清华 pip 镜像）
+#   4) 安装并重启 systemd 服务 + 本机自检
+# 用法：cd ~/progress_system && bash deploy/deploy.sh
+# ============================================================
+
+APP_DIR="${APP_DIR:-/opt/rm-progress}"
+APP_USER="${APP_USER:-$(whoami)}"
+SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "==> 应用目录: $APP_DIR"
+echo "==> 运行用户: $APP_USER"
+
+echo "==> 安装系统依赖"
+sudo apt-get update -y
+sudo apt-get install -y python3-venv python3-pip sqlite3 rsync fonts-noto-cjk
+
+echo "==> 同步代码"
+sudo mkdir -p "$APP_DIR"
+sudo rsync -a --delete \
+  --exclude venv --exclude data.db --exclude 'data.db-*' \
+  --exclude secret.key --exclude backups --exclude __pycache__ \
+  --exclude data --exclude index.html \
+  "$SRC_DIR"/ "$APP_DIR"/
+sudo chmod +x "$APP_DIR"/deploy/*.sh
+
+echo "==> 创建虚拟环境并安装依赖"
+PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
+sudo python3 -m venv "$APP_DIR/venv"
+sudo "$APP_DIR/venv/bin/pip" install --upgrade pip -q -i "$PIP_INDEX"
+sudo "$APP_DIR/venv/bin/pip" install -q -i "$PIP_INDEX" -r "$APP_DIR/requirements.txt" gunicorn
+
+sudo chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
+
+echo "==> 安装 systemd 服务"
+sed "s/{{APP_USER}}/$APP_USER/; s#{{APP_DIR}}#$APP_DIR#g" \
+  "$APP_DIR/deploy/rm-progress.service" | sudo tee /etc/systemd/system/rm-progress.service > /dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable rm-progress
+sudo systemctl restart rm-progress
+
+echo "==> 放行防火墙端口 80"
+sudo ufw allow 80/tcp > /dev/null 2>&1 || true
+
+echo "==> 服务状态"
+sudo systemctl --no-pager status rm-progress | head -n 12
+
+echo "==> 本机自检"
+sleep 2
+curl -s -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:80/login || true
+
+echo "==> 完成。局域网访问: http://<树莓派IP>"

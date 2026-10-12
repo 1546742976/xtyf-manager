@@ -1,0 +1,4 @@
+# 运行依赖清单：deploy.sh 会用清华镜像安装到 venv；gunicorn 由 deploy.sh 单独安装
+flask>=3.0.0
+matplotlib>=3.7.0
+pdfplumber>=0.10.0

@@ -1,0 +1,33 @@
+# ============================================================
+# frp 客户端配置（树莓派 → 阿里云服务器）
+# 实际运行位置：/opt/frp/frpc.toml
+# 说明：本文件为文档展示版，token 已脱敏；真实 token 见服务器上的
+#       /opt/frp/frpc.toml（请勿外传）。
+# 修改后生效：sudo systemctl restart frpc
+# ============================================================
+
+serverAddr = "47.116.50.22"
+serverPort = 7000
+
+# 传输协议（默认 tcp，无需修改）
+transport.protocol = "tcp"
+
+# 认证方式与密钥（必须与服务端 frps 完全一致）
+auth.method = "token"
+auth.token = "（真实 token 见服务器 /opt/frp/frpc.toml，勿外传）"
+
+# ---- 映射 1：域名转发入口（云服务器 nginx: manager.skywalker-rm.online → 127.0.0.1:10031）
+[[proxies]]
+name = "xtyf-progress-http"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 80
+remotePort = 10031
+
+# ---- 映射 2：IP 直连入口（http://47.116.50.22:10030）
+[[proxies]]
+name = "xtyf-progress-tcp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 80
+remotePort = 10030

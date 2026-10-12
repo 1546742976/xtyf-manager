@@ -1,0 +1,13 @@
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# 防止误传运行时数据（本仓库仅存文档，以下为保险规则）
+*.db
+secret.key
+data/

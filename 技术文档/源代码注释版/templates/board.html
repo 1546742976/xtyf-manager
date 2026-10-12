@@ -1,0 +1,21 @@
+{# 看板页：统计卡 + 筛选栏 + 卡片墙；渲染与轮询逻辑在 static/app.js #}
+{% extends "base.html" %}
+{% block title %}看板{% endblock %}
+{% block content %}
+<section class="stats" id="stats"></section>
+<section class="toolbar">
+  <div class="seg" id="view-seg">
+    <button type="button" data-view="person" class="active">按人</button>
+    <button type="button" data-view="status">按状态</button>
+  </div>
+  <select id="f-group"><option value="">全部组别</option></select>
+  <select id="f-status"><option value="">全部状态</option></select>
+  <input id="f-q" placeholder="搜索任务 / 负责人 / 项目">
+  <label class="check"><input type="checkbox" id="f-mine"> 只看我的</label>
+  <span class="hint">每 5 秒自动刷新</span>
+</section>
+<section id="board" class="board"></section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

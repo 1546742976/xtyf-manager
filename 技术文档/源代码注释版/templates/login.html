@@ -1,0 +1,40 @@
+{# 登录页：品牌标题 + 登录表单（fetch 提交 JSON 到 /login） #}
+{% extends "base.html" %}
+{% block title %}登录{% endblock %}
+{% block content %}
+<div class="login-wrap">
+  <form id="login-form" class="login-card">
+    <h1>巡天御风管理系统</h1>
+    <p class="sub">南京航空航天大学 · 巡天御风机甲战队</p>
+    <label>用户名
+      <input name="username" autocomplete="username" required autofocus>
+    </label>
+    <label>密码
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <button class="btn primary block" type="submit">登录</button>
+    <p class="error hidden" id="login-error"></p>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('login-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const res = await fetch('/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: form.get('username'), password: form.get('password') }),
+  });
+  const data = await res.json();
+  if (data.ok) {
+    location.href = '/';
+  } else {
+    const el = document.getElementById('login-error');
+    el.textContent = data.error || '登录失败';
+    el.classList.remove('hidden');
+  }
+});
+</script>
+{% endblock %}

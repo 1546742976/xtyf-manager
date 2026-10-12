@@ -1,0 +1,323 @@
+{# 任务管理页：新建任务 + 任务列表 + 成员管理（筛选/批量导入/角色调整） #}
+{% extends "base.html" %}
+{% block title %}任务管理{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>新建任务</h2>
+  <!-- 新建任务表单：剩余天数由截止日期自动计算，无需手工填写 -->
+<form id="create-form" class="form-grid">
+    <label class="span-2">任务标题<input name="title" required></label>
+    <label>负责人<select name="owner_id" id="create-owner"><option value="">未分配</option></select></label>
+    <label>组别<input name="group_name"></label>
+    <label>项目<input name="project" placeholder="如：英雄机器人 / 视觉 / 运营"></label>
+    <label>优先级<select name="priority">{% for p in priorities %}<option>{{ p }}</option>{% endfor %}</select></label>
+    <label>状态<select name="status">{% for s in statuses %}<option>{{ s }}</option>{% endfor %}</select></label>
+    <label>开始日期<input name="start_date" type="date"></label>
+    <label>截止日期<input name="due_date" type="date"></label>
+    <label class="span-2">说明<textarea name="detail" rows="2"></textarea></label>
+    <div class="span-2"><button class="btn primary" type="submit">创建任务</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>任务列表 <span class="muted" id="task-count"></span></h2>
+  <div class="toolbar">
+    <input id="t-filter-q" placeholder="搜索任务 / 负责人 / 项目">
+    <select id="t-filter-group"><option value="">全部组别</option></select>
+    <select id="t-filter-status"><option value="">全部状态</option></select>
+  </div>
+  <div class="table-wrap">
+    <!-- 任务列表：支持搜索/组别/状态筛选；行内可编辑、删除 -->
+<table id="task-table">
+      <thead>
+        <tr><th>ID</th><th>任务</th><th>负责人</th><th>组别</th><th>项目</th><th>优先级</th><th>状态</th><th>剩余天数</th><th>截止</th><th>操作</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>成员管理 <span class="muted" id="member-count"></span></h2>
+  <div class="split">
+    <form id="member-form" class="form-grid">
+      <label>姓名<input name="name" required></label>
+      <label>组别<input name="group_name" placeholder="机械 / 电控 / 视觉 / 运营"></label>
+      <label>用户名（默认姓名）<input name="username"></label>
+      <label>初始密码（默认 123456）<input name="password"></label>
+      {% if me.role == 'admin' %}
+      <label>角色<select name="role"><option value="member">成员</option><option value="manager">项管</option><option value="admin">管理员</option></select></label>
+      {% endif %}
+      <div><button class="btn primary" type="submit">添加成员</button></div>
+    </form>
+    <form id="import-form" class="form-grid">
+      <label class="span-2">批量导入（每行一人：姓名,组别[,用户名]）<textarea name="text" rows="5" placeholder="张三,机械&#10;李四,电控,lis"></textarea></label>
+      <div><button class="btn" type="submit">批量导入</button></div>
+    </form>
+  </div>
+  <div class="toolbar">
+    <input id="m-filter-q" placeholder="搜索姓名 / 用户名">
+    <select id="m-filter-group"><option value="">全部组别</option></select>
+    <select id="m-filter-role">
+      <option value="">全部角色</option>
+      <option value="member">成员</option>
+      <option value="manager">项管</option>
+      <option value="admin">管理员</option>
+    </select>
+  </div>
+  <div class="table-wrap">
+    <!-- 成员列表：角色下拉（仅管理员）、重置密码、停用/启用 -->
+<table id="member-table">
+      <thead>
+        <tr><th>ID</th><th>姓名</th><th>用户名</th><th>组别</th><th>角色</th><th>状态</th><th>操作</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+<script>
+let allMembers = [];
+
+function roleName(role) {
+  return { admin: '管理员', manager: '项管', member: '成员' }[role] || role;
+}
+
+function renderCreateOwner() {
+  const select = document.getElementById('create-owner');
+  select.innerHTML = '<option value="">未分配</option>' + state.members.map((m) =>
+    `<option value="${m.id}">${esc(m.name)}${m.group_name ? '（' + esc(m.group_name) + '）' : ''}</option>`
+  ).join('');
+}
+
+const taskFilters = { q: '', group: '', status: '' };
+const PRIORITY_LEVEL = { '高': 'high', '中': 'mid', '低': 'low' };
+
+function priorityCell(priority) {
+  const level = PRIORITY_LEVEL[priority] || 'mid';
+  return `<span class="prio prio-${level}"><i class="dot"></i>${esc(priority)}</span>`;
+}
+
+function filteredTasksForTable() {
+  const { q, group, status } = taskFilters;
+  return state.tasks.filter((t) => {
+    if (group && t.group_name !== group) return false;
+    if (status && t.status !== status) return false;
+    if (q) {
+      const owner = memberById(t.owner_id);
+      const hay = [t.title, t.project, t.detail, owner ? owner.name : ''].join(' ');
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function buildTaskFilterOptions() {
+  const groupSelect = document.getElementById('t-filter-group');
+  const groups = [...new Set(state.tasks.map((t) => t.group_name).filter(Boolean))].sort();
+  groupSelect.innerHTML = '<option value="">全部组别</option>' + groups.map((g) => `<option>${esc(g)}</option>`).join('');
+  if (groups.includes(taskFilters.group)) groupSelect.value = taskFilters.group;
+
+  const statusSelect = document.getElementById('t-filter-status');
+  const statuses = [...new Set(state.tasks.map((t) => t.status))];
+  statusSelect.innerHTML = '<option value="">全部状态</option>' + statuses.map((s) => `<option>${esc(s)}</option>`).join('');
+  if (statuses.includes(taskFilters.status)) statusSelect.value = taskFilters.status;
+}
+
+function renderTaskTable() {
+  const tasks = filteredTasksForTable();
+  const tbody = document.querySelector('#task-table tbody');
+  document.getElementById('task-count').textContent = `共 ${tasks.length} / ${state.tasks.length} 条`;
+  tbody.innerHTML = tasks.map((t) => {
+    const owner = memberById(t.owner_id);
+    return `<tr>
+      <td>${t.id}</td>
+      <td class="cell-title">${esc(t.title)}</td>
+      <td>${esc(owner ? owner.name : '未分配')}</td>
+      <td>${esc(t.group_name)}</td>
+      <td>${esc(t.project)}</td>
+      <td>${priorityCell(t.priority)}</td>
+      <td>${esc(t.status)}</td>
+      <td>${badge(daysLeftText(t), daysLeftClass(t))}</td>
+      <td>${esc(t.due_date)}</td>
+      <td class="nowrap">
+        <button class="btn ghost sm" type="button" data-edit="${t.id}">编辑</button>
+        <button class="btn ghost sm danger-text" type="button" data-del="${t.id}">删除</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function roleSelect(member) {
+  const disabled = state.me && member.id === state.me.id ? ' disabled' : '';
+  return `<select class="role-select" data-role-id="${member.id}"${disabled}>
+    <option value="member" ${member.role === 'member' ? 'selected' : ''}>成员</option>
+    <option value="manager" ${member.role === 'manager' ? 'selected' : ''}>项管</option>
+    <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>管理员</option>
+  </select>`;
+}
+
+const memberFilters = { q: '', group: '', role: '' };
+
+function filteredMembers() {
+  const { q, group, role } = memberFilters;
+  return allMembers.filter((m) => {
+    if (group && m.group_name !== group) return false;
+    if (role && m.role !== role) return false;
+    if (q && !(m.name.includes(q) || (m.username || '').includes(q))) return false;
+    return true;
+  });
+}
+
+function buildMemberFilterOptions() {
+  const select = document.getElementById('m-filter-group');
+  const groups = [...new Set(allMembers.map((m) => m.group_name).filter(Boolean))].sort();
+  select.innerHTML = '<option value="">全部组别</option>' + groups.map((g) => `<option>${esc(g)}</option>`).join('');
+  if (groups.includes(memberFilters.group)) select.value = memberFilters.group;
+}
+
+function renderMemberTable() {
+  const canEditRole = !!state.me && state.me.role === 'admin';
+  const members = filteredMembers();
+  document.getElementById('member-count').textContent = `共 ${members.length} / ${allMembers.length} 人`;
+  const tbody = document.querySelector('#member-table tbody');
+  tbody.innerHTML = members.map((m) => `<tr>
+    <td>${m.id}</td>
+    <td>${esc(m.name)}</td>
+    <td>${esc(m.username)}</td>
+    <td>${esc(m.group_name)}</td>
+    <td>${canEditRole ? roleSelect(m) : roleName(m.role)}</td>
+    <td>${m.is_active ? '在职' : '停用'}</td>
+    <td class="nowrap">
+      <button class="btn ghost sm" type="button" data-reset="${m.id}">重置密码</button>
+      <button class="btn ghost sm" type="button" data-toggle="${m.id}">${m.is_active ? '停用' : '启用'}</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function loadManage() {
+  await refresh();
+  const data = await api('/api/members');
+  if (data && data.ok) {
+    allMembers = data.members;
+    buildMemberFilterOptions();
+    renderMemberTable();
+  }
+}
+
+window.onData = () => {
+  renderTaskTable();
+  buildTaskFilterOptions();
+  renderCreateOwner();
+};
+
+document.getElementById('t-filter-q').addEventListener('input', (event) => {
+  taskFilters.q = event.target.value.trim();
+  renderTaskTable();
+});
+document.getElementById('t-filter-group').addEventListener('change', (event) => {
+  taskFilters.group = event.target.value;
+  renderTaskTable();
+});
+document.getElementById('t-filter-status').addEventListener('change', (event) => {
+  taskFilters.status = event.target.value;
+  renderTaskTable();
+});
+document.getElementById('m-filter-q').addEventListener('input', (event) => {
+  memberFilters.q = event.target.value.trim();
+  renderMemberTable();
+});
+document.getElementById('m-filter-group').addEventListener('change', (event) => {
+  memberFilters.group = event.target.value;
+  renderMemberTable();
+});
+document.getElementById('m-filter-role').addEventListener('change', (event) => {
+  memberFilters.role = event.target.value;
+  renderMemberTable();
+});
+
+document.getElementById('create-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const payload = {};
+  new FormData(event.target).forEach((value, key) => { payload[key] = value; });
+  const res = await api('/api/task', payload);
+  if (res && res.ok) {
+    event.target.reset();
+    loadManage();
+  } else {
+    alert((res && res.error) || '创建失败');
+  }
+});
+
+document.getElementById('member-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const payload = {};
+  new FormData(event.target).forEach((value, key) => { payload[key] = value; });
+  const res = await api('/api/member', payload);
+  if (res && res.ok) {
+    event.target.reset();
+    loadManage();
+  } else {
+    alert((res && res.error) || '添加失败');
+  }
+});
+
+document.getElementById('import-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const text = new FormData(event.target).get('text');
+  const res = await api('/api/members/import', { text });
+  if (res && res.ok) {
+    alert(`导入完成，共 ${res.created.length} 人：\n` + res.created.join('\n'));
+    event.target.reset();
+    loadManage();
+  } else {
+    alert((res && res.error) || '导入失败');
+  }
+});
+
+document.querySelector('#task-table').addEventListener('click', async (event) => {
+  const editId = event.target.dataset.edit;
+  const delId = event.target.dataset.del;
+  if (editId) {
+    openTaskModal(parseInt(editId, 10));
+  }
+  if (delId && confirm('确定删除该任务？此操作不可恢复')) {
+    const res = await api(`/api/task/${delId}/delete`, {});
+    if (res && res.ok) loadManage();
+    else alert((res && res.error) || '删除失败');
+  }
+});
+
+document.querySelector('#member-table').addEventListener('change', async (event) => {
+  const target = event.target;
+  if (!target.classList.contains('role-select')) return;
+  const res = await api(`/api/member/${target.dataset.roleId}/role`, { role: target.value });
+  if (res && res.ok) {
+    loadManage();
+  } else {
+    alert((res && res.error) || '角色修改失败');
+    loadManage();
+  }
+});
+
+document.querySelector('#member-table').addEventListener('click', async (event) => {
+  const resetId = event.target.dataset.reset;
+  const toggleId = event.target.dataset.toggle;
+  if (resetId) {
+    const password = prompt('输入新密码（留空则重置为 123456）', '');
+    if (password === null) return;
+    const res = await api(`/api/member/${resetId}/reset`, { password: password || '123456' });
+    alert(res && res.ok ? '已重置' : ((res && res.error) || '重置失败'));
+  }
+  if (toggleId) {
+    const res = await api(`/api/member/${toggleId}/toggle`, {});
+    if (res && res.ok) loadManage();
+    else alert((res && res.error) || '操作失败');
+  }
+});
+
+loadManage();
+</script>
+{% endblock %}
