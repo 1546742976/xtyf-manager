@@ -159,7 +159,7 @@ def init_db():
             db.execute(
                 "INSERT INTO members (name, username, password_hash, group_name, role, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                ("管理员", "admin", generate_password_hash(initial_password), "管理员", "admin", now_str()),
+                ("管理员", "admin", generate_password_hash(initial_password), "", "admin", now_str()),
             )
             db.commit()
         else:
@@ -292,21 +292,24 @@ def export_members_csv():
         "COALESCE((SELECT GROUP_CONCAT(name,';') FROM (SELECT g.name FROM member_groups x "
         "JOIN groups g ON g.id=x.group_id WHERE x.member_id=m.id ORDER BY x.group_id)),'') AS group_name, "
         "m.role, m.is_active, "
+        "COALESCE((SELECT GROUP_CONCAT(name,';') FROM (SELECT p.name FROM member_projects mp "
+        "JOIN projects p ON p.id=mp.project_id WHERE mp.member_id=m.id ORDER BY mp.project_id)),'') AS project_names, "
+        "COALESCE((SELECT GROUP_CONCAT(project_id) FROM member_projects WHERE member_id=m.id),'') AS project_ids, "
         "COALESCE(GROUP_CONCAT(mg.group_id), '') AS group_ids "
         "FROM members m LEFT JOIN member_groups mg ON mg.member_id=m.id "
         "GROUP BY m.id ORDER BY m.group_name, m.id"
     ).fetchall()
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["ID", "姓名", "用户名", "组别", "角色", "账号状态", "组别ID"])
+    writer.writerow(["ID", "姓名", "用户名", "专业组", "造车组别", "角色", "账号状态", "专业组ID", "造车组别ID"])
     def cell(value):
         # Prevent spreadsheet formula injection for untrusted directory strings.
         value = str(value or "")
         return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
     for row in rows:
-        writer.writerow([row["id"], cell(row["name"]), cell(row["username"]), cell(row["group_name"]),
+        writer.writerow([row["id"], cell(row["name"]), cell(row["username"]), cell(row["group_name"]), cell(row["project_names"]),
                          cell(ROLE_NAMES.get(row["role"], row["role"])),
-                         "启用" if row["is_active"] else "停用", cell(row["group_ids"])])
+                         "启用" if row["is_active"] else "停用", cell(row["group_ids"]), cell(row["project_ids"])])
     return Response("\ufeff" + output.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="members.csv"'})
 
@@ -399,11 +402,10 @@ def api_password():
 def export_csv():
     rows = get_db().execute(
         "SELECT t.id,t.title,COALESCE(m.name,'未分配') AS owner,"
-        "COALESCE((SELECT GROUP_CONCAT(name,';') FROM (SELECT g.name FROM task_groups x "
-        "JOIN groups g ON g.id=x.group_id WHERE x.task_id=t.id ORDER BY x.group_id)),'') AS group_name,"
+        "COALESCE(p.name,'') AS group_name,"
         "COALESCE(p.name,'') AS project,t.priority,"
         "t.status,t.progress,t.start_date,t.due_date,t.detail,t.updated_at,t.owner_id,t.project_id,"
-        "t.parent_id,t.version,COALESCE(GROUP_CONCAT(DISTINCT tg.group_id),'') AS group_ids,"
+        "t.parent_id,t.version,COALESCE(t.project_id,'') AS group_ids,"
         "COALESCE(GROUP_CONCAT(DISTINCT tp.member_id),'') AS participant_ids,"
         "COALESCE(GROUP_CONCAT(DISTINCT td.predecessor_id),'') AS predecessor_ids "
         "FROM tasks t LEFT JOIN members m ON m.id=t.owner_id LEFT JOIN projects p ON p.id=t.project_id "

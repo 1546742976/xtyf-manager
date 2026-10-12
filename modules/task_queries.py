@@ -33,11 +33,18 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
     ).fetchall()
     member_ids = [int(row["id"]) for row in member_rows]
     member_groups = {member_id: [] for member_id in member_ids}
+    member_projects = {member_id: [] for member_id in member_ids}
     for member_id, group_id in db.execute(
         "SELECT member_id,group_id FROM member_groups ORDER BY group_id"
     ).fetchall():
         member_groups.setdefault(int(member_id), []).append(int(group_id))
+    for member_id, project_id in db.execute(
+        "SELECT member_id,project_id FROM member_projects ORDER BY project_id"
+    ).fetchall():
+        member_projects.setdefault(int(member_id), []).append(int(project_id))
     all_members = [dict(row) | {
+        "project_ids": member_projects.get(int(row["id"]), []),
+        "project_names": [project_names[x] for x in member_projects.get(int(row["id"]), [])],
         "group_ids": member_groups.get(int(row["id"]), []),
         "group_name": ";".join(group_names[group_id]
                                for group_id in member_groups.get(int(row["id"]), [])),

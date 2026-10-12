@@ -2,7 +2,7 @@
 import sqlite3
 import unittest
 
-from modules.task_migrations import migrate
+from modules.task_migrations import DEFAULT_GROUPS, DEFAULT_VEHICLE_GROUPS, migrate
 
 
 BASE_SCHEMA = """
@@ -39,7 +39,7 @@ class TestCollaborationMigration(unittest.TestCase):
         db.commit()
         return db
 
-    def test_migration_preserves_exact_legacy_names_and_is_repeat_safe(self):
+    def test_migration_splits_legacy_composite_names_and_is_repeat_safe(self):
         # Given: legacy semicolon names and an inactive historical owner.
         db = self._legacy_db()
 
@@ -50,10 +50,56 @@ class TestCollaborationMigration(unittest.TestCase):
         db.commit()
         migrate(db)
 
-        # Then: names are trimmed but not split and removed history is not resurrected.
-        self.assertEqual(names, ["视觉;电控"])
+        # Then: each combined label becomes independent relations without resurrection.
+        self.assertEqual(set(names), set(DEFAULT_GROUPS))
         self.assertEqual(db.execute("SELECT COUNT(*) FROM member_groups").fetchone()[0], 0)
+        vehicle_names = {row[0] for row in db.execute("SELECT name FROM projects")}
+        self.assertTrue(set(DEFAULT_VEHICLE_GROUPS).issubset(vehicle_names))
+        self.assertEqual(db.execute(
+            "SELECT COUNT(*) FROM member_projects WHERE member_id=1"
+        ).fetchone()[0], 1)
+        task_names = {row[0] for row in db.execute(
+            "SELECT g.name FROM task_groups tg JOIN groups g ON g.id=tg.group_id WHERE tg.task_id=1"
+        )}
+        self.assertEqual(task_names, {"视觉", "电控"})
         self.assertEqual(db.execute("SELECT owner_id FROM tasks WHERE id=1").fetchone()[0], 1)
+        db.close()
+
+    def test_legacy_project_memberships_are_inferred_once_without_overwriting_edits(self):
+        db = self._legacy_db()
+        db.execute("INSERT INTO members VALUES(2,'附属成员','second','hash','视觉','member',1,'old',0)")
+        db.commit()
+        migrate(db)
+        project_id = db.execute("SELECT project_id FROM tasks WHERE id=1").fetchone()[0]
+        self.assertEqual(
+            db.execute("SELECT COUNT(*) FROM member_projects WHERE member_id=1 AND project_id=?", (project_id,)).fetchone()[0],
+            1,
+        )
+        db.execute("DELETE FROM member_projects WHERE member_id=1")
+        db.commit()
+        migrate(db)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM member_projects WHERE member_id=1").fetchone()[0], 0)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM member_projects WHERE member_id=2").fetchone()[0], 0)
+        db.close()
+
+    def test_default_labels_are_only_seeded_once(self):
+        db = self._legacy_db()
+        migrate(db)
+        db.execute("UPDATE groups SET name='嵌入式硬件' WHERE name='硬件'")
+        db.execute("DELETE FROM groups WHERE name='运营'")
+        db.execute("UPDATE projects SET name='新赛季步兵' WHERE name='步兵'")
+        db.execute("DELETE FROM projects WHERE name='飞镖'")
+        db.commit()
+        migrate(db)
+        names = {row[0] for row in db.execute("SELECT name FROM groups")}
+        self.assertIn("嵌入式硬件", names)
+        self.assertNotIn("硬件", names)
+        self.assertNotIn("运营", names)
+        vehicle_names = {row[0] for row in db.execute("SELECT name FROM projects")}
+        self.assertIn("新赛季步兵", vehicle_names)
+        self.assertNotIn("步兵", vehicle_names)
+        self.assertNotIn("飞镖", vehicle_names)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 3)
         db.close()
 
     def test_injected_failure_rolls_back_entire_migration(self):

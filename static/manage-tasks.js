@@ -1,6 +1,6 @@
 "use strict";
 
-const taskFilters = { q: "", group: "", project: "", status: "" };
+const taskFilters = { q: "", project: "", status: "" };
 
 function renderCreateChoices() {
   const owner = document.getElementById("create-owner");
@@ -8,21 +8,17 @@ function renderCreateChoices() {
   if (owner) owner.innerHTML = options(state.members, null, "未指定");
   if (project) project.innerHTML = options(state.projects, null, "未选择");
   const participants = document.getElementById("create-participants");
-  const groups = document.getElementById("create-groups");
   const dependencies = document.getElementById("create-dependencies");
   const parent = document.getElementById("create-parent");
   if (participants) participants.innerHTML = choiceGrid("participant_ids", state.members, [], (member) => member.name);
-  if (groups) groups.innerHTML = choiceGrid("group_ids", state.groups);
   if (dependencies) dependencies.innerHTML = choiceGrid("predecessor_ids", state.tasks, [], taskLabel);
   if (parent) parent.innerHTML = options(state.tasks, null, "无父任务");
 }
 
 function fillTaskFilters() {
-  const group = document.getElementById("t-filter-group");
   const project = document.getElementById("t-filter-project");
   const status = document.getElementById("t-filter-status");
-  if (group) group.innerHTML = options(state.groups, taskFilters.group, "全部组别");
-  if (project) project.innerHTML = options(state.projects, taskFilters.project, "全部项目");
+  if (project) project.innerHTML = options(state.projects, taskFilters.project, "全部组别");
   if (status)
     status.innerHTML =
       '<option value="">全部状态</option>' +
@@ -31,7 +27,6 @@ function fillTaskFilters() {
 
 function filteredManageTasks() {
   return state.tasks.filter((task) => {
-    if (taskFilters.group && !taskGroups(task).includes(Number(taskFilters.group))) return false;
     if (taskFilters.project && Number(task.project_id) !== Number(taskFilters.project)) return false;
     if (taskFilters.status && task.status !== taskFilters.status) return false;
     const people = taskParticipants(task)
@@ -51,13 +46,13 @@ function renderTaskTable() {
     tasks
       .map((task) => {
         const additional = (task.participant_ids || []).map((id) => memberById(id)?.name || `#${id}`).join("、") || "—";
-        return `<tr><td>${Number(task.id)}</td><td class="cell-title">${esc(task.title)}</td><td>${esc(memberById(task.owner_id)?.name || "未指定")}</td><td>${esc(additional)}</td><td>${esc(taskGroupNames(task).join("、") || "—")}</td><td>${esc(taskProjectName(task) || "—")}</td><td>${priorityCell(task.priority)}</td><td>${esc(task.status)}</td><td>${badge(daysLeftText(task), daysLeftClass(task))}</td><td class="nowrap"><button class="btn ghost sm" type="button" data-edit-task="${Number(task.id)}">编辑</button><button class="btn ghost sm danger-text" type="button" data-delete-task="${Number(task.id)}">删除</button></td></tr>`;
+        return `<tr><td>${Number(task.id)}</td><td class="cell-title">${esc(task.title)}</td><td>${esc(memberById(task.owner_id)?.name || "未指定")}</td><td>${esc(additional)}</td><td>${esc(taskProjectName(task) || "—")}</td><td>${priorityCell(task.priority)}</td><td>${esc(task.status)}</td><td>${badge(daysLeftText(task), daysLeftClass(task))}</td><td class="nowrap"><button class="btn ghost sm" type="button" data-edit-task="${Number(task.id)}">编辑</button><button class="btn ghost sm danger-text" type="button" data-delete-task="${Number(task.id)}">删除</button></td></tr>`;
       })
-      .join("") || '<tr><td colspan="10" class="empty">没有符合条件的任务</td></tr>';
+      .join("") || '<tr><td colspan="9" class="empty">没有符合条件的任务</td></tr>';
 }
 
 function catalogPanel(kind, items) {
-  const label = kind === "groups" ? "专业组" : "项目";
+  const label = kind === "projects" ? "造车组别" : "专业组";
   const rows =
     items
       .map(
@@ -70,13 +65,12 @@ function catalogPanel(kind, items) {
 
 function renderCatalogs() {
   const target = document.getElementById("catalog-grid");
-  if (target) target.innerHTML = catalogPanel("groups", state.groups) + catalogPanel("projects", state.projects);
+  if (target) target.innerHTML = catalogPanel("projects", state.projects);
 }
 
 function taskPayload(form) {
   const payload = Object.fromEntries(new FormData(form));
   payload.participant_ids = checkedValues(form, "participant_ids");
-  payload.group_ids = checkedValues(form, "group_ids");
   payload.predecessor_ids = checkedValues(form, "predecessor_ids");
   if (state.me?.role !== "admin") delete payload.parent_id;
   return payload;
@@ -85,7 +79,6 @@ function taskPayload(form) {
 function bindTaskManagement() {
   [
     ["t-filter-q", "q", "input"],
-    ["t-filter-group", "group", "change"],
     ["t-filter-project", "project", "change"],
     ["t-filter-status", "status", "change"],
   ].forEach(([id, key, event]) => {

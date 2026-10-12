@@ -12,13 +12,12 @@ function taskGroupNames(task) {
 }
 function taskMatches(task) {
   const filter = state.filters;
-  if (filter.group && !taskGroups(task).includes(Number(filter.group)) && task.group_name !== filter.group) return false;
   if (filter.project && Number(task.project_id) !== Number(filter.project) && taskProjectName(task) !== filter.project) return false;
   if (filter.status && task.status !== filter.status) return false;
   if (filter.mine && (!state.me || !taskParticipants(task).includes(Number(state.me.id)))) return false;
   if (filter.q) {
     const people = taskParticipants(task).map((id) => memberById(id)?.name || "");
-    const hay = [task.title, task.detail, taskProjectName(task), ...taskGroupNames(task), ...people].join(" ").toLowerCase();
+    const hay = [task.title, task.detail, taskProjectName(task), ...people].join(" ").toLowerCase();
     if (!hay.includes(filter.q.toLowerCase())) return false;
   }
   return true;
@@ -45,7 +44,7 @@ function taskCard(task, extraClass = "") {
   const lead = memberById(task.owner_id);
   const participants = taskParticipants(task).map((id) => memberById(id)?.name || `成员 #${id}`);
   const warnings = task.dependency_warnings || [];
-  const meta = [taskProjectName(task), ...taskGroupNames(task), participants.join("、")].filter(Boolean);
+  const meta = [taskProjectName(task), participants.join("、")].filter(Boolean);
   return `<article class="task ${isOverdue(task) ? "overdue" : ""} ${warnings.length ? "has-warning" : ""} ${extraClass}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
     <div class="task-head"><h3>${esc(task.title)}</h3>${badge(task.status, STATUS_CLASS[task.status] || "gray")}</div>
     <div class="task-meta">${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}${meta.map((value) => `<span>${esc(value)}</span>`).join("")}</div>
@@ -108,15 +107,10 @@ function renderLanes(tasks) {
   );
 }
 function fillBoardFilters() {
-  const group = document.getElementById("f-group"),
-    project = document.getElementById("f-project"),
+  const project = document.getElementById("f-project"),
     status = document.getElementById("f-status");
-  if (group) {
-    group.innerHTML = options(state.groups, state.filters.group, "全部组别");
-    group.value = state.filters.group;
-  }
   if (project) {
-    project.innerHTML = options(state.projects, state.filters.project, "全部项目");
+    project.innerHTML = options(state.projects, state.filters.project, "全部组别");
     project.value = state.filters.project;
   }
   if (status) {
@@ -137,7 +131,6 @@ function bindBoard() {
   const target = document.getElementById("board");
   if (!target) return;
   [
-    ["f-group", "group", "change"],
     ["f-project", "project", "change"],
     ["f-status", "status", "change"],
     ["f-q", "q", "input"],

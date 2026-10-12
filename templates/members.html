@@ -2,7 +2,7 @@
 {% block title %}成员管理{% endblock %}
 {% block content %}
 <div class="ux-page-head">
-  <div><p class="ux-eyebrow">TEAM / MEMBERS</p><h1>成员管理</h1><p>集中维护团队成员、账号、角色和登录权限。</p></div>
+  <div><p class="ux-eyebrow">TEAM / MEMBERS</p><h1>成员管理</h1><p>集中维护成员专业组、造车组别和账号权限；一个人可同时参与多个造车组别。</p></div>
   <div class="ux-page-actions"><a class="btn" href="{{ url_for('manage') }}">任务管理</a><a class="btn" href="{{ url_for('export_members_csv') }}">导出成员 CSV</a></div>
 </div>
 
@@ -11,7 +11,8 @@
   <div class="split">
     <form id="member-form" class="form-grid">
       <label>姓名<input name="name" required></label>
-      <fieldset class="span-2"><legend>专业组（可多选）</legend><div id="member-create-groups" class="choice-host"></div></fieldset>
+      <fieldset class="span-2"><legend>专业组（技能方向，可多选）</legend><div id="member-create-groups" class="choice-host"></div></fieldset>
+      <fieldset class="span-2"><legend>造车组别（可多选）</legend><div id="member-create-projects" class="choice-host"></div></fieldset>
       <label>用户名（默认姓名）<input name="username"></label>
       <label>初始密码（留空随机生成）<input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位"></label>
       {% if me.role == 'admin' %}
@@ -21,12 +22,14 @@
     </form>
     <form id="import-form" class="form-grid">
       <label class="span-2">批量导入（每行：姓名,专业组1;专业组2[,用户名]）<textarea name="text" rows="5" placeholder="张三,视觉;电控&#10;李四,机械,lisi"></textarea></label>
+      <fieldset class="span-2"><legend>为本批次成员选择造车组别（可多选）</legend><div id="member-import-projects" class="choice-host"></div></fieldset>
       <div class="member-form-actions"><button class="btn" type="submit">批量导入</button><p class="form-message" role="alert"></p></div>
     </form>
   </div>
   <div class="toolbar">
     <input type="search" aria-label="搜索成员" id="m-filter-q" placeholder="搜索姓名 / 用户名">
     <label class="toolbar-field"><span>专业组</span><select id="m-filter-group"><option value="">全部组别</option></select></label>
+    <label class="toolbar-field"><span>造车组别</span><select id="m-filter-project"><option value="">全部造车组别</option></select></label>
     <select id="m-filter-role">
       <option value="">全部角色</option>
       <option value="member">成员</option>
@@ -38,10 +41,34 @@
     <!-- 成员列表：角色下拉（仅管理员）、重置密码、停用/启用 -->
 <table id="member-table">
       <thead>
-        <tr><th>ID</th><th>姓名</th><th>用户名</th><th>组别</th><th>角色</th><th>状态</th><th>操作</th></tr>
+        <tr><th>ID</th><th>姓名</th><th>用户名</th><th>专业组</th><th>造车组别</th><th>角色</th><th>状态</th><th>操作</th></tr>
       </thead>
       <tbody></tbody>
     </table>
+  </div>
+</section>
+<section class="panel">
+  <h2>专业组字典</h2>
+  <p class="ux-note">专业组代表技能方向（视觉、电控、机械等），只绑定成员，可新增、重命名；不决定任务的造车归属。</p>
+  <div class="catalog-grid">
+    <section class="catalog-block">
+      <h3>组别设置</h3>
+      <form id="member-group-create-form" class="catalog-form">
+        <label><span>新组别名称</span><input name="name" maxlength="80" required placeholder="例如：算法"></label>
+        <button class="btn" type="submit">新增组别</button>
+        <p class="form-message" role="alert"></p>
+      </form>
+      <ul id="member-group-catalog" class="catalog-list" aria-live="polite"></ul>
+    </section>
+    <section class="catalog-block">
+      <h3>造车组别字典</h3>
+      <form id="member-project-create-form" class="catalog-form">
+        <label><span>新造车组别</span><input name="name" maxlength="80" required placeholder="例如：英雄"></label>
+        <button class="btn" type="submit">新增组别</button>
+        <p class="form-message" role="alert"></p>
+      </form>
+      <ul id="member-project-catalog" class="catalog-list" aria-live="polite"></ul>
+    </section>
   </div>
 </section>
 {% endblock %}

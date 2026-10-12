@@ -26,7 +26,7 @@ function renderWorkspaceDashboard() {
       ranked
         .map(
           (task) =>
-            `<button type="button" class="ws-task-row" data-dashboard-task="${Number(task.id)}"><span class="prio prio-${task.priority === "高" ? "high" : task.priority === "低" ? "low" : "mid"}"><i class="dot"></i></span><span class="ws-task-row-title"><strong>${esc(task.title)}</strong><small>${esc(taskProjectName(task) || "未归属项目")} · ${esc(
+            `<button type="button" class="ws-task-row" data-dashboard-task="${Number(task.id)}"><span class="prio prio-${task.priority === "高" ? "high" : task.priority === "低" ? "low" : "mid"}"><i class="dot"></i></span><span class="ws-task-row-title"><strong>${esc(task.title)}</strong><small>${esc(taskProjectName(task) || "未归属造车组别")} · ${esc(
               taskParticipants(task)
                 .map((id) => memberById(id)?.name || `#${id}`)
                 .join("、") || "未分配",

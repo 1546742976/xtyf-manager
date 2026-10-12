@@ -54,10 +54,8 @@ def _resolve_relations(
         if "group_ids" in data and values["group_ids"] != legacy:
             return {}, "group_name 与 group_ids 冲突"
         values["group_ids"] = legacy
-    if "group_ids" not in data and "group_name" not in data and owner_id is not None:
-        values["group_ids"] = [int(row[0]) for row in db.execute(
-            "SELECT group_id FROM member_groups WHERE member_id = ? ORDER BY group_id", (owner_id,)
-        )]
+    # Vehicle group lives in project_id. Do not infer a task's specialty
+    # from the owner; retain historical task_groups without using them in UI.
     return values, None
 
 
@@ -77,7 +75,7 @@ def _validate(
     if not active_ids(db, "groups", active_group_ids):
         return "组别不存在"
     if active_project_id is not None and not active_ids(db, "projects", [active_project_id]):
-        return "项目不存在"
+        return "造车组别不存在"
     refs = relations["predecessor_ids"]
     parent_id = values.get("parent_id")
     if parent_id is not None:
@@ -189,7 +187,7 @@ def update_task(
         legacy_name = str(data.get("project") or "").strip()
         legacy_id = _legacy_catalog(db, "projects", legacy_name, management)
         if legacy_name and legacy_id is None:
-            db.rollback(); return None, "项目不存在", 400
+            db.rollback(); return None, "造车组别不存在", 400
         if "project_id" in data and values["project_id"] != legacy_id:
             db.rollback(); return None, "project 与 project_id 冲突", 400
         values["project_id"] = legacy_id

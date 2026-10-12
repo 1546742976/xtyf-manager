@@ -31,7 +31,7 @@ function taskReadOnly(task) {
       .join("、") || "未指定";
   const predecessors =
     (task.predecessor_ids || []).map((id) => state.tasks.find((item) => Number(item.id) === Number(id))?.title || `任务 #${id}`).join("、") || "无";
-  return `<div class="readonly-settings"><p class="permission-note">你可以查看此任务，但不在编辑参与范围内。</p><dl><div><dt>负责人及参与成员</dt><dd>${esc(participants)}</dd></div><div><dt>专业组</dt><dd>${esc(taskGroupNames(task).join("、") || "未分组")}</dd></div><div><dt>项目</dt><dd>${esc(taskProjectName(task) || "未选择")}</dd></div><div><dt>优先级 / 状态</dt><dd>${esc(task.priority)} / ${esc(task.status)}</dd></div><div><dt>计划日期</dt><dd>${esc(task.start_date || "未设置")} 至 ${esc(task.due_date || "未设置")}</dd></div><div><dt>前置任务</dt><dd>${esc(predecessors)}</dd></div></dl>${task.detail ? `<div class="task-detail">${esc(task.detail)}</div>` : ""}${task.suggested_start_date ? `<p class="advisory">根据前置任务计划截止日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div>`;
+  return `<div class="readonly-settings"><p class="permission-note">你可以查看此任务，但不在编辑参与范围内。</p><dl><div><dt>负责人及参与成员</dt><dd>${esc(participants)}</dd></div><div><dt>造车组别</dt><dd>${esc(taskProjectName(task) || "未选择")}</dd></div><div><dt>优先级 / 状态</dt><dd>${esc(task.priority)} / ${esc(task.status)}</dd></div><div><dt>计划日期</dt><dd>${esc(task.start_date || "未设置")} 至 ${esc(task.due_date || "未设置")}</dd></div><div><dt>前置任务</dt><dd>${esc(predecessors)}</dd></div></dl>${task.detail ? `<div class="task-detail">${esc(task.detail)}</div>` : ""}${task.suggested_start_date ? `<p class="advisory">根据前置任务计划截止日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div>`;
 }
 function taskForm(task) {
   const editable = canEdit(task),
@@ -41,9 +41,8 @@ function taskForm(task) {
   if (!editable) return taskReadOnly(task);
   return `<form id="task-form" class="task-settings"><input type="hidden" name="version" value="${Number(task.version || 0)}">
     <label>标题<input name="title" value="${esc(task.title)}" required></label>
-    <div class="grid-2"><label>负责人（主负责人）<select name="owner_id">${memberOptions(members, task.owner_id)}</select></label><label>项目<select name="project_id">${options(state.projects, task.project_id, "未选择")}</select></label></div>
+    <div class="grid-2"><label>负责人（主负责人）<select name="owner_id">${memberOptions(members, task.owner_id)}</select></label><label>造车组别<select name="project_id">${options(state.projects, task.project_id, "未选择")}</select></label></div>
     <fieldset><legend>参与成员（可多选）</legend><p class="field-help">负责人和参与成员都可编辑任务设置。</p>${choiceGrid("participant_ids", members, task.participant_ids || [], memberLabel)}</fieldset>
-    <fieldset><legend>专业组（“全栈”请多选相关组别）</legend>${choiceGrid("group_ids", state.groups, task.group_ids || [])}</fieldset>
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
     <div class="grid-2"><label>开始日期<input name="start_date" type="date" value="${esc(task.start_date)}"></label><label>截止日期<input name="due_date" type="date" value="${esc(task.due_date)}"></label></div>
     ${task.suggested_start_date ? `<p class="advisory">根据前置任务计划截止日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}
@@ -61,7 +60,7 @@ function taskModalActive(box, generation, taskId) {
 function taskModalShell(task) {
   const lead = memberById(task.owner_id);
   return `<div class="modal-head"><div><p class="ux-eyebrow">TASK #${Number(task.id)}</p><h2>${esc(task.title)}</h2></div><button class="btn ghost sm" type="button" data-close>关闭</button></div>
-    <div class="modal-info">${badge(task.status, STATUS_CLASS[task.status] || "gray")}${badge(`负责人 ${lead?.name || "未指定"}`, "outline")}<span class="muted">${esc(taskProjectName(task) || "未归属项目")} · 版本 ${Number(task.version || 0)}</span></div>
+    <div class="modal-info">${badge(task.status, STATUS_CLASS[task.status] || "gray")}${badge(`负责人 ${lead?.name || "未指定"}`, "outline")}<span class="muted">${esc(taskProjectName(task) || "未归属造车组别")} · 版本 ${Number(task.version || 0)}</span></div>
     ${taskForm(task)}
     <section class="modal-section"><h3>截图附件</h3>${canEdit(task) ? '<form id="attachment-form" class="attachment-form"><label>选择图片（PNG / JPEG / WebP；每张不超过 10 MiB，最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple required></label><label>说明<input name="description" maxlength="300" placeholder="截图内容或验收场景"></label><button class="btn" type="submit">上传截图</button><p class="form-message" role="alert"></p></form>' : ""}<div id="attachment-list"></div></section>
     <section class="modal-section"><h3>版本记录</h3><div id="task-revisions"><p class="empty">正在加载版本记录…</p></div></section>
@@ -74,8 +73,7 @@ function bindTaskForm(task, generation) {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(form));
     payload.participant_ids = checkedValues(form, "participant_ids");
-    payload.group_ids = checkedValues(form, "group_ids");
-    payload.predecessor_ids = checkedValues(form, "predecessor_ids");
+        payload.predecessor_ids = checkedValues(form, "predecessor_ids");
     payload.version = Number(payload.version);
     if (!payload.owner_id && payload.participant_ids.length) {
       form.querySelector("[name=owner_id]").setCustomValidity("选择参与成员后必须指定负责人");

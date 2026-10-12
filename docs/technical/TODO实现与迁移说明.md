@@ -69,3 +69,12 @@ uv run deploy/rehearse_collaboration_recovery.py
 ```
 
 该命令在临时目录创建包含一名活动成员、一名停用成员、任务、日志、合成附件和临时密钥的旧结构；它迁移两次，验证旧内容摘要与移除关系不被重新写回，验证中途失败回滚 DDL/列/关系，使用 `sqlite3.Connection.backup()` 备份，修改源数据库和附件后把两者恢复到独立目录，并运行 `PRAGMA integrity_check`。命令完成后删除临时夹，并把无敏感信息的结果写入 `.omo/evidence/todo-collaboration/recovery/rehearsal-report.json`。
+
+
+---
+
+## 修正：两套组别（v3）
+
+最初 TODO 第 4 条对应**专业组**（groups/member_groups），第 5 条对应**造车组别**（历史 projects/tasks.project_id）。早期实现错误地同时把任务绑定到负责人专业组，现在已取消任务专业组的默认关联，并从任务管理/筛选 UI 移除。task_groups 保留历史 API 和修订兼容信息，但不作为任务的造车组别。
+
+新增 member_projects 多对多表，以支持“同一视觉组成员同时参与步兵与哨兵”。造车组别默认预置步兵、哨兵、重装、飞镖，现有细分组别保留；成员与任务均通过稳定 project_id 关联，重命名不修改归属。v3 事务迁移只执行一次：根据历史任务已有 project_id 将负责人和参与者归入对应造车组别，不会在再次启动时覆盖人工修改。成员和任务的 CSV 导出明确区分两种组别。

@@ -158,9 +158,9 @@ class TestCollaborationBackend(unittest.TestCase):
         revert_row = next(row for row in rows_after_revert[1:] if row[1] == "兼容投影任务")
         self.assertEqual(reverted.status_code, 200)
         self.assertEqual((edit_row[header.index("组别")], edit_row[header.index("项目")]),
-                         ("投影组B", "投影项目B"))
+                         ("投影项目B", "投影项目B"))
         self.assertEqual((revert_row[header.index("组别")], revert_row[header.index("项目")]),
-                         ("投影组A", "投影项目A"))
+                         ("投影项目A", "投影项目A"))
         task = next(item for item in self.admin.get("/api/data").get_json()["tasks"]
                     if item["id"] == created["id"])
         self.assertEqual((task["group_name"], task["project"], task["group_ids"], task["project_id"]),
@@ -277,7 +277,7 @@ class TestCollaborationBackend(unittest.TestCase):
         self.assertEqual(active["group_name"], expected)
         self.assertEqual(historical["group_name"], expected)
         self.assertEqual(managed_member["group_name"], expected)
-        self.assertEqual(csv_member[header.index("组别")], expected)
+        self.assertEqual(csv_member[header.index("专业组")], expected)
 
 
 if __name__ == "__main__":

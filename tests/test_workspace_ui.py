@@ -28,7 +28,7 @@ class TestWorkspaceNavigation(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('attachment', response.headers['Content-Disposition'])
         text = response.get_data(as_text=True)
-        self.assertIn('姓名,用户名,组别,角色,账号状态', text)
+        self.assertIn('姓名,用户名,专业组,造车组别,角色,账号状态', text)
         self.assertNotIn('password_hash', text)
         self.assertNotIn('ci-test-password-only', text)
 

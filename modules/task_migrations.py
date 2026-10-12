@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS member_groups (
     FOREIGN KEY (member_id) REFERENCES members(id),
     FOREIGN KEY (group_id) REFERENCES groups(id)
 );
+CREATE TABLE IF NOT EXISTS member_projects (
+    member_id INTEGER NOT NULL, project_id INTEGER NOT NULL,
+    PRIMARY KEY (member_id, project_id),
+    FOREIGN KEY (member_id) REFERENCES members(id),
+    FOREIGN KEY (project_id) REFERENCES projects(id)
+);
 CREATE TABLE IF NOT EXISTS task_groups (
     task_id INTEGER NOT NULL, group_id INTEGER NOT NULL,
     PRIMARY KEY (task_id, group_id),
@@ -73,42 +79,88 @@ def _catalog_id(db: sqlite3.Connection, table: str, raw_name: str) -> int | None
     return int(row[0])
 
 
+DEFAULT_GROUPS = ("视觉", "电控", "机械", "硬件", "宣传", "运营")
+DEFAULT_VEHICLE_GROUPS = ("步兵", "哨兵", "重装", "飞镖")
+
+
+def _upgrade_composite_groups(db: sqlite3.Connection) -> None:
+    """Split historical semicolon-combined group labels into separate relations."""
+    for group_id, raw_name in db.execute(
+        "SELECT id, name FROM groups WHERE instr(name, ';') > 0"
+    ).fetchall():
+        names = list(dict.fromkeys(part.strip() for part in raw_name.split(";") if part.strip()))
+        if len(names) < 2:
+            continue
+        new_ids = [_catalog_id(db, "groups", name) for name in names]
+        for relation, owner_column in (("member_groups", "member_id"), ("task_groups", "task_id")):
+            owners = [row[0] for row in db.execute(
+                f"SELECT {owner_column} FROM {relation} WHERE group_id=?", (group_id,)
+            ).fetchall()]
+            db.executemany(
+                f"INSERT OR IGNORE INTO {relation} ({owner_column}, group_id) VALUES (?, ?)",
+                ((owner_id, new_id) for owner_id in owners for new_id in new_ids),
+            )
+            db.execute(f"DELETE FROM {relation} WHERE group_id=?", (group_id,))
+        db.execute("DELETE FROM groups WHERE id=?", (group_id,))
+
+
 def migrate(db: sqlite3.Connection) -> None:
-    """Apply collaboration schema and legacy relationship migration atomically."""
+    """Apply schema and versioned data upgrades atomically and repeat-safely."""
     db.execute("BEGIN IMMEDIATE")
     try:
         for statement in COLLABORATION_SCHEMA.split(";"):
             if statement.strip():
                 db.execute(statement)
-        applied = db.execute(
+        applied_v1 = db.execute(
             "SELECT 1 FROM schema_migrations WHERE version=1"
         ).fetchone()
-        if applied is not None:
-            db.commit()
-            return
-        _add_column(db, "tasks", "project_id INTEGER")
-        _add_column(db, "tasks", "parent_id INTEGER")
-        _add_column(db, "tasks", "version INTEGER NOT NULL DEFAULT 1")
-        _add_column(db, "tasks", "deleted_at TEXT")
-        for member_id, group_name in db.execute(
-            "SELECT id, group_name FROM members WHERE TRIM(COALESCE(group_name, '')) <> ''"
-        ).fetchall():
-            group_id = _catalog_id(db, "groups", group_name)
-            if group_id is not None:
-                db.execute("INSERT OR IGNORE INTO member_groups VALUES (?, ?)", (member_id, group_id))
-        for task_id, group_name, project in db.execute(
-            "SELECT id, group_name, project FROM tasks"
-        ).fetchall():
-            group_id = _catalog_id(db, "groups", group_name or "")
-            project_id = _catalog_id(db, "projects", project or "")
-            if group_id is not None:
-                db.execute("INSERT OR IGNORE INTO task_groups VALUES (?, ?)", (task_id, group_id))
-            if project_id is not None:
-                db.execute("UPDATE tasks SET project_id = COALESCE(project_id, ?) WHERE id = ?", (project_id, task_id))
-        db.execute(
-            "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)",
-            (now_str(),),
-        )
+        if applied_v1 is None:
+            _add_column(db, "tasks", "project_id INTEGER")
+            _add_column(db, "tasks", "parent_id INTEGER")
+            _add_column(db, "tasks", "version INTEGER NOT NULL DEFAULT 1")
+            _add_column(db, "tasks", "deleted_at TEXT")
+            for member_id, group_name in db.execute(
+                "SELECT id, group_name FROM members WHERE TRIM(COALESCE(group_name, '')) <> ''"
+            ).fetchall():
+                group_id = _catalog_id(db, "groups", group_name)
+                if group_id is not None:
+                    db.execute("INSERT OR IGNORE INTO member_groups VALUES (?, ?)", (member_id, group_id))
+            for task_id, group_name, project in db.execute(
+                "SELECT id, group_name, project FROM tasks"
+            ).fetchall():
+                group_id = _catalog_id(db, "groups", group_name or "")
+                project_id = _catalog_id(db, "projects", project or "")
+                if group_id is not None:
+                    db.execute("INSERT OR IGNORE INTO task_groups VALUES (?, ?)", (task_id, group_id))
+                if project_id is not None:
+                    db.execute("UPDATE tasks SET project_id = COALESCE(project_id, ?) WHERE id = ?", (project_id, task_id))
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (1, ?)", (now_str(),))
+        # Seed exactly once so future administrator renames never get reverted.
+        if db.execute("SELECT 1 FROM schema_migrations WHERE version=2").fetchone() is None:
+            _upgrade_composite_groups(db)
+            db.executemany("INSERT OR IGNORE INTO groups(name) VALUES (?)",
+                           ((name,) for name in DEFAULT_GROUPS))
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, ?)", (now_str(),))
+        # A task already has one project_id. Projects are the stable vehicle-group
+        # dictionary; members can now participate in several through member_projects.
+        if db.execute("SELECT 1 FROM schema_migrations WHERE version=3").fetchone() is None:
+            db.executemany(
+                "INSERT OR IGNORE INTO projects(name) VALUES (?)",
+                ((name,) for name in DEFAULT_VEHICLE_GROUPS),
+            )
+            # Preserve existing project labels (e.g. 轮腿步兵/狗洞步兵), and infer
+            # participation only from actual assigned tasks; do not infer from specialty.
+            db.execute(
+                "INSERT OR IGNORE INTO member_projects(member_id, project_id) "
+                "SELECT owner_id, project_id FROM tasks "
+                "WHERE owner_id IS NOT NULL AND project_id IS NOT NULL"
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO member_projects(member_id, project_id) "
+                "SELECT tp.member_id, t.project_id FROM task_participants tp "
+                "JOIN tasks t ON t.id=tp.task_id WHERE t.project_id IS NOT NULL"
+            )
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (3, ?)", (now_str(),))
         db.commit()
     except sqlite3.Error:
         db.rollback()
