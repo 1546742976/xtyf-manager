@@ -4,6 +4,10 @@ set -euo pipefail
 # 数据备份脚本（由 cron 每日 03:17 调用，也可手动执行）
 #   - 进度库 / 资金库：sqlite .backup（安全热备份），保留 14 天
 #   - 发票数据：每周日打包 tar.gz，保留 60 天
+# 本脚本只生成部分/分时备份，不含任务截图和会话密钥！
+# 生产升级和可靠恢复请在全部写入服务停止后执行：
+#   python3 deploy/consistent_snapshot.py create --app-dir "$APP_DIR" \\
+#     --output /private/backups/full-YYYYMMDD.zip --offline-confirmed
 # ============================================================
 
 APP_DIR="${APP_DIR:-/opt/rm-progress}"
@@ -24,4 +28,4 @@ if [ "$(date +%u)" = "7" ] && [ -d "$APP_DIR/data/invoices" ]; then
   find "$BK_DIR" -name 'invoices-*.tar.gz' -mtime +60 -delete
 fi
 
-echo "backup done: $BK_DIR/data-$STAMP.db"
+echo "partial backup done: $BK_DIR/data-$STAMP.db (NOT a unified recovery point)"
