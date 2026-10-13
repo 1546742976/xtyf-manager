@@ -13,6 +13,7 @@ Thumbs.db
 *.db-shm
 *.db-journal
 secret.key
+initial-admin-password.txt
 data/
 
 .venv/

@@ -118,6 +118,7 @@ def _save(member_id: int, as_admin: bool):
                         db.rollback()
                         return jsonify(ok=False, error="请在账户设置中验证原密码后修改本人密码"), 400
                     updates["password_hash"] = generate_password_hash(password)
+                    updates["must_change_password"] = 1
 
         relations = {}
         for field, label, table in (

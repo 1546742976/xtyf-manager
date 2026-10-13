@@ -42,7 +42,7 @@ document.getElementById('login-form').addEventListener('submit', async (event) =
   button.disabled = false;
   const data = await res.json().catch(() => ({ ok: false, error: '服务端响应异常' }));
   if (data.ok) {
-    location.href = '/';
+    location.href = data.redirect || '/';
   } else {
     const el = document.getElementById('login-error');
     el.textContent = data.error || '登录失败';

@@ -6,6 +6,7 @@
     <p>维护个人登录名、专业组和造车组别，安全更新密码；姓名由管理员统一维护。</p></div>
 </div>
 <div class="ux-account-grid">
+  {% if me.must_change_password %}<p class="panel error" role="alert">当前使用的是初始或重置密码。请先设置一个与当前密码不同的新密码，之后才能进入工作区。</p>{% endif %}
   <section class="panel ux-account-profile" aria-label="账户资料">
     <div class="ux-account-avatar" aria-hidden="true">{{ me.name[:1] }}</div>
     <h2>个人信息</h2>
@@ -14,13 +15,13 @@
       <dt>姓名</dt><dd id="account-name">{{ me.name }}</dd>
       <dt>登录用户名</dt><dd id="account-login-name">{{ me.username }}</dd>
       <dt>专业组</dt><dd id="account-group-names">{{ me.group_name or '未分组' }}</dd>
-      <dt>造车组别</dt><dd id="account-project-names">加载中…</dd>
+      <dt>造车组别</dt><dd id="account-project-names">{{ '改密后查看' if me.must_change_password else '加载中…' }}</dd>
       <dt>系统角色</dt><dd>{{ role_names[me.role] }}</dd>
     </dl>
     <p class="ux-note">成员 ID 是数据库中的固定身份标识，不会随用户名修改而改变。需要修改真实姓名或权限角色请联系管理员。</p>
   </section>
   <div class="ux-account-settings">
-    <section class="panel">
+    {% if not me.must_change_password %}<section class="panel">
       <h2>修改个人资料</h2>
       <p class="ux-note">用户名用于登录，修改成功后旧用户名不能再登录。专业组和造车组别均可多选。</p>
       <form id="account-profile-form" class="ux-account-form">
@@ -30,11 +31,11 @@
         <button class="btn primary" type="submit">保存个人资料</button>
         <p class="ux-account-result" id="account-profile-result" role="status" aria-live="polite"></p>
       </form>
-    </section>
+    </section>{% endif %}
     <section class="panel">
       <h2>修改登录密码</h2>
       <p class="ux-note">请输入原密码验证身份。建议使用与其他网站不同的高强度密码。</p>
-      <form id="account-password-form" class="ux-account-form">
+      <form id="account-password-form" class="ux-account-form" data-required-change="{{ '1' if me.must_change_password else '0' }}">
         <label>当前密码<input type="password" name="old" required autocomplete="current-password"></label>
         <label>新密码<input type="password" name="new" minlength="8" required autocomplete="new-password"></label>
         <label>确认新密码<input type="password" name="confirm" minlength="8" required autocomplete="new-password"></label>

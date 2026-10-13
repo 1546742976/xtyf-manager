@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}权限与审计{% endblock %}
+{% block content %}
+<div class="ux-page-head"><div><p class="ux-eyebrow">ADMIN / SECURITY</p><h1>权限与审计</h1><p>按成员授予财务权限，并查看业务操作记录。</p></div></div>
+<section class="panel">
+  <h2>财务权限</h2>
+  <p class="ux-note">权限绑定成员 ID，修改姓名或登录用户名后仍然有效。资金审核需要管理员或项管角色；发票管理允许查看、归档、修改及导出全部发票，请按职责授权。停用账号的权限不生效。</p>
+  <label>查找成员<input type="search" id="permission-search" placeholder="姓名、用户名或成员 ID"></label>
+  <div class="table-wrap"><table><thead><tr><th>成员</th><th>角色 / 状态</th><th>资金审核</th><th>发票管理</th><th>操作</th></tr></thead><tbody id="permission-members"></tbody></table></div>
+  <p id="permission-result" role="status" aria-live="polite"></p>
+</section>
+<section class="panel">
+  <div class="toolbar"><h2>业务操作记录</h2><button type="button" class="btn" id="audit-refresh">刷新记录</button></div>
+  <p class="ux-note">记录操作者、目标、请求内容摘要及处理结果，不记录密码或文件内容。“未完成”表示执行中或执行中断，不能据此判定业务已完成；批量操作可能部分成功。</p>
+  <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>操作 / 目标</th><th>结果</th><th>摘要</th></tr></thead><tbody id="audit-events"></tbody></table></div>
+  <button type="button" class="btn" id="audit-more" hidden>加载更早记录</button>
+  <p id="audit-result" role="status" aria-live="polite"></p>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='security-admin.js') }}"></script>{% endblock %}

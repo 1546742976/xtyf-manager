@@ -11,8 +11,8 @@
   [3] 前端 fetch / EventSource 路径统一加 /invoices 前缀
   [4] 权限体系：
       - before_request 守卫：登录即可访问（页面级）
-      - finance_required：导出/整理/查重/批量/删除等管理接口仅 admin/manager
-      - 数据级：成员在列表/统计/预览接口中按 submitter==本人 过滤
+      - finance_required：导出/整理/查重/批量/删除等管理接口需 invoices.manage 权限
+      - 数据级：成员在列表/统计/预览接口中按 submitter_id==本人 ID 过滤
   [5] 上传入库时服务端强制 submitter=登录人、status=未报销（防伪造）
   [6] 元数据键统一用正斜杠（兼容从 Windows 迁移的老数据，启动时自动归一化）
   [7] 后台任务(SSE 实时进度)依赖进程内内存 _jobs —— 因此 gunicorn 必须固定 1 worker
@@ -25,6 +25,7 @@
 import os
 import re
 import json
+import logging
 import csv
 import io
 import math
@@ -37,11 +38,12 @@ import tempfile
 import zipfile
 from datetime import datetime
 from functools import wraps
-from flask import (Blueprint, Response, jsonify, redirect, request, render_template,
+from flask import (Blueprint, Response, g, has_request_context, jsonify, redirect, request, render_template,
                    send_file, send_from_directory, stream_with_context)
 from urllib.parse import quote
 
 from common import ROLE_NAMES, current_user, get_db
+from modules.security import has_permission, audit_background_start, audit_background_finish
 
 BASE_DIR = os.environ.get(
     'INVOICES_DIR',
@@ -59,13 +61,13 @@ MONTH_PATTERN = re.compile(r'^(\d{4}\.\d{1,2})$')
 SKIP_DIRS = {'__pycache__', '.uploads'}
 
 
-# ---- 角色判断：是否管理员/项管（即发票模块的"财务视角"）----
+# ---- 权限判断：是否获发票管理授权（即发票模块的"财务视角"）----
 def _is_finance(user=None):
     user = user or current_user()
-    return bool(user) and user['role'] in ('admin', 'manager')
+    return has_permission('invoices.manage', user)
 
 
-# ---- 装饰器：仅管理员/项管可调用（导出/整理/查重/批量/维护类接口）----
+# ---- 装饰器：仅获发票管理授权的人可调用（导出/整理/查重/批量/维护类接口）----
 def finance_required(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
@@ -75,26 +77,78 @@ def finance_required(view):
     return wrapper
 
 
-# ---- 数据级权限：普通成员仅能查看/预览 submitter 为自己 的发票文件 ----
+# ---- 数据级权限：未获财务授权者仅能查看 submitter_id 为本人的发票文件 ----
 def _submitter_id(name):
     """新记录仅绑定姓名唯一的有效账号，重名不擅自认领。"""
     if not isinstance(name, str) or not name.strip():
         return 0
     rows = get_db().execute(
-        "SELECT id FROM members WHERE name=? AND is_active=1", (name.strip(),)
+        "SELECT id FROM members WHERE name=?", (name.strip(),)
     ).fetchall()
     return rows[0]['id'] if len(rows) == 1 else 0
 
 
 def _belongs_to_user(entry, user):
-    """历史无 ID 的记录暂按姓名兼容，新记录必须按 ID。"""
+    """Names are display snapshots, never authorization evidence."""
     owner_id = entry.get('submitter_id')
-    if owner_id is not None:
+    return bool(user and type(owner_id) is int and owner_id > 0 and owner_id == user['id'])
+
+
+def _resolve_submitter(data, existing=None):
+    """Prefer explicit IDs; preserve established ownership on legacy unchanged-name edits."""
+    if 'submitter_id' in data:
+        member_id = data['submitter_id']
+        if type(member_id) is not int or not 0 <= member_id <= 2**63 - 1:
+            raise ValueError('提交人成员 ID 不合法')
+        if member_id == 0:
+            return '', 0
+        row = get_db().execute('SELECT id,name FROM members WHERE id=?', (member_id,)).fetchone()
+        if row is None:
+            raise ValueError('提交人成员不存在')
+        return row['name'], row['id']
+    name = data.get('submitter', '')
+    if not isinstance(name, str):
+        raise ValueError('提交人必须是文本')
+    name = name.strip()
+    if existing and name == existing.get('submitter', ''):
+        return name, existing.get('submitter_id') or 0
+    if not name:
+        return '', 0
+    member_id = _submitter_id(name)
+    if not member_id:
+        raise ValueError('提交人姓名不唯一或没有对应账号，请选择带成员 ID 的提交人')
+    return name, member_id
+
+
+def migrate_invoice_owners(db):
+    """Bind unambiguous historical names once; unresolved invoices stay finance-only."""
+    with _invoice_lock:
+        db.execute('BEGIN IMMEDIATE')
         try:
-            return int(owner_id) == user['id']
-        except (ValueError, TypeError):
-            return False
-    return str(entry.get('submitter') or '').strip() == user['name']
+            if db.execute('SELECT 1 FROM security_migrations WHERE version=2').fetchone():
+                db.commit()
+                return
+            by_name = {}
+            for member_id, name in db.execute('SELECT id,name FROM members'):
+                by_name.setdefault(name.strip(), []).append(member_id)
+            meta = load_meta()
+            known_ids = {member_id for ids in by_name.values() for member_id in ids}
+            for entry in meta.values():
+                owner_id = entry.get('submitter_id')
+                if owner_id is not None:
+                    if isinstance(owner_id, str) and owner_id.isascii() and owner_id.isdigit():
+                        owner_id = int(owner_id)
+                    entry['submitter_id'] = owner_id if type(owner_id) is int and owner_id in known_ids else 0
+                    continue
+                candidates = by_name.get(str(entry.get('submitter') or '').strip(), [])
+                entry['submitter_id'] = candidates[0] if len(candidates) == 1 else 0
+                entry['ownership_source'] = 'legacy_unique_name' if len(candidates) == 1 else 'needs_confirmation'
+            save_meta(meta)
+            db.execute('INSERT INTO security_migrations VALUES(2)')
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
 
 def _user_can_view(rel_path):
@@ -111,6 +165,7 @@ def _user_can_view(rel_path):
 # ========== 后台任务管理 ==========
 _jobs = {}  # {job_id: {status, progress, message, result, ...}}
 _jobs_lock = threading.Lock()
+_invoice_lock = threading.RLock()  # Full read/modify/write operations, single worker.
 
 
 # ===================== 工具 =====================
@@ -119,8 +174,10 @@ _jobs_lock = threading.Lock()
 
 def _create_job(job_type):
     jid = uuid.uuid4().hex[:12]
+    audit_id = audit_background_start(job_type, jid)
     with _jobs_lock:
-        _jobs[jid] = {'type': job_type, 'status': 'running', 'progress': 0, 'message': '初始化...', 'result': None}
+        _jobs[jid] = {'type': job_type, 'status': 'running', 'progress': 0, 'message': '初始化...', 'result': None,
+                      'audit_id': audit_id}
     return jid
 
 
@@ -134,6 +191,11 @@ def _update_job(jid, progress, message):
 def _finish_job(jid, result):
     with _jobs_lock:
         if jid in _jobs:
+            outcome = 'partial' if isinstance(result, dict) and (result.get('failed') or result.get('errors')) else 'success'
+            try:
+                audit_background_finish(_jobs[jid]['audit_id'], outcome, result)
+            except Exception:
+                logging.exception('Could not finalize invoice job audit %s', jid)
             _jobs[jid]['status'] = 'done'
             _jobs[jid]['progress'] = 100
             _jobs[jid]['message'] = '完成'
@@ -144,6 +206,10 @@ def _finish_job(jid, result):
 def _fail_job(jid, error):
     with _jobs_lock:
         if jid in _jobs:
+            try:
+                audit_background_finish(_jobs[jid]['audit_id'], 'failure', {'error': str(error)})
+            except Exception:
+                logging.exception('Could not finalize invoice job audit %s', jid)
             _jobs[jid]['status'] = 'error'
             _jobs[jid]['message'] = str(error)
             _jobs[jid]['finished_at'] = time.time()
@@ -163,7 +229,7 @@ def _job_sse(jid):
         last_progress = -1
         while True:
             with _jobs_lock:
-                job = _jobs.get(jid, {})
+                job = dict(_jobs.get(jid, {'status': 'error', 'message': '任务不存在或服务已重启，请重新发起'}))
             status = job.get('status', 'running')
             progress = job.get('progress', 0)
             message = job.get('message', '')
@@ -185,7 +251,8 @@ def _run_job_thread(jid, func, *args, **kwargs):
     """在后台线程运行 func(jid, *args, **kwargs)"""
     def _run():
         try:
-            result = func(jid, *args, **kwargs)
+            with _invoice_lock:
+                result = func(jid, *args, **kwargs)
             _finish_job(jid, result)
         except Exception as e:
             _fail_job(jid, e)
@@ -220,21 +287,22 @@ def load_json(path, default=None):
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except: return default
+        except (ValueError, OSError) as exc:
+            raise RuntimeError(f'无法读取发票元数据文件：{os.path.basename(path)}') from exc
     return default
 
 
 def save_json(path, data):
-    tmp = path + '.tmp'
+    fd, tmp = tempfile.mkstemp(prefix='.' + os.path.basename(path), suffix='.tmp', dir=os.path.dirname(path))
     try:
-        with open(tmp, 'w', encoding='utf-8') as f:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        try: os.replace(tmp, path)
-        except PermissionError: shutil.move(tmp, path)
-    except Exception as e:
-        print(f'[save error] {path}: {e}')
-        try: shutil.move(tmp, path)
-        except: pass
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 load_meta = lambda: load_json(META_FILE)
@@ -782,6 +850,13 @@ def scan_invoices(use_cache=True):
             seen.add(key)
             unique.append(inv)
     unique.sort(key=lambda x: (x['month'], x.get('date', '')), reverse=True)
+    if has_request_context():
+        names = {row['id']: row['name'] for row in get_db().execute('SELECT id,name FROM members')}
+        for invoice in unique:
+            owner_id = invoice.get('submitter_id')
+            if owner_id in names:
+                invoice['submitter_original'] = invoice['submitter']
+                invoice['submitter'] = names[owner_id]
     return unique
 
 
@@ -803,6 +878,7 @@ def _add_invoice(invoices, meta, month, status, filepath):
         'amount': info['amount'], 'vendor': info['vendor'], 'date': info['date'],
         'seq': info['seq'], 'status': final_status,
         'submitter': inv_meta.get('submitter', ''), 'submitter_id': inv_meta.get('submitter_id'),
+        'ownership_unresolved': not bool(inv_meta.get('submitter_id')),
         'notes': inv_meta.get('notes', ''),
         'from_filename': info['from_filename'], 'source': '',
         'reimbursed_date': inv_meta.get('reimbursed_date', ''),
@@ -827,7 +903,8 @@ def get_stats(invoices):
 
     submitter_stats = {}
     for i in invoices:
-        s = i['submitter'] or '未指定'
+        s = (f"{i['submitter']} (#{i['submitter_id']})" if i.get('submitter_id')
+             else (i['submitter'] + '（待确认）' if i['submitter'] else '未指定'))
         if s not in submitter_stats: submitter_stats[s] = {'count': 0, 'amount': 0.0}
         submitter_stats[s]['count'] += 1
         submitter_stats[s]['amount'] += i['amount']
@@ -873,6 +950,16 @@ def api_invoices():
     if not _is_finance(user):
         invoices = [i for i in invoices if _belongs_to_user(i, user)]
     result = invoices
+    if request.args.get('ownership') == 'unresolved':
+        result = [i for i in result if i['ownership_unresolved']]
+    if request.args.get('submitter_id'):
+        try:
+            owner_id = int(request.args['submitter_id'])
+            if not 0 <= owner_id <= 2**63 - 1:
+                raise ValueError()
+        except ValueError:
+            return jsonify(error='提交人筛选参数无效'), 400
+        result = [i for i in result if (i['submitter_id'] or 0) == owner_id]
 
     for key in ['month', 'category', 'status', 'submitter']:
         val = request.args.get(key, '').strip()
@@ -940,6 +1027,13 @@ def api_submitters():
     return jsonify(sorted(subs))
 
 
+@bp.get('/api/owners')
+@finance_required
+def api_owners():
+    return jsonify(members=[dict(row) for row in get_db().execute(
+        'SELECT id,name,username,is_active,deleted_at FROM members ORDER BY name,id')])
+
+
 @bp.route('/api/invoice/update', methods=['POST'])
 @finance_required
 # ---- 修改发票：状态/提交人/备注/类别/报销日期/标签/发票号（管理）----
@@ -957,13 +1051,18 @@ def api_invoice_update():
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
     if inv_id not in meta: meta[inv_id] = {}
 
+    if 'submitter_id' in data or 'submitter' in data:
+        try:
+            name, owner_id = _resolve_submitter(data, meta[inv_id])
+        except ValueError as exc:
+            return jsonify(success=False, error=str(exc)), 400
+        meta[inv_id].update(submitter=name, submitter_id=owner_id, ownership_source='manual')
+
     old_status = meta[inv_id].get('status', '')
     new_status = data.get('status', old_status)
 
-    for field in ['status', 'submitter', 'notes', 'category_override', 'reimbursed_date', 'tags', 'invoice_number']:
+    for field in ['status', 'notes', 'category_override', 'reimbursed_date', 'tags', 'invoice_number']:
         if field in data: meta[inv_id][field] = data[field]
-    if 'submitter' in data:
-        meta[inv_id]['submitter_id'] = _submitter_id(data['submitter'])
     meta[inv_id]['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     save_meta(meta)
 
@@ -981,7 +1080,7 @@ def api_invoice_batch():
     data = request.get_json(force=True)
     ids = data.get('ids', [])
     updates = data.get('updates', {})
-    allowed = {'status', 'submitter', 'notes', 'category_override',
+    allowed = {'status', 'submitter', 'submitter_id', 'notes', 'category_override',
                'reimbursed_date', 'tags', 'invoice_number'}
     if not isinstance(ids, list) or not isinstance(updates, dict) or not ids or len(ids) > 500:
         return jsonify({'success': False, 'error': '批量参数格式无效'}), 400
@@ -989,6 +1088,12 @@ def api_invoice_batch():
         return jsonify({'success': False, 'error': '存在不允许修改的字段'}), 400
     if 'status' in updates and updates['status'] not in STATUS_NAMES:
         return jsonify({'success': False, 'error': '无效报销状态'}), 400
+    if 'submitter' in updates or 'submitter_id' in updates:
+        try:
+            name, owner_id = _resolve_submitter(updates)
+        except ValueError as exc:
+            return jsonify(success=False, error=str(exc)), 400
+        updates.update(submitter=name, submitter_id=owner_id, ownership_source='manual')
 
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1000,8 +1105,6 @@ def api_invoice_batch():
         if inv_id not in meta: meta[inv_id] = {}
         old_status = meta[inv_id].get('status', '')
         for field, value in updates.items(): meta[inv_id][field] = value
-        if 'submitter' in updates:
-            meta[inv_id]['submitter_id'] = _submitter_id(updates['submitter'])
         meta[inv_id]['updated'] = now
         new_status = updates.get('status', old_status)
         if new_status != old_status and new_status in STATUS_NAMES:
@@ -1089,6 +1192,9 @@ def api_job_start():
 @finance_required
 # ---- SSE 进度流：/api/job/stream/<job_id>（依赖进程内 _jobs，须单 worker）----
 def api_job_stream(job_id):
+    with _jobs_lock:
+        if job_id not in _jobs:
+            return jsonify(error='任务不存在或服务已重启'), 404
     return _job_sse(job_id)
 
 
@@ -1426,11 +1532,15 @@ def api_upload_confirm():
         return jsonify({'success': False, 'error': '临时文件不存在或不属于当前账号'}), 400
     month = _normalize_month(data.get('month', ''))
     status = data.get('status', '未报销')
-    submitter = data.get('submitter', '').strip()
-    if not _is_finance():
+    if _is_finance():
+        try:
+            submitter, submitter_id = _resolve_submitter(data)
+        except ValueError as exc:
+            return jsonify(success=False, error=str(exc)), 400
+    else:
         status = '未报销'
         submitter = current_user()['name']
-    submitter_id = current_user()['id'] if not _is_finance() else _submitter_id(submitter)
+        submitter_id = current_user()['id']
     category = data.get('category', '')
     notes = data.get('notes', '').strip()
     amount = _valid_amount(data.get('amount', 0))
@@ -1519,11 +1629,16 @@ def api_upload_confirm_batch():
         tmp_path = _own_temp_path(tmp_rel)
         month = _normalize_month(item.get('month', ''))
         status = item.get('status', '未报销')
-        submitter = item.get('submitter', '').strip()
-        if not is_fin:
+        if is_fin:
+            try:
+                submitter, submitter_id = _resolve_submitter(item)
+            except ValueError as exc:
+                results.append({'file': item.get('original_name', ''), 'status': 'error', 'reason': str(exc)})
+                continue
+        else:
             status = '未报销'
             submitter = cur_name
-        submitter_id = _submitter_id(submitter) if is_fin else current_user()['id']
+            submitter_id = current_user()['id']
         category = item.get('category', '')
         notes = item.get('notes', '').strip()
         amount = _valid_amount(item.get('amount', 0))
@@ -1580,6 +1695,8 @@ def api_upload_confirm_batch():
 
     ok_count = sum(1 for r in results if r['status'] == 'ok')
     err_count = sum(1 for r in results if r['status'] == 'error')
+    for item, result in zip(items, results):
+        result['tmp_path'] = item.get('tmp_path', '') if isinstance(item, dict) else ''
     return jsonify({
         'success': True,
         'results': results,
@@ -1644,7 +1761,7 @@ def api_organize_preview():
 
 # ---- 其他 ----
 
-@bp.route('/api/refresh')
+@bp.route('/api/refresh', methods=['POST'])
 @finance_required
 # ---- 刷新 PDF 金额（管理，后台任务）----
 def api_refresh():
@@ -1681,7 +1798,7 @@ def api_open_folder():
     return jsonify({'success': False, 'error': '服务端部署不支持直接打开文件夹'})
 
 
-@bp.route('/api/export')
+@bp.route('/api/export', methods=['POST'])
 @finance_required
 # ---- 导出 CSV（管理）----
 def api_export():
@@ -1775,7 +1892,17 @@ def _invoices_guard():
         if '/api/' in request.path:
             return jsonify({'success': False, 'error': '未登录'}), 401
         return redirect('/login')
+    if request.endpoint != 'invoices.api_job_stream':
+        _invoice_lock.acquire()
+        g.invoice_lock_held = True
     return None
+
+
+@bp.teardown_request
+def _release_invoice_lock(exc):
+    if getattr(g, 'invoice_lock_held', False):
+        g.invoice_lock_held = False
+        _invoice_lock.release()
 
 
 @bp.route('/file/<path:rel>')

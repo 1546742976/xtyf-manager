@@ -244,7 +244,7 @@ def member_projects(member_id: int):
 def members_get():
     db = get_db()
     rows = [dict(row) for row in db.execute(
-        "SELECT id,name,username,group_name,role,is_active,deleted_at FROM members "
+        "SELECT id,name,username,group_name,role,is_active,deleted_at,must_change_password FROM members "
         "WHERE deleted_at IS NULL OR ? ORDER BY group_name,id",
         (current_user()["role"] == "admin" and request.args.get("include_deleted") == "1",)
     )]
@@ -291,7 +291,7 @@ def member_create():
         db.rollback(); return jsonify(ok=False, error=error or "组别不存在"), 400
     try:
         member_id = int(db.execute(
-            "INSERT INTO members(name,username,password_hash,group_name,role,created_at) VALUES(?,?,?,?,?,?)",
+            "INSERT INTO members(name,username,password_hash,group_name,role,created_at,must_change_password) VALUES(?,?,?,?,?,?,1)",
             (name, username, generate_password_hash(password), "", role, now_str()),
         ).lastrowid)
         _set_member_groups(db, member_id, group_ids)
@@ -328,7 +328,7 @@ def members_import():
             username = f"{name}{suffix}"; suffix += 1
         password = secrets.token_urlsafe(9)
         member_id = int(db.execute(
-            "INSERT INTO members(name,username,password_hash,group_name,role,created_at) VALUES(?,?,?,?,?,?)",
+            "INSERT INTO members(name,username,password_hash,group_name,role,created_at,must_change_password) VALUES(?,?,?,?,?,?,1)",
             (name, username, generate_password_hash(password), "", "member", now_str()),
         ).lastrowid)
         legacy_groups = _legacy_groups(db, parts[1] if len(parts) > 1 else "", True)

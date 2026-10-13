@@ -4,7 +4,7 @@
 
 功能：
   - 资金记录：增删改查、筛选排序、CSV 导出
-  - 审核流：非 chy 添加 → 待审核；chy 添加 → 自动已审核；导航角标提醒待审数量
+  - 审核流：未获审核授权的人添加 → 待审核；审核人添加 → 自动已审核；导航角标提醒待审数量
   - 统计图表：matplotlib 生成 PNG（月度收支/支出类别/队员排名/来源分布）
   - 台账同步：每次变更自动生成 资金管理记录.txt（含"审核"列）
 
@@ -21,6 +21,7 @@ from datetime import datetime
 from flask import Blueprint, jsonify, redirect, render_template, request, send_file
 
 from common import current_user
+from modules.security import has_permission
 
 # ---- 数据目录：默认 <项目>/data/funds，可用环境变量 FUNDS_DIR 覆盖 ----
 FUNDS_DIR = os.environ.get(
@@ -46,10 +47,9 @@ funds_bp = Blueprint("funds", __name__)
 
 
 def can_review(user=None):
-    """审核权限单独配置，默认保留现有财务审核用户名 chy。"""
+    """Independent permission bound to the immutable member ID."""
     user = user or current_user()
-    reviewers = {name.strip() for name in os.environ.get("FUNDS_REVIEWERS", "chy").split(",") if name.strip()}
-    return bool(user and user.get("role") in ("admin", "manager") and user.get("username") in reviewers)
+    return bool(user and user.get("role") in ("admin", "manager") and has_permission("funds.review", user))
 
 
 def valid_record_date(value):
@@ -241,7 +241,7 @@ def get_records():
 
 
 @funds_bp.route("/api/records", methods=["POST"])
-# ---- 新增记录：申请人自动填当前登录人；非 chy 添加 → 待审核（chy 自动已审核）----
+# ---- 新增记录：申请人自动填当前登录人；未获审核授权的人添加 → 待审核（审核人自动已审核）----
 def add_record():
     data = request.get_json(silent=True) or {}
     rt = data.get("record_type", "")
@@ -362,7 +362,7 @@ def delete_record(rid):
 
 
 @funds_bp.route("/api/records/<int:rid>/review", methods=["POST"])
-# ---- 审核通过：待审核 → 已审核，记录审核人/时间（供 chy 处理待审角标）----
+# ---- 审核通过：待审核 → 已审核，记录审核人/时间（供获授权审核人处理待审角标）----
 def review_record(rid):
     user = current_user()
     if not can_review(user):
@@ -386,7 +386,7 @@ def review_record(rid):
 
 
 @funds_bp.route("/api/pending_review")
-# ---- 待审核数量：chy 顶栏导航角标轮询此接口 ----
+# ---- 待审核数量：获授权审核人的导航角标轮询此接口 ----
 def pending_review():
     if not can_review():
         return jsonify({"code": 403, "msg": "无权查看待审核数量"}), 403

@@ -40,7 +40,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let groups = [];
   let projects = [];
   let profile = null;
-  profileForm.querySelector('[type="submit"]').disabled = true;
+  if (profileForm) profileForm.querySelector('[type="submit"]').disabled = true;
 
   function showProfile() {
     if (!profile) return;
@@ -56,7 +56,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("account-project-names").textContent = names(projects, profile.project_ids);
   }
 
-  Promise.all([
+  if (profileForm) Promise.all([
     accountApi("/api/account/profile"),
     accountApi("/api/groups"),
     accountApi("/api/projects"),
@@ -111,9 +111,11 @@ document.addEventListener("DOMContentLoaded", () => {
     result.textContent = "正在保存…";
     result.classList.remove("error");
     try {
-      await accountApi("/api/password", { old: values.get("old"), new: values.get("new") });
+      const saved = await accountApi("/api/password", { old: values.get("old"), new: values.get("new") });
+      if (!saved) return;
       form.reset();
       result.textContent = "密码已更新，请妥善保存新密码";
+      if (form.dataset.requiredChange === "1") location.assign("/");
     } catch (error) {
       result.classList.add("error");
       result.textContent = error.message || "网络异常，请重试";

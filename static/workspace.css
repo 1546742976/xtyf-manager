@@ -86,3 +86,6 @@ body.ws-app { margin:0 !important; min-width:0 !important; background:#f3f6fb !i
   .ws-app.ux-invoices .chart-bar{grid-template-columns:70px minmax(0,1fr) 80px}
 }
 @media(prefers-reduced-motion:reduce){.workspace-sidebar{transition:none !important}}
+.ws-sidebar-bottom form{margin:0}
+button.ws-signout{background:none;border:0;width:100%;cursor:pointer;font:inherit;text-align:left}
+.audit-details{white-space:pre-wrap;overflow-wrap:anywhere;max-width:38rem}

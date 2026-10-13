@@ -33,11 +33,12 @@
       {% if me.role in ('admin', 'manager') %}
       <a href="/funds/" class="ws-nav-link{% if page == 'funds' %} is-active{% endif %}"{% if page == 'funds' %} aria-current="page"{% endif %}><svg><use href="#ws-money"/></svg>资金台账{% if can_review_funds %}<span class="nav-badge" id="fundsPendingBadge" style="display:none">0</span>{% endif %}</a>
       {% endif %}
-      <a href="/invoices/" class="ws-nav-link{% if page == 'invoices' %} is-active{% endif %}"{% if page == 'invoices' %} aria-current="page"{% endif %}><svg><use href="#ws-invoice"/></svg>{{ '发票中心' if me.role in ('admin', 'manager') else '我的发票' }}</a>
+      <a href="/invoices/" class="ws-nav-link{% if page == 'invoices' %} is-active{% endif %}"{% if page == 'invoices' %} aria-current="page"{% endif %}><svg><use href="#ws-invoice"/></svg>{{ '发票中心' if can_manage_invoices else '我的发票' }}</a>
     </div>
     <div class="ws-nav-group">
       <div class="ws-nav-caption">个人中心</div>
       <a href="{{ url_for('account') }}" class="ws-nav-link{% if page == 'account' %} is-active{% endif %}"{% if page == 'account' %} aria-current="page"{% endif %}><svg><use href="#ws-settings"/></svg>账户设置</a>
+      {% if me.role == 'admin' %}<a href="{{ url_for('security.security_page') }}" class="ws-nav-link{% if page == 'security' %} is-active{% endif %}"><svg><use href="#ws-settings"/></svg>权限与审计</a>{% endif %}
     </div>
   </nav>
   <div class="ws-sidebar-bottom">
@@ -45,7 +46,7 @@
       <span class="ws-avatar">{{ me.name[:1] }}</span>
       <span class="ws-user-info"><strong>{{ me.name }}</strong><small>{{ role_names[me.role] }}</small></span>
     </a>
-    <a class="ws-signout" href="{{ url_for('logout') }}"><svg><use href="#ws-exit"/></svg>退出登录</a>
+    <form action="{{ url_for('logout') }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="ws-signout"><svg><use href="#ws-exit"/></svg>退出登录</button></form>
   </div>
 </aside>
 <div class="ws-sidebar-overlay" data-ws-close aria-hidden="true"></div>

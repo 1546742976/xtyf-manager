@@ -31,13 +31,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
                     manager_required, now_str)
 from modules.funds import funds_bp, can_review
-from modules.invoices import bp as invoices_bp
+from modules.invoices import bp as invoices_bp, migrate_invoice_owners
 from modules.discussions import discussions_bp
 from modules.task_api import bp as task_api_bp
 from modules.task_attachments import bp as task_attachments_bp
 from modules.task_catalogs import bp as task_catalogs_bp
 from modules.member_profiles import bp as member_profiles_bp
 from modules.task_migrations import migrate as migrate_tasks
+from modules.security import init_security, migrate_security, write_initial_credentials
 
 # ---- 关键路径与端口（secret.key 用于会话签名，首次运行自动生成）----
 SECRET_PATH = os.environ.get("PROGRESS_SECRET_PATH", os.path.join(BASE_DIR, "secret.key"))
@@ -81,12 +82,14 @@ app.register_blueprint(task_catalogs_bp)
 app.register_blueprint(member_profiles_bp)
 app.register_blueprint(task_attachments_bp)
 app.register_blueprint(discussions_bp, url_prefix="/discussions")
+init_security(app)
 
 
 @app.context_processor
 def inject_funds_reviewer():
     """各模板的待审核角标与实际权限一致。"""
-    return {"can_review_funds": can_review()}
+    user = current_user()
+    return {"can_review_funds": bool(user and not user["must_change_password"] and can_review(user))}
 
 # ---- 进度库表结构（data.db）：members 成员 / tasks 任务 / logs 更新日志 ----
 SCHEMA = """
@@ -155,21 +158,27 @@ def init_db():
             db.execute("ALTER TABLE members ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0")
         if "deleted_at" not in cols:
             db.execute("ALTER TABLE members ADD COLUMN deleted_at TEXT")
+        if "must_change_password" not in cols:
+            db.execute("ALTER TABLE members ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
         count = db.execute("SELECT COUNT(*) AS c FROM members").fetchone()[0]
         if count == 0:
             initial_password = os.environ.get("PROGRESS_INITIAL_ADMIN_PASSWORD") or secrets.token_urlsafe(18)
             if not os.environ.get("PROGRESS_INITIAL_ADMIN_PASSWORD"):
-                print("[初始化] admin 初始随机密码：" + initial_password, flush=True)
-                print("[初始化] 请登录后修改密码并保护服务器日志。", flush=True)
+                credentials_path = os.environ.get("PROGRESS_INITIAL_CREDENTIALS_PATH", os.path.join(BASE_DIR, "initial-admin-password.txt"))
+                write_initial_credentials(credentials_path, initial_password)
+                print("[初始化] 初始凭据已写入受限文件：" + credentials_path, flush=True)
+                print("[初始化] 请私下交付管理员，首次改密后删除该文件。", flush=True)
             db.execute(
-                "INSERT INTO members (name, username, password_hash, group_name, role, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO members (name, username, password_hash, group_name, role, created_at, must_change_password) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1)",
                 ("管理员", "admin", generate_password_hash(initial_password), "", "admin", now_str()),
             )
             db.commit()
         else:
             db.commit()
         migrate_tasks(db)
+        migrate_security(db)
+        migrate_invoice_owners(db)
     finally:
         db.close()
 
@@ -232,7 +241,7 @@ def login():
     if attempt and attempt["locked_until"] > now:
         return jsonify(ok=False, error="尝试次数过多，请 15 分钟后重试"), 429
     row = db.execute(
-        "SELECT * FROM members WHERE username = ? AND is_active = 1", (username,)
+        "SELECT * FROM members WHERE username = ? AND is_active = 1 AND deleted_at IS NULL", (username,)
     ).fetchone()
     if row is None or not check_password_hash(row["password_hash"], password):
         locked = _failed_login(db, attempt_key, attempt, now)
@@ -245,10 +254,11 @@ def login():
     session.permanent = True
     session["uid"] = row["id"]
     session["session_version"] = row["session_version"]
-    return jsonify(ok=True)
+    return jsonify(ok=True, must_change_password=bool(row["must_change_password"]),
+                   redirect="/account" if row["must_change_password"] else "/")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
     session.clear()
     return redirect(url_for("login"))
@@ -336,9 +346,9 @@ def api_member_reset(member_id):
     data = request.get_json(silent=True) or {}
     generated_password = not bool(data.get("password"))
     password = data.get("password") or secrets.token_urlsafe(10)
-    if len(password) < 8:
-        return jsonify(ok=False, error="密码至少 8 位"), 400
-    db.execute("UPDATE members SET password_hash = ?, session_version = session_version + 1 WHERE id = ?",
+    if not isinstance(password, str) or not 8 <= len(password) <= 1024:
+        return jsonify(ok=False, error="密码必须为 8 至 1024 位"), 400
+    db.execute("UPDATE members SET password_hash = ?, must_change_password=1, session_version = session_version + 1 WHERE id = ?",
                (generate_password_hash(password), member_id))
     db.commit()
     return jsonify(ok=True, initial_password=password if generated_password else None)
@@ -395,13 +405,15 @@ def api_password():
     data = request.get_json(silent=True) or {}
     old_password = data.get("old") or ""
     new_password = data.get("new") or ""
-    if len(new_password) < 8:
-        return jsonify(ok=False, error="新密码至少 8 位"), 400
+    if not isinstance(old_password, str) or not isinstance(new_password, str) or not 8 <= len(new_password) <= 1024:
+        return jsonify(ok=False, error="新密码必须为 8 至 1024 位"), 400
     db = get_db()
     row = db.execute("SELECT password_hash FROM members WHERE id = ?", (user["id"],)).fetchone()
     if row is None or not check_password_hash(row["password_hash"], old_password):
         return jsonify(ok=False, error="原密码错误"), 400
-    db.execute("UPDATE members SET password_hash = ?, session_version = session_version + 1 WHERE id = ?",
+    if check_password_hash(row["password_hash"], new_password):
+        return jsonify(ok=False, error="新密码不能与当前密码相同"), 400
+    db.execute("UPDATE members SET password_hash = ?, must_change_password=0, session_version = session_version + 1 WHERE id = ?",
                (generate_password_hash(new_password), user["id"]))
     version = db.execute("SELECT session_version FROM members WHERE id=?", (user["id"],)).fetchone()[0]
     db.commit()

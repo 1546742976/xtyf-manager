@@ -73,7 +73,7 @@ function renderMemberTable() {
     members
       .map(
         (member) =>
-          `<tr><td>${Number(member.id)}</td><td>${esc(member.name)}</td><td>${esc(member.username)}</td><td>${esc(memberGroups(member).join("、") || "未分组")}</td><td>${esc(memberVehicleGroups(member).join("、") || "未分组")}</td><td>${member.is_deleted ? esc(roleName(member.role)) : (admin ? roleSelect(member) : esc(roleName(member.role)))}</td><td>${member.is_deleted ? "已删除" : (member.is_active ? "在职" : "停用")}</td><td class="nowrap">${member.is_deleted
+          `<tr><td>${Number(member.id)}</td><td>${esc(member.name)}</td><td>${esc(member.username)}</td><td>${esc(memberGroups(member).join("、") || "未分组")}</td><td>${esc(memberVehicleGroups(member).join("、") || "未分组")}</td><td>${member.is_deleted ? esc(roleName(member.role)) : (admin ? roleSelect(member) : esc(roleName(member.role)))}</td><td>${member.is_deleted ? "已删除" : (member.is_active ? "在职" : "停用")}${member.must_change_password ? " / 待改初始密码" : ""}</td><td class="nowrap">${member.is_deleted
             ? admin ? `<button class="btn ghost sm" type="button" data-member-restore="${Number(member.id)}">恢复账号</button>` : ""
             : admin
               ? `<button class="btn ghost sm" type="button" data-member-profile="${Number(member.id)}">编辑资料</button>${Number(member.id) !== Number(state.me?.id) ? `<button class="btn ghost sm" type="button" data-member-delete="${Number(member.id)}">删除</button>` : ""}`
@@ -211,7 +211,7 @@ function bindMemberForms() {
     const result = await api("/api/member", payload);
     if (result?.ok) {
       form.reset();
-      if (result.initial_password) alert(`添加成功，请记录初始密码：\n${result.initial_password}`);
+      if (result.initial_password) alert(`添加成功，请通过可信渠道私下交付初始密码；首次登录必须改密：\n${result.initial_password}`);
       loadMembers();
     } else form.querySelector(".form-message").textContent = result?.error || "添加失败";
   });
@@ -220,7 +220,7 @@ function bindMemberForms() {
     const form = event.currentTarget;
     const result = await api("/api/members/import", { text: new FormData(form).get("text"), project_ids: checkedValues(form, "project_ids") });
     if (result?.ok) {
-      alert(`导入完成，共 ${result.created.length} 人：\n${result.created.join("\n")}`);
+      alert(`导入完成，共 ${result.created.length} 人。请逐人私下交付凭据，首次登录必须改密：\n${result.created.join("\n")}`);
       form.reset();
       loadMembers();
     } else form.querySelector(".form-message").textContent = result?.error || "导入失败";
@@ -366,7 +366,7 @@ function bindMemberTable() {
       const password = prompt("输入新密码（至少 8 位；留空则随机生成）", "");
       if (password === null) return;
       const result = await api(`/api/member/${reset.dataset.reset}/reset`, { password });
-      if (result?.ok) alert(result.initial_password ? `重置成功，请记录新密码：\n${result.initial_password}` : "密码重置成功");
+      if (result?.ok) alert(result.initial_password ? `重置成功，请私下交付新密码；下次登录必须改密：\n${result.initial_password}` : "密码重置成功");
       else alert(result?.error || "重置失败");
     }
     if (toggle) {

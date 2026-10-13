@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+{% include "_security_head.html" %}
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>巡天御风管理系统 · 发票管理</title>
 <link rel="stylesheet" href="/static/invoices.css">
@@ -9,7 +10,7 @@
 <link rel="stylesheet" href="/static/workspace.css">
 </head>
 <body class="ux-invoices ws-app{% if not is_finance %} member{% endif %}">
-<script>window.IS_FINANCE={{ is_finance|tojson }};window.ME_NAME={{ me.name|tojson }};</script>
+<script>window.IS_FINANCE={{ is_finance|tojson }};window.ME_NAME={{ me.name|tojson }};window.ME_ID={{ me.id|tojson }};</script>
 
 {% include "_workspace_sidebar.html" %}
 <div class="workspace-main">
@@ -52,6 +53,7 @@
 <select id="filterMonth" onchange="applyFilters()"><option value="">全部月份</option></select>
 <select id="filterCategory" onchange="applyFilters()"><option value="">全部分类</option></select>
 <select id="filterSubmitter" onchange="applyFilters()"><option value="">全部提交人</option></select>
+<label class="finance-only"><input type="checkbox" id="filterOwnership" onchange="applyFilters()"> 归属待确认</label>
 <div class="sep"></div>
 <input type="date" id="filterDateFrom" onchange="applyFilters()" title="开始日期" style="width:125px">
 <span style="color:#888;font-size:11px">至</span>
@@ -94,7 +96,7 @@
 <div class="field"><label>开票日期</label><input id="detDate" readonly></div>
 <div class="field"><label>状态</label><select id="detStatus"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select></div>
 <div class="field"><label>报销日期</label><input type="date" id="detReimbursedDate"></div>
-<div class="field"><label>提交人</label><input id="detSubmitter" placeholder="输入提交人姓名"></div>
+<div class="field"><label>提交人</label><select id="detSubmitter" aria-label="提交人"><option value="0">待确认 / 未指定</option></select></div>
 <div class="field"><label>类别</label><input id="detCategory" placeholder="类别"></div>
 <div class="field"><label>供应商</label><input id="detVendor" readonly></div>
 <div class="field"><label>金额</label><input id="detAmount" readonly></div>
@@ -117,7 +119,7 @@
 <div class="modal-header"><h2>批量确认发票入库 (<span id="buTotal">0</span> 张)</h2><button class="modal-close" onclick="BUModal.close()">&times;</button></div>
 <div class="finance-only" style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
 <label style="font-size:12px;color:#888;white-space:nowrap">统一提交人:</label>
-<input type="text" id="buSubmitter" placeholder="填写所有发票的来源人" style="flex:1;padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:13px">
+<select id="buSubmitter" aria-label="统一提交人" style="flex:1;padding:7px 10px"><option value="">选择统一提交人</option></select>
 <label style="font-size:12px;color:#888;white-space:nowrap">统一状态:</label>
 <select id="buStatus" style="padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:12px"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
 </div>
