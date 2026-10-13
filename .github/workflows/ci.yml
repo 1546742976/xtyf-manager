@@ -4,25 +4,64 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  regression:
+  python:
+    name: Python unit + API regression
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Python syntax check
+        run: python -m compileall -q app.py common.py modules tests deploy
+      - name: Run unit and integration tests with branch coverage
+        run: coverage run --branch --source=app,common,modules -m unittest discover -s tests -v
+      - name: Coverage report
+        if: always()
+        run: |
+          if [ -f .coverage ]; then
+            coverage report -m
+            coverage xml -o coverage.xml
+            coverage json -o coverage.json
+            python -c 'import json,os; p=json.load(open("coverage.json"))["totals"]["percent_covered_display"]; open(os.environ["GITHUB_STEP_SUMMARY"],"a").write("## Python branch coverage\n\nTotal: **"+p+"%**\n")'
+            coverage report --fail-under=65
+          fi
+      - name: Upload coverage XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  javascript:
+    name: JavaScript unit + syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
-      - name: Python syntax check
-        run: python -m compileall -q app.py common.py modules tests
-      - name: JavaScript syntax check
+      - name: Check browser script syntax
         run: |
           for file in static/*.js; do node --check "$file"; done
-      - name: Flask API and UI resource regression
-        run: python -m unittest discover -s tests -v
+      - name: Run browser logic unit tests
+        run: node --test tests/js/*.test.cjs

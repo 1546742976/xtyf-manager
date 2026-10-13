@@ -48,16 +48,18 @@
 
 ## 验证
 
-2026-10-13 本轮安全与归属变更按要求先实现、暂不执行功能测试。旧测试客户端还需适配 CSRF、首次改密和显式财务授权，不能据此前测试结果认定本轮通过。
+本仓库使用 GitHub Actions 在 PR、main 分支提交及手工触发时自动执行
+Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查与分支覆盖率统计。
+覆盖率报告见 Actions Summary 和 python-coverage Artifact。
 
-与 `.github/workflows/ci.yml` 对齐：
+    python -m pip install -r requirements-dev.txt
+    coverage run --branch --source=app,common,modules -m unittest discover -s tests -v
+    coverage report -m
+    node --test tests/js/*.test.cjs
 
-    python -m compileall -q app.py common.py modules tests
-    python -m unittest discover -s tests -v
-    # 安装 Node.js 后（Linux/macOS shell）
-    for file in static/*.js; do node --check "$file"; done
-
-CI 在 PR 以及推送到 `main` 时运行；文档修改**不等于**功能或浏览器端 E2E 已验证。
+测试使用隔离的临时 SQLite 与文件目录，不会读写生产数据。
+完整功能覆盖矩阵、运行命令与不包括的浏览器 E2E 范围，见
+[测试与 GitHub Actions](docs/technical/测试与CI.md)。
 
 ## 部署与数据安全
 
