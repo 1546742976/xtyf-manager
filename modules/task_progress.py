@@ -79,7 +79,10 @@ def update_progress(task_id: int):
         version = parse_id(request.form.get("version"), "version", False)
     except InvalidIdError:
         return jsonify(ok=False, error="版本号不合法"), 400
-    uploads = request.files.getlist("files")
+    # Browsers may include an empty multipart file part when the optional
+    # file input has no selection. Ignore that placeholder instead of trying
+    # to decode it as an image (which would reject text-only updates).
+    uploads = [upload for upload in request.files.getlist("files") if upload.filename]
     if len(uploads) > MAX_FILES:
         return jsonify(ok=False, error="每次最多上传 5 张截图"), 400
     try:

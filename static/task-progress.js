@@ -30,6 +30,8 @@ function bindTaskProgress(task, generation) {
     if (files.length > 5) { message.textContent = "一次最多 5 张图片"; return; }
     const data = new FormData(form);
     data.delete("progress_slider");
+    // No selected screenshots: don't submit the browser's empty file placeholder.
+    if (!files.length) data.delete("files");
     const button = form.querySelector('button[type="submit"]');
     button.disabled = true;
     message.textContent = "正在保存进度…";
