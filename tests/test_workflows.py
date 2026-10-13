@@ -61,6 +61,11 @@ class TestWorkflows(unittest.TestCase):
             'password': 'ci-review-password', 'role': 'manager',
         })
         self.assertTrue(reviewer_created.get_json()['ok'])
+        grant = self.admin.post(
+            f"/api/admin/permissions/{reviewer_created.get_json()['id']}",
+            json={"permissions": ["funds.review"]},
+        )
+        self.assertEqual(grant.status_code, 200, grant.get_json())
         reviewer = app_module.app.test_client()
         reviewer_login = reviewer.post('/login', json={
             'username': 'chy', 'password': 'ci-review-password',

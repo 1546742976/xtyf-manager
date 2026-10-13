@@ -12,6 +12,46 @@ os.environ["PROGRESS_SECRET_PATH"] = os.path.join(_TEMP.name, "secret.key")
 os.environ["PROGRESS_INITIAL_ADMIN_PASSWORD"] = "ci-test-password-only"
 
 import app as app_module  # noqa: E402
+from flask.testing import FlaskClient
+from werkzeug.datastructures import Headers
+
+
+class SecurityAwareTestClient(FlaskClient):
+    """Exercise real CSRF + first-login password change in legacy API tests.
+
+    Tests intentionally keep the same password to avoid reworking unrelated
+    fixtures: change to a temporary password, then rotate back via the public
+    authenticated API. The application security checks are never bypassed.
+    """
+
+    auto_onboard = True
+
+    def open(self, *args, **kwargs):
+        path = args[0] if args else kwargs.get("path", "")
+        method = str(kwargs.get("method", "GET")).upper()
+        if method not in {"GET", "HEAD", "OPTIONS"}:
+            headers = Headers(kwargs.get("headers"))
+            if "X-CSRF-Token" not in headers:
+                token_response = super().open("/api/csrf", method="GET")
+                token = token_response.get_json()["csrf_token"]
+                headers["X-CSRF-Token"] = token
+            kwargs["headers"] = headers
+        response = super().open(*args, **kwargs)
+        if (self.auto_onboard and path == "/login" and method == "POST"
+                and response.is_json and response.get_json().get("ok")
+                and response.get_json().get("must_change_password")):
+            password = (kwargs.get("json") or {}).get("password")
+            if password is None:
+                raise AssertionError("test login should pass JSON credentials")
+            temporary = password + "-temporary-rotation"
+            first = self.post("/api/password", json={"old": password, "new": temporary})
+            second = self.post("/api/password", json={"old": temporary, "new": password})
+            if not (first.get_json().get("ok") and second.get_json().get("ok")):
+                raise AssertionError("test fixture failed first-login password rotation")
+        return response
+
+
+app_module.app.test_client_class = SecurityAwareTestClient
 
 
 class TestManagementAPI(unittest.TestCase):

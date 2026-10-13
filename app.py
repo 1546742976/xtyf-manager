@@ -53,14 +53,48 @@ PRIORITIES = ["高", "中", "低"]
 ROLE_NAMES = {"admin": "管理员", "manager": "项管", "member": "成员"}
 # ---- 会话密钥：读取 secret.key，不存在则生成 64 位随机串并持久化 ----
 def _load_secret():
-    if os.path.exists(SECRET_PATH):
-        with open(SECRET_PATH, "r", encoding="utf-8") as f:
-            value = f.read().strip()
-            if value:
-                return value
+    """Create the session-signing key privately; never overwrite an existing key.
+
+    An empty or symlinked key file is a startup error, not a reason to silently
+    change keys and invalidate everybody's sessions. O_EXCL prevents startup
+    races between Gunicorn processes from replacing one another's key.
+    """
+    import time
+
+    def read_existing():
+        if os.path.islink(SECRET_PATH):
+            raise RuntimeError("会话密钥路径不能是符号链接")
+        with open(SECRET_PATH, "r", encoding="utf-8") as stream:
+            value = stream.read().strip()
+        if value and os.name == "posix":
+            os.chmod(SECRET_PATH, 0o600)
+        return value
+
+    if os.path.lexists(SECRET_PATH):
+        existing = read_existing()
+        if not existing:
+            raise RuntimeError("会话密钥文件为空，请检查密钥备份后人工处理")
+        return existing
+
     value = secrets.token_hex(32)
-    with open(SECRET_PATH, "w", encoding="utf-8") as f:
-        f.write(value)
+    try:
+        fd = os.open(SECRET_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        # Another process is initializing the key. Wait for the complete
+        # value rather than generating/replacing the file.
+        for _ in range(100):
+            try:
+                existing = read_existing()
+            except FileNotFoundError:
+                existing = ""
+            if len(existing) == 64:
+                return existing
+            time.sleep(0.05)
+        raise RuntimeError("会话密钥初始化未完成，请检查密钥文件")
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(value)
+        stream.flush()
+        os.fsync(stream.fileno())
     return value
 
 

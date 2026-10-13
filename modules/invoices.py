@@ -46,6 +46,7 @@ from common import ROLE_NAMES, current_user, get_db
 from modules.security import has_permission
 from modules import invoice_jobs
 from modules.invoice_storage import InvoiceFileLock
+from modules.csv_security import safe_csv_cell
 from modules.money import MAX_CENTS, to_cents, format_cents, decimal_amount, money_fields, money_json
 
 BASE_DIR = os.environ.get(
@@ -1829,17 +1830,28 @@ def api_open_folder():
 # ---- 导出 CSV（管理）----
 def api_export():
     invoices = scan_invoices()
-    lines = ['月份,文件夹,状态,提交人,序号,类别,金额,金额来源,供应商,开票日期,报销日期,备注,发票号码,文件名,文件路径']
+    output = io.StringIO(newline='')
+    writer = csv.writer(output)
+    writer.writerow(['月份', '文件夹', '状态', '提交人', '序号', '类别', '金额', '金额来源',
+                     '供应商', '开票日期', '报销日期', '备注', '发票号码', '文件名', '文件路径'])
     for i in invoices:
         row = [i['month'], i['folder'], i['status'], i.get('submitter', ''),
                i['seq'], i['category'], str(i['amount']), i['source'],
                i['vendor'], i['date'], i.get('reimbursed_date', ''),
                i.get('notes', ''), i.get('invoice_number', ''),
                i['filename'], i.get('rel_path', '')]
-        lines.append(','.join(f'"{str(c).replace(chr(34), chr(39))}"' for c in row))
+        writer.writerow([safe_csv_cell(value) for value in row])
     csv_path = os.path.join(BASE_DIR, '发票汇总.csv')
-    with open(csv_path, 'w', encoding='utf-8-sig') as f:
-        f.write('\n'.join(lines))
+    fd, tmp_path = tempfile.mkstemp(prefix='.invoice-export-', suffix='.tmp', dir=BASE_DIR)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8-sig', newline='') as stream:
+            stream.write(output.getvalue())
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp_path, csv_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
     return jsonify({'success': True, 'path': csv_path, 'count': len(invoices)})
 
 
@@ -1852,13 +1864,13 @@ def api_export_download():
     writer.writerow(['月份', '文件夹', '状态', '提交人', '序号', '类别', '金额', '金额来源',
                      '供应商', '开票日期', '报销日期', '备注', '发票号码', '文件名', '文件路径'])
     for inv in scan_invoices():
-        writer.writerow([
+        writer.writerow([safe_csv_cell(value) for value in (
             inv.get('month', ''), inv.get('folder', ''), inv.get('status', ''),
             inv.get('submitter', ''), inv.get('seq', ''), inv.get('category', ''),
             inv.get('amount', 0), inv.get('source', ''), inv.get('vendor', ''),
             inv.get('date', ''), inv.get('reimbursed_date', ''), inv.get('notes', ''),
             inv.get('invoice_number', ''), inv.get('filename', ''), inv.get('rel_path', ''),
-        ])
+        )])
     buffer = io.BytesIO(output.getvalue().encode('utf-8-sig'))
     buffer.seek(0)
     return send_file(buffer, mimetype='text/csv; charset=utf-8', as_attachment=True,

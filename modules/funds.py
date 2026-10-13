@@ -23,6 +23,7 @@ from flask import Blueprint, jsonify, redirect, render_template, request, send_f
 from common import current_user
 from modules.security import has_permission
 from modules.money import to_cents, format_cents, money_fields, money_json
+from modules.csv_security import safe_csv_cell
 from modules.funds_migrations import migrate as migrate_funds_money
 from modules.invoice_storage import InvoiceFileLock
 
@@ -54,6 +55,30 @@ def can_review(user=None):
     """Independent permission bound to the immutable member ID."""
     user = user or current_user()
     return bool(user and user.get("role") in ("admin", "manager") and has_permission("funds.review", user))
+
+
+def _validated_count(value):
+    """Accept only non-negative integral invoice counts; do not silently truncate."""
+    if isinstance(value, bool):
+        raise ValueError("发票数目必须是非负整数")
+    if isinstance(value, int):
+        count = value
+    elif isinstance(value, str) and value.isascii() and value.isdecimal():
+        count = int(value)
+    else:
+        # money_json returns Decimal for JSON floating-point literals.
+        from decimal import Decimal
+        if not isinstance(value, Decimal) or not value.is_finite() or value != value.to_integral_value():
+            raise ValueError("发票数目必须是非负整数")
+        count = int(value)
+    if not 0 <= count <= 2**63 - 1:
+        raise ValueError("发票数目必须是非负整数")
+    return count
+
+
+def _valid_text_fields(data):
+    return all(isinstance(data.get(field, ""), str) for field in
+               ("category", "source_dest", "applicant", "handler", "notes"))
 
 
 def valid_record_date(value):
@@ -270,11 +295,11 @@ def add_record():
     except ValueError as exc:
         return jsonify({"code": 1, "msg": str(exc)}), 400
     try:
-        invoice_count = int(data.get("invoice_count", 0))
-        if invoice_count < 0:
-            raise ValueError()
+        invoice_count = _validated_count(data.get("invoice_count", 0))
     except (TypeError, ValueError):
         return jsonify({"code": 1, "msg": "发票数目必须是非负整数"}), 400
+    if not _valid_text_fields(data):
+        return jsonify({"code": 1, "msg": "资金文字字段必须是字符串"}), 400
 
     rd = data.get("record_date", "")
     if not valid_record_date(rd):
@@ -330,6 +355,9 @@ def update_record(rid):
     for key in allowed:
         if key in data:
             candidate[key] = data[key]
+    if not _valid_text_fields(candidate):
+        conn.close()
+        return jsonify({"code": 1, "msg": "资金文字字段必须是字符串"}), 400
     if candidate["record_type"] not in ("进", "出"):
         conn.close()
         return jsonify({"code": 1, "msg": "资金类型不合法"}), 400
@@ -339,9 +367,7 @@ def update_record(rid):
     try:
         amount_cents = to_cents(candidate["amount"], positive=True)
         candidate["amount"] = format_cents(amount_cents)
-        candidate["invoice_count"] = int(candidate["invoice_count"])
-        if candidate["invoice_count"] < 0:
-            raise ValueError()
+        candidate["invoice_count"] = _validated_count(candidate["invoice_count"])
     except (ValueError, TypeError):
         conn.close()
         return jsonify({"code": 1, "msg": "金额或发票数目不合法"}), 400
@@ -388,6 +414,8 @@ def review_record(rid):
     if not can_review(user):
         return jsonify({"code": 403, "msg": "只有指定资金审核人可以审核"}), 403
     conn = get_funds_db()
+    # Serialize review with edits/deletes; a stale read must never approve a later edit.
+    conn.execute("BEGIN IMMEDIATE")
     row = conn.execute("SELECT id, review_status FROM records WHERE id=?", (rid,)).fetchone()
     if row is None:
         conn.close()
@@ -439,9 +467,10 @@ def export_csv():
     for r in rows:
         d = dict(r)
         review = "待审核" if (d.get("review_status") or "") == "待审核" else "已审核"
-        w.writerow([d["id"], d["record_type"], format_cents(d["amount_cents"]), d["category"],
-                    d["source_dest"], d["applicant"], d["invoice_count"],
-                    d["handler"], d["record_date"], review, d["notes"], d["created_at"]])
+        w.writerow([safe_csv_cell(value) for value in
+                    (d["id"], d["record_type"], format_cents(d["amount_cents"]), d["category"],
+                     d["source_dest"], d["applicant"], d["invoice_count"],
+                     d["handler"], d["record_date"], review, d["notes"], d["created_at"])])
     out.seek(0)
     buf = io.BytesIO()
     buf.write(out.getvalue().encode("utf-8-sig"))
