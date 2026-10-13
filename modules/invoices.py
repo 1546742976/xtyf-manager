@@ -48,6 +48,7 @@ from modules import invoice_jobs
 from modules.invoice_storage import InvoiceFileLock
 from modules.csv_security import safe_csv_cell
 from modules.money import MAX_CENTS, to_cents, format_cents, decimal_amount, money_fields, money_json
+from modules.invoice_validation import validate_fields
 
 BASE_DIR = os.environ.get(
     'INVOICES_DIR',
@@ -1061,6 +1062,8 @@ def api_owners():
 # ---- 修改发票：状态/提交人/备注/类别/报销日期/标签/发票号（管理）----
 def api_invoice_update():
     data = request.get_json(silent=True) or {}
+    if error := validate_fields(data):
+        return jsonify(success=False, error=error), 400
     inv_id = data.get('id', '')
     if not isinstance(inv_id, str) or not _is_safe_rel(inv_id):
         return jsonify({'success': False, 'error': '无效发票 ID'}), 400
@@ -1108,6 +1111,8 @@ def api_invoice_batch():
         return jsonify({'success': False, 'error': '批量参数格式无效'}), 400
     if not updates or set(updates) - allowed:
         return jsonify({'success': False, 'error': '存在不允许修改的字段'}), 400
+    if error := validate_fields(updates):
+        return jsonify(success=False, error=error), 400
     if 'status' in updates and updates['status'] not in STATUS_NAMES:
         return jsonify({'success': False, 'error': '无效报销状态'}), 400
     if 'submitter' in updates or 'submitter_id' in updates:
@@ -1549,6 +1554,8 @@ def api_upload_cleanup():
 # ---- 入库确认：成员提交人/状态被服务端强制为 本人 / 未报销 ----
 def api_upload_confirm():
     data = money_json()
+    if error := validate_fields(data):
+        return jsonify(success=False, error=error), 400
     tmp_rel = data.get('tmp_path', '')
     tmp_path = _own_temp_path(tmp_rel)
     if not tmp_path:
@@ -1589,7 +1596,7 @@ def api_upload_confirm():
         if dups:
             return jsonify({
                 'success': False, 'error': '存在重复发票',
-                'duplicates': dups, 'code': 'DUPLICATE',
+                'duplicates': _visible_duplicates(dups), 'code': 'DUPLICATE',
             })
 
     target_dir = os.path.join(BASE_DIR, month, status)
@@ -1649,6 +1656,9 @@ def api_upload_confirm_batch():
     for item in items:
         if not isinstance(item, dict):
             results.append({'file': '', 'status': 'error', 'reason': '条目格式错误'})
+            continue
+        if error := validate_fields(item):
+            results.append({'file': item.get('original_name', ''), 'status': 'error', 'reason': error})
             continue
         tmp_rel = item.get('tmp_path', '')
         tmp_path = _own_temp_path(tmp_rel)

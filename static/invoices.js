@@ -62,9 +62,9 @@ var sc=App.selected[inv.id]?' row-selected':'';
 if(dupPaths.length&&dupPaths.indexOf(inv.rel_path)>=0)sc+=' row-dup';
 var ah=Money.compare(inv.amount,'0.00')>0?'\xA5'+Money.format(inv.amount):'<span class="amount-col missing">\xA50.00</span>';
 var st=inv.source==='人工确认'?'<span class="badge tag-filename">人工确认</span>':inv.source==='PDF'?'<span class="badge tag-pdf">PDF</span>':inv.source==='PDF(\u7f13\u5b58)'?'<span class="badge tag-pdf">PDF\u7f13\u5b58</span>':inv.source==='文件名'?'<span class="badge tag-filename">文件名</span>':'<span class="badge tag-unknown">待识别</span>';
-var eid = jsEscape(inv.id);
-var erp = encodeURIComponent(inv.rel_path||'');
-var subHtml=inv.submitter?'<span class="clickable" onclick="DetailModal.open(\''+eid+'\')">'+escHtml(inv.submitter)+'</span>':'<span style="color:#ccc;cursor:pointer" onclick="DetailModal.open(\''+eid+'\')">-</span>';
+var eid = escHtml(inv.id);
+var erp = escHtml(inv.rel_path||'');
+var subHtml=inv.submitter?'<span class="clickable" data-invoice-detail="'+eid+'">'+escHtml(inv.submitter)+'</span>':'<span style="color:#ccc;cursor:pointer" data-invoice-detail="'+eid+'">-</span>';
 if(inv.ownership_unresolved)subHtml+=' <small>待确认</small>';else subHtml+=' <small>#'+Number(inv.submitter_id)+'</small>';
 var invNum=inv.invoice_number?('<span class="clickable" title="'+escHtml(inv.invoice_number)+'">'+escHtml(inv.invoice_number.substring(inv.invoice_number.length-8))+'</span>'):'-';
 var scol = inv.status==='已报销'?'#e6f4ea':inv.status==='正在报销'?'#fef7e0':'#fce8e6';
@@ -72,18 +72,33 @@ var unsel = inv.status==='未报销'?' selected':'';
 var insel = inv.status==='正在报销'?' selected':'';
 var resel = inv.status==='已报销'?' selected':'';
 return '<tr class="'+sc+'" data-id="'+escHtml(inv.id)+'">'+
-'<td class="col-check"><input type="checkbox" '+(App.selected[inv.id]?'checked':'')+' onclick="toggleOne(\''+eid+'\',this.checked)"></td>'+
+'<td class="col-check"><input type="checkbox" '+(App.selected[inv.id]?'checked':'')+' data-invoice-select="'+eid+'"></td>'+
 '<td><span class="month-label">'+escHtml(inv.month)+'</span></td>'+
 '<td>'+escHtml(inv.date||'-')+'</td>'+
-'<td>'+(IS_FINANCE?'<select class="inline-select" onchange="quickSetStatus(\''+eid+'\',this.value)" style="background:'+scol+'"><option value="\u672a\u62a5\u9500"'+unsel+'>\u672a\u62a5\u9500</option><option value="\u6b63\u5728\u62a5\u9500"'+insel+'>\u6b63\u5728\u62a5\u9500</option><option value="\u5df2\u62a5\u9500"'+resel+'>\u5df2\u62a5\u9500</option></select>':'<span class="badge" style="background:'+scol+'">'+inv.status+'</span>')+'</td>'+
+'<td>'+(IS_FINANCE?'<select class="inline-select" data-invoice-status="'+eid+'" style="background:'+scol+'"><option value="\u672a\u62a5\u9500"'+unsel+'>\u672a\u62a5\u9500</option><option value="\u6b63\u5728\u62a5\u9500"'+insel+'>\u6b63\u5728\u62a5\u9500</option><option value="\u5df2\u62a5\u9500"'+resel+'>\u5df2\u62a5\u9500</option></select>':'<span class="badge" style="background:'+scol+'">'+inv.status+'</span>')+'</td>'+
 '<td>'+subHtml+'</td>'+
 '<td>'+escHtml(inv.category||'-')+'</td>'+
-'<td><span class="clickable" onclick="openFile(\''+erp+'\')">'+escHtml(inv.vendor)+'</span></td>'+
+'<td><span class="clickable" data-invoice-file="'+erp+'">'+escHtml(inv.vendor)+'</span></td>'+
 '<td class="amount-col">'+ah+'</td>'+
 '<td style="font-size:10px">'+invNum+'</td>'+
-'<td><button class="btn-sm" onclick="openFile(\''+erp+'\')">\u6253\u5f00</button> <button class="btn-sm" onclick="DetailModal.open(\''+eid+'\')">'+(IS_FINANCE?'\u7f16\u8f91':'\u67e5\u770b')+'</button></td></tr>';
+'<td><button class="btn-sm" data-invoice-file="'+erp+'">\u6253\u5f00</button> <button class="btn-sm" data-invoice-detail="'+eid+'">'+(IS_FINANCE?'\u7f16\u8f91':'\u67e5\u770b')+'</button></td></tr>';
 }).join('');document.getElementById('selectAll').checked=false}
 renderPagination(data.total,page);updateBatchBar()
+}
+function bindInvoiceTable(){
+var table=document.getElementById('invoiceTableBody');
+table.addEventListener('click',function(event){
+  var file=event.target.closest('[data-invoice-file]');
+  var detail=event.target.closest('[data-invoice-detail]');
+  if(file)openFile(file.dataset.invoiceFile);
+  else if(detail)DetailModal.open(detail.dataset.invoiceDetail);
+});
+table.addEventListener('change',function(event){
+  var select=event.target.closest('[data-invoice-select]');
+  var status=event.target.closest('[data-invoice-status]');
+  if(select)toggleOne(select.dataset.invoiceSelect,select.checked);
+  else if(status)quickSetStatus(status.dataset.invoiceStatus,status.value);
+});
 }
 function applyFilters(){loadInvoices(1);loadStats()}
 function debounceSearch(){clearTimeout(App.searchTimer);App.searchTimer=setTimeout(function(){loadInvoices(1)},400)}
@@ -475,6 +490,7 @@ showToast('PDF金额刷新完成','success');
 
 window.IS_FINANCE=window.IS_FINANCE||false;window.ME_NAME=window.ME_NAME||'';
 if(!window.IS_FINANCE){document.body.classList.add('member');document.querySelectorAll('#detailModal input,#detailModal select,#detailModal textarea').forEach(function(el){el.disabled=true});}
+bindInvoiceTable();
 loadStats().then(function(){loadInvoices()});
 if(window.IS_FINANCE)InvoiceJobs.load();
 window.addEventListener('beforeunload',function(){InvoiceJobs.active.forEach(function(entry){entry.source.close()})});

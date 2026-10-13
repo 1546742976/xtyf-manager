@@ -25,6 +25,8 @@ from modules.security import has_permission
 from modules.money import to_cents, format_cents, money_fields, money_json
 from modules.csv_security import safe_csv_cell
 from modules.funds_migrations import migrate as migrate_funds_money
+from modules.funds_revisions import migrate as migrate_funds_revisions
+from modules.task_validation import InvalidIdError, parse_id
 from modules.invoice_storage import InvoiceFileLock
 
 # ---- 数据目录：默认 <项目>/data/funds，可用环境变量 FUNDS_DIR 覆盖 ----
@@ -182,6 +184,7 @@ def init_funds_db():
     conn = sqlite3.connect(FUNDS_DB, timeout=30)
     try:
         migrate_funds_money(conn)
+        migrate_funds_revisions(conn)
     finally:
         conn.close()
     sync_txt()
@@ -334,7 +337,7 @@ def add_record():
     conn.close()
     sync_txt()
     return jsonify({"code": 0, "msg": "添加成功", "id": rid,
-                    "applicant": applicant, "review_status": review_status, **money_fields(amount)})
+                    "applicant": applicant, "review_status": review_status, "version": 1, **money_fields(amount)})
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["PUT"])
@@ -381,7 +384,7 @@ def update_record(rid):
                if candidate[key] != original[key]}
     if not changes:
         conn.close()
-        return jsonify({"code": 0, "msg": "内容未变化", **money_fields(amount_cents)})
+        return jsonify({"code": 0, "msg": "内容未变化", "version": original["version"], **money_fields(amount_cents)})
     if "amount" in changes:
         changes.pop("amount")
         changes["amount_cents"] = amount_cents
@@ -389,11 +392,12 @@ def update_record(rid):
     if original["review_status"] == "已审核":
         changes.update(review_status="待审核", reviewed_by="", reviewed_at="")
     sets = ", ".join(f"{key}=?" for key in changes)
-    conn.execute(f"UPDATE records SET {sets} WHERE id=?", [*changes.values(), rid])
+    conn.execute(f"UPDATE records SET {sets},version=version+1 WHERE id=?", [*changes.values(), rid])
     conn.commit()
     conn.close()
     sync_txt()
-    return jsonify({"code": 0, "msg": "已更新", "review_required": "review_status" in changes, **money_fields(amount_cents)})
+    return jsonify({"code": 0, "msg": "已更新", "version": original["version"] + 1,
+                    "review_required": "review_status" in changes, **money_fields(amount_cents)})
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["DELETE"])
@@ -413,24 +417,32 @@ def review_record(rid):
     user = current_user()
     if not can_review(user):
         return jsonify({"code": 403, "msg": "只有指定资金审核人可以审核"}), 403
+    data = request.get_json(silent=True)
+    try:
+        expected = parse_id(data.get('version') if isinstance(data, dict) else None, 'version', False)
+    except (InvalidIdError, ValueError):
+        return jsonify(code=1, msg='审核必须携带有效版本号，请刷新记录'), 400
     conn = get_funds_db()
     # Serialize review with edits/deletes; a stale read must never approve a later edit.
     conn.execute("BEGIN IMMEDIATE")
-    row = conn.execute("SELECT id, review_status FROM records WHERE id=?", (rid,)).fetchone()
+    row = conn.execute("SELECT id, review_status, version FROM records WHERE id=?", (rid,)).fetchone()
     if row is None:
         conn.close()
-        return jsonify({"code": 1, "msg": "记录不存在"})
+        return jsonify({"code": 1, "msg": "记录不存在"}), 404
+    if row['version'] != expected:
+        conn.close()
+        return jsonify(code=1, msg='记录已变更，请刷新并重新确认后审核'), 409
     if row["review_status"] != "待审核":
         conn.close()
         return jsonify({"code": 1, "msg": "该记录无需重复审核"}), 400
     conn.execute(
-        "UPDATE records SET review_status='已审核', reviewed_by=?, reviewed_at=? WHERE id=?",
-        (user["name"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rid),
+        "UPDATE records SET review_status='已审核', reviewed_by=?, reviewed_at=?,version=version+1 WHERE id=? AND version=?",
+        (user["name"], datetime.now().strftime("%Y-%m-%d %H:%M:%S"), rid, expected),
     )
     conn.commit()
     conn.close()
     sync_txt()
-    return jsonify({"code": 0, "msg": "已审核"})
+    return jsonify({"code": 0, "msg": "已审核", "version": expected + 1})
 
 
 @funds_bp.route("/api/pending_review")
