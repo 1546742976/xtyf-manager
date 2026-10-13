@@ -140,3 +140,34 @@ test("member management: multi-group filters, inactive users and role UI", () =>
   assert.match(roleSelect(members[0]), /disabled/);
   assert.doesNotMatch(roleSelect(members[1]), /data-role-id="6" disabled/);
 });
+
+test("archived catalog entries are dictionary-only choices without destroying saved assignments", () => {
+  const page = browser(["app.js", "manage-tasks.js", "account.js"]);
+  const items = [
+    { id: 1, name: "被删除的组", is_active: 0 },
+    { id: 2, name: "当前有效组", is_active: 1 },
+  ];
+  const dropdown = page.value("options")(items, 1, "全部组别");
+  assert.doesNotMatch(dropdown, /被删除的组|value="1"/);
+  assert.match(dropdown, /当前有效组/);
+  assert.equal(page.value("activeCatalogFilter")(items, "1"), "");
+  assert.equal(page.value("activeCatalogFilter")(items, "2"), "2");
+
+  const choices = page.value("catalogChoices")("group_ids", items, [1, 2]);
+  assert.doesNotMatch(choices, />被删除的组/);
+  assert.match(choices, /name="group_ids" value="1" checked hidden/);
+  assert.match(choices, />当前有效组/);
+  assert.doesNotMatch(page.value("catalogChoices")("group_ids", items, []), /value="1"/);
+
+  const host = { innerHTML: "" };
+  page.value("accountChoices")(host, "project_ids", items, [1]);
+  assert.doesNotMatch(host.innerHTML, />被删除的组/);
+  assert.match(host.innerHTML, /name="project_ids" value="1" checked hidden/);
+  assert.match(host.innerHTML, />当前有效组/);
+
+  // The catalog itself continues to show history and deletion status.
+  assert.match(page.value("catalogPanel")("projects", items), /被删除的组（已删除）/);
+  assert.equal(page.value("retainArchivedCatalogSelection")("", 1, items, false), "1");
+  assert.equal(page.value("retainArchivedCatalogSelection")("", 1, items, true), "");
+  assert.equal(page.value("retainArchivedCatalogSelection")("2", 1, items, true), "2");
+});

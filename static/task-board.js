@@ -110,6 +110,7 @@ function renderLanes(tasks) {
   );
 }
 function fillBoardFilters() {
+  state.filters.project = activeCatalogFilter(state.projects, state.filters.project);
   const project = document.getElementById("f-project"),
     status = document.getElementById("f-status");
   if (project) {

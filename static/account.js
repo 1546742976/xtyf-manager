@@ -25,9 +25,12 @@ function accountEscape(value) {
 
 function accountChoices(host, name, choices, selected) {
   const selectedIds = new Set((selected || []).map(Number));
-  host.innerHTML = choices.map((item) =>
-    `<label class="choice-item"><input type="checkbox" name="${name}" value="${Number(item.id)}" ${selectedIds.has(Number(item.id)) ? "checked" : ""} ${item.is_active === 0 && !selectedIds.has(Number(item.id)) ? "disabled" : ""}><span>${accountEscape(item.name)}${item.is_active === 0 ? "（已删除）" : ""}</span></label>`
-  ).join("") || '<span class="muted">暂无可选组别</span>';
+  const active = choices.filter((item) => item.is_active !== 0);
+  const historical = choices.filter((item) => item.is_active === 0 && selectedIds.has(Number(item.id)))
+    .map((item) => `<input type="checkbox" name="${name}" value="${Number(item.id)}" checked hidden>`).join("");
+  host.innerHTML = (active.map((item) =>
+    `<label class="choice-item"><input type="checkbox" name="${name}" value="${Number(item.id)}" ${selectedIds.has(Number(item.id)) ? "checked" : ""}><span>${accountEscape(item.name)}</span></label>`
+  ).join("") || '<span class="muted">暂无可选组别</span>') + historical;
 }
 
 function accountSelected(form, name) {

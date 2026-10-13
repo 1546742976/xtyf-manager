@@ -73,7 +73,11 @@ function bindTaskForm(task, generation) {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(form));
     payload.participant_ids = checkedValues(form, "participant_ids");
-        payload.predecessor_ids = checkedValues(form, "predecessor_ids");
+    payload.predecessor_ids = checkedValues(form, "predecessor_ids");
+    const projectSelect = form.querySelector('[name="project_id"]');
+    if (projectSelect) payload.project_id = retainArchivedCatalogSelection(
+      projectSelect.value, task.project_id, state.projects, projectSelect.dataset.edited === "1",
+    );
     payload.version = Number(payload.version);
     if (!payload.owner_id && payload.participant_ids.length) {
       form.querySelector("[name=owner_id]").setCustomValidity("选择参与成员后必须指定负责人");
@@ -94,6 +98,7 @@ function bindTaskForm(task, generation) {
     }
   });
   form.querySelector("[name=owner_id]")?.addEventListener("change", (event) => event.target.setCustomValidity(""));
+  form.querySelector('[name="project_id"]')?.addEventListener("change", (event) => { event.target.dataset.edited = "1"; });
 }
 function bindTaskActions(task, generation) {
   document.querySelector("[data-close]").addEventListener("click", hideModal);

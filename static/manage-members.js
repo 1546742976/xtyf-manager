@@ -21,14 +21,16 @@ function filteredMembers() {
 
 function renderMemberChoices() {
   const host = document.getElementById("member-create-groups");
-  if (host) host.innerHTML = choiceGrid("group_ids", state.groups.filter((x) => x.is_active !== 0));
+  if (host) host.innerHTML = catalogChoices("group_ids", state.groups);
   const projects = document.getElementById("member-create-projects");
-  if (projects) projects.innerHTML = choiceGrid("project_ids", state.projects.filter((x) => x.is_active !== 0));
+  if (projects) projects.innerHTML = catalogChoices("project_ids", state.projects);
   const imports = document.getElementById("member-import-projects");
   if (imports) {
     const selected = checkedValues(imports.closest("form"), "project_ids");
-    imports.innerHTML = choiceGrid("project_ids", state.projects.filter((x) => x.is_active !== 0), selected);
+    imports.innerHTML = catalogChoices("project_ids", state.projects, selected);
   }
+  memberFilters.group = activeCatalogFilter(state.groups, memberFilters.group);
+  memberFilters.project = activeCatalogFilter(state.projects, memberFilters.project);
   const filter = document.getElementById("m-filter-group");
   if (filter) filter.innerHTML = options(state.groups, memberFilters.group, "全部专业组");
   const projectFilter = document.getElementById("m-filter-project");
@@ -115,8 +117,8 @@ function editMemberProfile(member) {
         : `<label>系统角色<select name="role">${roleOptions}</select></label>
            <label>账号状态<select name="is_active"><option value="1" ${member.is_active ? "selected" : ""}>启用</option><option value="0" ${!member.is_active ? "selected" : ""}>停用</option></select></label>
            <label class="span-2">重设密码（留空保持不变）<input name="new_password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位"></label>`}
-      <fieldset class="span-2"><legend>专业组（可多选）</legend>${choiceGrid("group_ids", state.groups, member.group_ids || [])}</fieldset>
-      <fieldset class="span-2"><legend>造车组别（可多选）</legend>${choiceGrid("project_ids", state.projects, member.project_ids || [])}</fieldset>
+      <fieldset class="span-2"><legend>专业组（可多选）</legend>${catalogChoices("group_ids", state.groups, member.group_ids || [])}</fieldset>
+      <fieldset class="span-2"><legend>造车组别（可多选）</legend>${catalogChoices("project_ids", state.projects, member.project_ids || [])}</fieldset>
       <p class="form-message span-2" role="alert"></p>
       <div class="modal-actions span-2"><button class="btn primary" type="submit">保存全部修改</button></div>
     </form>`,
@@ -152,7 +154,7 @@ function editMemberProfile(member) {
 
 function editMemberProjects(member) {
   showModal(
-    `<div class="modal-head"><h2>编辑 ${esc(member.name)} 的造车组别</h2><button class="btn ghost sm" type="button" data-close>关闭</button></div><form id="member-projects-form"><fieldset><legend>参加的造车组别（可多选）</legend>${choiceGrid("project_ids", state.projects, member.project_ids || [])}</fieldset><p class="form-message" role="alert"></p><div class="modal-actions"><button class="btn primary">保存组别</button></div></form>`,
+    `<div class="modal-head"><h2>编辑 ${esc(member.name)} 的造车组别</h2><button class="btn ghost sm" type="button" data-close>关闭</button></div><form id="member-projects-form"><fieldset><legend>参加的造车组别（可多选）</legend>${catalogChoices("project_ids", state.projects, member.project_ids || [])}</fieldset><p class="form-message" role="alert"></p><div class="modal-actions"><button class="btn primary">保存组别</button></div></form>`,
     `编辑 ${member.name} 的造车组别`,
   );
   document.querySelector("[data-close]").addEventListener("click", hideModal);
@@ -170,7 +172,7 @@ function editMemberProjects(member) {
 
 function editMemberGroups(member) {
   showModal(
-    `<div class="modal-head"><h2>编辑 ${esc(member.name)} 的专业组</h2><button class="btn ghost sm" type="button" data-close>关闭</button></div><form id="member-groups-form"><fieldset><legend>专业组（可多选）</legend>${choiceGrid("group_ids", state.groups, member.group_ids || [])}</fieldset><p class="form-message" role="alert"></p><div class="modal-actions"><button class="btn primary">保存组别</button></div></form>`,
+    `<div class="modal-head"><h2>编辑 ${esc(member.name)} 的专业组</h2><button class="btn ghost sm" type="button" data-close>关闭</button></div><form id="member-groups-form"><fieldset><legend>专业组（可多选）</legend>${catalogChoices("group_ids", state.groups, member.group_ids || [])}</fieldset><p class="form-message" role="alert"></p><div class="modal-actions"><button class="btn primary">保存组别</button></div></form>`,
     `编辑 ${member.name} 的专业组`,
   );
   document.querySelector("[data-close]").addEventListener("click", hideModal);
