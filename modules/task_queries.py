@@ -58,6 +58,30 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
     group_map = _relation_map(db, "task_groups", "group_id", task_ids)
     participant_map = _relation_map(db, "task_participants", "member_id", task_ids)
     predecessor_map = _relation_map(db, "task_dependencies", "predecessor_id", task_ids)
+    # Most recent progress event and its live screenshots are included in board data.
+    latest_progress: dict[int, JsonObject] = {}
+    if task_ids:
+        placeholders = ",".join("?" for _ in task_ids)
+        updates = db.execute(
+            "SELECT p.id,p.task_id,p.actor_name,p.progress,p.note,p.created_at "
+            "FROM task_progress_updates p "
+            "WHERE p.task_id IN (" + placeholders + ") "
+            "AND p.id IN (SELECT MAX(id) FROM task_progress_updates GROUP BY task_id)",
+            task_ids,
+        ).fetchall()
+        for update in updates:
+            latest_progress[int(update["task_id"])] = dict(update) | {"image_ids": []}
+        if updates:
+            update_ids = [int(update["id"]) for update in updates]
+            image_placeholders = ",".join("?" for _ in update_ids)
+            for image in db.execute(
+                "SELECT progress_update_id,id FROM task_attachments "
+                "WHERE progress_update_id IN (" + image_placeholders + ") AND deleted_at IS NULL "
+                "ORDER BY id", update_ids,
+            ).fetchall():
+                for event in latest_progress.values():
+                    if int(event["id"]) == int(image["progress_update_id"]):
+                        event["image_ids"].append(int(image["id"]))
     by_id = {int(row["id"]): dict(row) for row in rows}
     today = datetime.now().date()
     tasks: list[JsonObject] = []
@@ -75,6 +99,7 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
         task["project"] = project_names.get(int(project_id), "") if project_id is not None else ""
         task["participant_ids"] = participant_map[task_id]
         task["predecessor_ids"] = predecessor_map[task_id]
+        task["latest_progress"] = latest_progress.get(task_id)
         warnings: list[str] = []
         predecessor_dates: list[str] = []
         dates_complete = bool(predecessor_map[task_id])

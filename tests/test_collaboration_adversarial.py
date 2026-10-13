@@ -119,7 +119,7 @@ class TestCollaborationAdversarial(unittest.TestCase):
         )
         self.assertEqual(blocked.status_code, 409)
 
-    def test_cross_task_revision_and_parent_restriction(self) -> None:
+    def test_cross_task_revision_and_parent_edit_permission(self) -> None:
         member_id, member = self._member("participant")
         parent = self._task(title="parent")
         child = self._task(title="child", owner_id=member_id, participant_ids=[member_id],
@@ -134,10 +134,10 @@ class TestCollaborationAdversarial(unittest.TestCase):
             json={"version": child["version"]},
         )
         self.assertEqual(cross.status_code, 404)
-        forbidden = member.post(f"/api/task/{child['id']}", json={
+        allowed = member.post(f"/api/task/{child['id']}", json={
             "version": child["version"], "parent_id": parent["id"],
         })
-        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(allowed.status_code, 200)
         cycle = self.admin.post(f"/api/task/{parent['id']}", json={
             "version": changed["version"], "parent_id": child["id"],
         })

@@ -36,6 +36,7 @@ from modules.invoice_jobs import migrate as migrate_invoice_jobs
 from modules.discussions import discussions_bp
 from modules.task_api import bp as task_api_bp
 from modules.task_attachments import bp as task_attachments_bp
+from modules.task_progress import bp as task_progress_bp
 from modules.task_catalogs import bp as task_catalogs_bp
 from modules.member_profiles import bp as member_profiles_bp
 from modules.task_migrations import migrate as migrate_tasks
@@ -116,6 +117,7 @@ app.register_blueprint(task_api_bp)
 app.register_blueprint(task_catalogs_bp)
 app.register_blueprint(member_profiles_bp)
 app.register_blueprint(task_attachments_bp)
+app.register_blueprint(task_progress_bp)
 app.register_blueprint(discussions_bp, url_prefix="/discussions")
 init_security(app)
 

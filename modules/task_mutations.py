@@ -5,7 +5,7 @@ import json
 import sqlite3
 from common import now_str
 from modules.task_types import Actor, JsonObject
-from modules.task_validation import active_ids, creates_cycle, normalize_ids, parse_id, valid_tasks, validate_dates
+from modules.task_validation import active_ids, creates_combined_task_cycle, normalize_ids, parse_id, valid_tasks, validate_dates
 
 STATUSES = ("未开始", "进行中", "已完成", "阻塞", "已取消")
 PRIORITIES = ("高", "中", "低")
@@ -83,10 +83,8 @@ def _validate(
     refs = list(dict.fromkeys(refs))
     if not valid_tasks(db, refs, task_id):
         return "父任务或前置任务不存在、已删除或引用自身"
-    if task_id is not None and parent_id is not None and creates_cycle(db, "tasks", "parent_id", task_id, [int(parent_id)]):
-        return "父子任务形成循环"
-    if task_id is not None and creates_cycle(db, "task_dependencies", "predecessor_id", task_id, relations["predecessor_ids"]):
-        return "前置任务形成循环"
+    if task_id is not None and creates_combined_task_cycle(db, task_id, refs):
+        return "前置任务与父任务形成循环"
     if values.get("priority") not in PRIORITIES or values.get("status") not in STATUSES:
         return "状态或优先级不合法"
     return validate_dates(values.get("start_date"), values.get("due_date"))
@@ -122,8 +120,6 @@ def create_task(
     db: sqlite3.Connection, actor: Actor, data: JsonObject
 ) -> tuple[int | None, int | None, str | None, int]:
     db.execute("BEGIN IMMEDIATE")
-    if actor["role"] != "admin" and data.get("parent_id") not in (None, "", 0, "0"):
-        db.rollback(); return None, None, "仅管理员可设置父任务", 403
     owner_id = parse_id(data.get("owner_id"), "owner_id")
     project_id = parse_id(data.get("project_id"), "project_id")
     if "project" in data:
@@ -172,8 +168,6 @@ def update_task(
     management = actor["role"] in ("admin", "manager")
     if not management and actor["id"] != prior["owner_id"] and actor["id"] not in participant_ids:
         db.rollback(); return None, "无权限", 403
-    if "parent_id" in data and actor["role"] != "admin":
-        db.rollback(); return None, "仅管理员可设置父任务", 403
     expected = parse_id(data.get("version", prior["version"]), "version", False)
     values = {key: prior[key] for key in SCALAR_FIELDS}
     touched: set[str] = set()

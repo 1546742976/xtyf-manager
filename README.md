@@ -79,3 +79,8 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 - [当前待办](TODO.md) · [设计规范](DESIGN.md)
 
 详细实现与数据迁移行为以当前代码和测试为准，历史重构记录不再作为现行功能说明。
+
+
+### 任务进度、依赖图与 GitHub 协作
+
+任务中心恢复百分比进度，支持备注和图片历史、任务前置依赖连线图；GitHub 协作页可在站内浏览 Issues/Discussions 并根据服务器授权发布。参见 [配置及功能说明](docs/technical/任务进度依赖图与GitHub协作.md)。

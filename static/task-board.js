@@ -49,6 +49,9 @@ function taskCard(task, extraClass = "") {
     <div class="task-head"><h3>${esc(task.title)}</h3>${badge(task.status, STATUS_CLASS[task.status] || "gray")}</div>
     <div class="task-meta">${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}${meta.map((value) => `<span>${esc(value)}</span>`).join("")}</div>
     ${warnings.length ? `<p class="task-warning">依赖提醒：${esc(warnings.join("；"))}</p>` : ""}
+    <div class="task-progress-heading"><span>任务进度</span><strong>${Math.max(0, Math.min(100, Number(task.progress) || 0))}%</strong></div>
+    <div class="progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(task.progress) || 0))}"><div class="progress-inner blue" style="width:${Math.max(0, Math.min(100, Number(task.progress) || 0))}%"></div></div>
+    ${task.latest_progress ? `<div class="progress-last"><span>${esc(task.latest_progress.actor_name || "成员")} · ${esc(task.latest_progress.created_at || "")}</span>${task.latest_progress.note ? `<p>${esc(task.latest_progress.note.slice(0, 150))}</p>` : ""}${(task.latest_progress.image_ids || []).slice(0, 2).map((id) => `<img src="/api/task/${Number(task.id)}/attachments/${Number(id)}" alt="进度截图" loading="lazy">`).join("")}</div>` : ""}
     <div class="task-foot"><span>${badge(daysLeftText(task), daysLeftClass(task))}</span><span>更新 ${esc(task.updated_at)}</span></div>
   </article>`;
 }

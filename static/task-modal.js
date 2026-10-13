@@ -35,7 +35,6 @@ function taskReadOnly(task) {
 }
 function taskForm(task) {
   const editable = canEdit(task),
-    admin = state.me?.role === "admin",
     members = modalMembers(task),
     others = state.tasks.filter((item) => Number(item.id) !== Number(task.id));
   if (!editable) return taskReadOnly(task);
@@ -46,8 +45,8 @@ function taskForm(task) {
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
     <div class="grid-2"><label>开始日期<input name="start_date" type="date" value="${esc(task.start_date)}"></label><label>截止日期<input name="due_date" type="date" value="${esc(task.due_date)}"></label></div>
     ${task.suggested_start_date ? `<p class="advisory">根据前置任务计划截止日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}
-    ${admin ? `<label>父任务（仅管理员）<select name="parent_id">${options(others, task.parent_id, "无父任务")}</select></label>` : ""}
-    <fieldset><legend>前置任务（可多选）</legend>${choiceGrid("predecessor_ids", others, task.predecessor_ids || [], taskLabel)}</fieldset>
+    ${`<label>主前置任务（父任务）<select name="parent_id">${options(others, task.parent_id, "无父任务")}</select></label>`}
+    <fieldset><legend>其他前置任务（支持多选）</legend>${choiceGrid("predecessor_ids", others, task.predecessor_ids || [], taskLabel)}</fieldset>
     ${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}
     <label>说明<textarea name="detail" rows="3">${esc(task.detail)}</textarea></label><label>本次更新备注<input name="note" placeholder="选填，记录本次调整原因"></label>
     <p id="task-form-message" class="form-message" role="alert"></p><div class="modal-actions">${isManagement() ? '<button type="button" class="btn danger" data-delete-task>删除任务</button>' : ""}<button class="btn primary" type="submit">保存更新</button></div>
@@ -62,6 +61,7 @@ function taskModalShell(task) {
   return `<div class="modal-head"><div><p class="ux-eyebrow">TASK #${Number(task.id)}</p><h2>${esc(task.title)}</h2></div><button class="btn ghost sm" type="button" data-close>关闭</button></div>
     <div class="modal-info">${badge(task.status, STATUS_CLASS[task.status] || "gray")}${badge(`负责人 ${lead?.name || "未指定"}`, "outline")}<span class="muted">${esc(taskProjectName(task) || "未归属造车组别")} · 版本 ${Number(task.version || 0)}</span></div>
     ${taskForm(task)}
+    ${progressSection(task)}
     <section class="modal-section"><h3>截图附件</h3>${canEdit(task) ? '<form id="attachment-form" class="attachment-form"><label>选择图片（PNG / JPEG / WebP；每张不超过 10 MiB，最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple required></label><label>说明<input name="description" maxlength="300" placeholder="截图内容或验收场景"></label><button class="btn" type="submit">上传截图</button><p class="form-message" role="alert"></p></form>' : ""}<div id="attachment-list"></div></section>
     <section class="modal-section"><h3>版本记录</h3><div id="task-revisions"><p class="empty">正在加载版本记录…</p></div></section>
     <section class="modal-section"><h3>动态与备注</h3><div id="task-logs" class="logs"><p class="empty">正在加载动态…</p></div></section>`;
@@ -80,7 +80,6 @@ function bindTaskForm(task, generation) {
       form.querySelector("[name=owner_id]").reportValidity();
       return;
     }
-    if (state.me?.role !== "admin") delete payload.parent_id;
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
     const result = await api(`/api/task/${task.id}`, payload);
@@ -98,6 +97,7 @@ function bindTaskForm(task, generation) {
 }
 function bindTaskActions(task, generation) {
   document.querySelector("[data-close]").addEventListener("click", hideModal);
+  bindTaskProgress(task, generation);
   document.querySelector("[data-delete-task]")?.addEventListener("click", async (event) => {
     if (!confirm("确定删除该任务？存在子任务或依赖引用时将无法删除。")) return;
     const button = event.currentTarget,
@@ -170,5 +170,5 @@ async function openTaskModal(id) {
   modal.dataset.generation = String(generation);
   bindTaskForm(task, generation);
   bindTaskActions(task, generation);
-  await Promise.all([loadAttachments(task, generation), loadRevisions(task, generation), loadLogs(task, generation)]);
+  await Promise.all([loadTaskProgress(task, generation), loadAttachments(task, generation), loadRevisions(task, generation), loadLogs(task, generation)]);
 }

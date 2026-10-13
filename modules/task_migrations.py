@@ -53,6 +53,14 @@ CREATE TABLE IF NOT EXISTS task_revisions (
     version INTEGER NOT NULL, reverted_by INTEGER, kind TEXT NOT NULL DEFAULT 'update',
     FOREIGN KEY (task_id) REFERENCES tasks(id)
 );
+CREATE TABLE IF NOT EXISTS task_progress_updates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
+    actor_id INTEGER NOT NULL, actor_name TEXT NOT NULL,
+    progress INTEGER NOT NULL CHECK(progress BETWEEN 0 AND 100),
+    note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_progress_updates_task ON task_progress_updates(task_id,id);
 CREATE TABLE IF NOT EXISTS task_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
     member_id INTEGER NOT NULL, original_name TEXT NOT NULL,
@@ -114,6 +122,7 @@ def migrate(db: sqlite3.Connection) -> None:
         # Catalog archiving preserves historical task and member relationships.
         _add_column(db, "groups", "deleted_at TEXT")
         _add_column(db, "projects", "deleted_at TEXT")
+        _add_column(db, "task_attachments", "progress_update_id INTEGER")
         applied_v1 = db.execute(
             "SELECT 1 FROM schema_migrations WHERE version=1"
         ).fetchone()
