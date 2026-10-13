@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 
 from modules.task_types import JsonObject
+from modules.task_schedule import resolve_stage
 
 
 def _relation_map(
@@ -50,6 +51,10 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
                                for group_id in member_groups.get(int(row["id"]), [])),
     } for row in member_rows]
     members = [member for member in all_members if member["is_active"]]
+    active_group_names = {group["id"]: group["name"] for group in groups if group["is_active"]}
+    owner_groups = {member["id"]: [active_group_names[group_id] for group_id in member["group_ids"]
+                                  if group_id in active_group_names]
+                    for member in all_members}
     rows = db.execute(
         "SELECT * FROM tasks WHERE deleted_at IS NULL "
         "ORDER BY CASE WHEN due_date='' THEN 1 ELSE 0 END,due_date,id DESC"
@@ -64,6 +69,7 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
     for row in rows:
         task = dict(row)
         task_id = int(task["id"])
+        task["stage_options"], task["owner_stage"] = resolve_stage(owner_groups.get(task["owner_id"], []), task.get("schedule_stage"))
         due = str(task.get("due_date") or "").strip()
         try:
             task["days_left"] = (datetime.strptime(due, "%Y-%m-%d").date() - today).days if due else None

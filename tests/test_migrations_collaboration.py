@@ -27,6 +27,16 @@ class FailingConnection(sqlite3.Connection):
 
 
 class TestCollaborationMigration(unittest.TestCase):
+    def test_schedule_upgrade_keeps_existing_dates_and_defaults_to_no_override(self):
+        db = self._legacy_db()
+        db.execute("UPDATE tasks SET start_date='2026-10-14',due_date='2026-10-22'")
+        db.commit()
+        migrate(db)
+        migrate(db)
+        self.assertEqual(db.execute('SELECT start_date,due_date,schedule_stage FROM tasks').fetchone(),
+                         ('2026-10-14', '2026-10-22', None))
+        db.close()
+
     def _legacy_db(self, factory=sqlite3.Connection):
         db = sqlite3.connect(":memory:", factory=factory)
         db.executescript(BASE_SCHEMA)
@@ -99,7 +109,7 @@ class TestCollaborationMigration(unittest.TestCase):
         self.assertIn("新赛季步兵", vehicle_names)
         self.assertNotIn("步兵", vehicle_names)
         self.assertNotIn("飞镖", vehicle_names)
-        self.assertEqual(db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 3)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 4)
         db.close()
 
     def test_injected_failure_rolls_back_entire_migration(self):

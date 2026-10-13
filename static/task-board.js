@@ -1,5 +1,31 @@
 "use strict";
 
+const SPECIALTY_STAGES = ["机械", "电控", "视觉"];
+function specialtyTaskStage(task) {
+  if (Object.prototype.hasOwnProperty.call(task, "owner_stage")) return task.owner_stage;
+  const owner = memberById(task.owner_id);
+  const names = (owner?.group_ids || []).map((id) => groupById(id)?.name).filter(Boolean);
+  if (!names.length) names.push(...(owner?.group_name || "").split(";"));
+  const choices = SPECIALTY_STAGES.filter((stage) => names.includes(stage));
+  return choices.length === 1 ? choices[0] : choices.includes(task.schedule_stage) ? task.schedule_stage : null;
+}
+function compareSpecialtyTasks(a, b) {
+  const rank = (task) => {
+    const index = SPECIALTY_STAGES.indexOf(specialtyTaskStage(task));
+    return index < 0 ? SPECIALTY_STAGES.length : index;
+  };
+  return rank(a) - rank(b) || (a.start_date || "9999-99-99").localeCompare(b.start_date || "9999-99-99") ||
+    (a.due_date || "9999-99-99").localeCompare(b.due_date || "9999-99-99") || Number(a.id) - Number(b.id);
+}
+function sortSpecialtyTasks(tasks) { return [...tasks].sort(compareSpecialtyTasks); }
+function specialtyLanes(tasks) {
+  const sorted = sortSpecialtyTasks(tasks);
+  const lanes = SPECIALTY_STAGES.map((stage) => ({key: `stage-${stage}`, title: stage, sub: "负责人专业组", tasks: sorted.filter((task) => specialtyTaskStage(task) === stage)}));
+  const unclassified = sorted.filter((task) => !SPECIALTY_STAGES.includes(specialtyTaskStage(task)));
+  if (unclassified.length) lanes.push({key: "stage-other", title: "未归类", sub: "未指定或待选择阶段", tasks: unclassified});
+  return lanes;
+}
+
 function taskProjectName(task) {
   return projectById(task.project_id)?.name || task.project_name || task.project || "";
 }
@@ -23,7 +49,8 @@ function taskMatches(task) {
   return true;
 }
 function filteredTasks() {
-  return state.tasks.filter(taskMatches);
+  const tasks = state.tasks.filter(taskMatches);
+  return state.filters.project ? sortSpecialtyTasks(tasks) : tasks;
 }
 function renderStats() {
   const active = state.tasks.filter((task) => task.status !== "已取消");
@@ -49,6 +76,7 @@ function taskCard(task, extraClass = "") {
     <div class="task-head"><h3>${esc(task.title)}</h3>${badge(task.status, STATUS_CLASS[task.status] || "gray")}</div>
     <div class="task-meta">${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}${meta.map((value) => `<span>${esc(value)}</span>`).join("")}</div>
     ${warnings.length ? `<p class="task-warning">依赖提醒：${esc(warnings.join("；"))}</p>` : ""}
+    ${state.view === "specialty" ? `<p class="task-plan-dates">计划：${esc(task.start_date || "未设开始")} → ${esc(task.due_date || "未设截止")}</p>` : ""}
     <div class="task-foot"><span>${badge(daysLeftText(task), daysLeftClass(task))}</span><span>更新 ${esc(task.updated_at)}</span></div>
   </article>`;
 }
@@ -87,7 +115,7 @@ function participantLanes(tasks) {
 }
 function renderLanes(tasks) {
   const lanes =
-    state.view === "person"
+    state.view === "specialty" ? specialtyLanes(tasks) : state.view === "person"
       ? participantLanes(tasks)
       : state.statuses.map((status) => ({
           key: `s-${status}`,
@@ -96,7 +124,7 @@ function renderLanes(tasks) {
           tasks: tasks.filter((task) => task.status === status),
         }));
   const filtering = Object.values(state.filters).some(Boolean);
-  const visible = filtering ? lanes.filter((lane) => lane.tasks.length) : lanes;
+  const visible = filtering && state.view !== "specialty" ? lanes.filter((lane) => lane.tasks.length) : lanes;
   return (
     visible
       .map(
@@ -122,6 +150,12 @@ function fillBoardFilters() {
 function renderBoard() {
   const target = document.getElementById("board");
   if (!target) return;
+  document.querySelectorAll("#view-seg button").forEach((button) => {
+    const selected = button.dataset.view === state.view;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-pressed", String(selected));
+    if (button.dataset.view === "specialty") button.disabled = !state.filters.project;
+  });
   const tasks = filteredTasks();
   target.classList.toggle("tree-board", state.view === "tree");
   target.innerHTML = state.view === "tree" ? renderTree(tasks) : renderLanes(tasks);
@@ -137,6 +171,7 @@ function bindBoard() {
   ].forEach(([id, key, event]) =>
     document.getElementById(id)?.addEventListener(event, (e) => {
       state.filters[key] = e.target.value.trim();
+      if (key === "project") state.view = state.filters.project ? "specialty" : state.view === "specialty" ? "person" : state.view;
       renderBoard();
     }),
   );

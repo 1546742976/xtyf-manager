@@ -3,7 +3,7 @@
 {% block title %}任务中心{% endblock %}
 {% block content %}
 <div class="page-intro ux-page-head">
-  <div><p class="ux-eyebrow">TEAM / TASKS</p><h1>任务中心</h1><p>按负责人或状态查看任务，点击任务卡片可查看详情及历史。</p></div>
+  <div><p class="ux-eyebrow">TEAM / TASKS</p><h1>任务中心</h1><p>按负责人、专业组或状态查看任务，点击任务卡片可查看详情及历史。</p></div>
   <div class="ux-page-actions"><span id="sync-status" class="sync-status" role="status" aria-live="polite">正在同步…</span>
     <button id="refresh-now" class="btn" type="button">刷新</button>
     {% if me.role in ('admin', 'manager') %}<a class="btn primary" href="{{ url_for('manage') }}">管理任务</a>{% endif %}
@@ -14,6 +14,7 @@
   <div class="seg" id="view-seg">
     <button type="button" data-view="person" class="active" aria-pressed="true">按人</button>
     <button type="button" data-view="status" aria-pressed="false">按状态</button>
+    <button type="button" data-view="specialty" aria-pressed="false" disabled title="先选择一个造车组别">按专业组</button>
     <button type="button" data-view="tree" aria-pressed="false">任务树</button>
   </div>
   <label class="toolbar-field"><span>造车组别</span><select id="f-project"><option value="">全部组别</option></select></label>

@@ -8,6 +8,8 @@
 <link rel="stylesheet" href="/static/invoices.css">
 <link rel="stylesheet" href="/static/ui.css">
 <link rel="stylesheet" href="/static/workspace.css">
+<link rel="stylesheet" href="/static/apple.css">
+<meta name="theme-color" content="#f5f5f7">
 </head>
 <body class="ux-invoices ws-app{% if not is_finance %} member{% endif %}">
 <script>window.IS_FINANCE={{ is_finance|tojson }};window.ME_NAME={{ me.name|tojson }};window.ME_ID={{ me.id|tojson }};</script>
@@ -32,9 +34,9 @@
 <div class="container">
 
 <div class="dropzone" id="dropZone" role="button" tabindex="0" aria-label="选择 PDF 发票文件" onclick="document.getElementById('fileInput').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('fileInput').click()}">
-<div class="dz-icon">&#128229;</div>
+<div class="dz-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/></svg></div>
 <div class="dz-text">拖入一个或多个PDF发票到此处，或<strong>点击选择文件</strong><br>
-<span style="color:#aaa;font-size:11px">支持批量上传，提取金额、日期及发票号 · 入库前可检查重复文件</span></div>
+<span class="dz-help">支持批量上传，提取金额、日期及发票号 · 入库前可检查重复文件</span></div>
 </div>
 <input type="file" id="fileInput" accept=".pdf" multiple style="display:none" onchange="handleFiles(this.files)">
 

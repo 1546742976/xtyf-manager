@@ -7,6 +7,7 @@
 | `app.py` | Flask 初始化、入口页、登录/退出、初始数据库、导出及基础成员接口 |
 | `common.py` | `PROGRESS_DB`、请求级数据库连接、用户会话与权限装饰器 |
 | `modules/task_api.py` | 任务 API 路由 |
+| `modules/task_schedule.py` / `static/task-schedule.js` | 专业阶段判定、排期预览、快照冲突校验、原子保存及预览交互 |
 | `modules/task_mutations.py` / `task_validation.py` | 任务新增、更新及输入合法性校验 |
 | `modules/task_queries.py` / `task_types.py` | 看板数据组织与共享类型 |
 | `modules/task_delete.py` / `task_revisions.py` | 逻辑删除、字段修订与撤销 |

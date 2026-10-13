@@ -7,11 +7,42 @@ from common import current_user, get_db, login_required, manager_required
 from modules.task_delete import delete_task
 from modules.task_mutations import PRIORITIES, STATUSES, create_task, update_task
 from modules.task_queries import task_data
+from modules.task_schedule import ScheduleError, apply_schedule, preview_schedule
 from modules.task_revisions import list_revisions, revert_revision
 from modules.task_types import JsonObject
 from modules.task_validation import MAX_SQLITE_INTEGER, InvalidIdError, parse_id
 
 bp = Blueprint("collaboration_tasks", __name__)
+
+
+@bp.route("/api/projects/<int:project_id>/schedule/preview", methods=["POST"])
+@manager_required
+def schedule_preview(project_id: int):
+    if (response := _path_id_error(project_id)) is not None:
+        return response
+    body, response = _json_body()
+    if response is not None:
+        return response
+    try:
+        result = preview_schedule(get_db(), project_id, body.get("phase_choices", {}))
+    except ScheduleError as exc:
+        return jsonify(ok=False, error=str(exc)), exc.status
+    return jsonify(ok=True, **result)
+
+
+@bp.route("/api/projects/<int:project_id>/schedule/apply", methods=["POST"])
+@manager_required
+def schedule_apply(project_id: int):
+    if (response := _path_id_error(project_id)) is not None:
+        return response
+    body, response = _json_body()
+    if response is not None:
+        return response
+    try:
+        result = apply_schedule(get_db(), current_user(), project_id, body.get("snapshot"))
+    except ScheduleError as exc:
+        return jsonify(ok=False, error=str(exc)), exc.status
+    return jsonify(ok=True, **result)
 
 
 def _path_id_error(*ids: int) -> tuple[Response, int] | None:

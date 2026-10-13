@@ -26,7 +26,7 @@ function fillTaskFilters() {
 }
 
 function filteredManageTasks() {
-  return state.tasks.filter((task) => {
+  const tasks = state.tasks.filter((task) => {
     if (taskFilters.project && Number(task.project_id) !== Number(taskFilters.project)) return false;
     if (taskFilters.status && task.status !== taskFilters.status) return false;
     const people = taskParticipants(task)
@@ -35,20 +35,23 @@ function filteredManageTasks() {
     const haystack = `${task.title} ${task.detail || ""} ${taskProjectName(task)} ${people}`.toLowerCase();
     return !taskFilters.q || haystack.includes(taskFilters.q.toLowerCase());
   });
+  return taskFilters.project ? sortSpecialtyTasks(tasks) : tasks;
 }
 
 function renderTaskTable() {
   const body = document.querySelector("#task-table tbody");
   if (!body) return;
   const tasks = filteredManageTasks();
+  const scheduleButton = document.getElementById("schedule-project");
+  if (scheduleButton) scheduleButton.disabled = !taskFilters.project || !isManagement() || projectById(taskFilters.project)?.is_active === 0;
   document.getElementById("task-count").textContent = `共 ${tasks.length} / ${state.tasks.length} 条`;
   body.innerHTML =
     tasks
       .map((task) => {
         const additional = (task.participant_ids || []).map((id) => memberById(id)?.name || `#${id}`).join("、") || "—";
-        return `<tr><td>${Number(task.id)}</td><td class="cell-title">${esc(task.title)}</td><td>${esc(memberById(task.owner_id)?.name || "未指定")}</td><td>${esc(additional)}</td><td>${esc(taskProjectName(task) || "—")}</td><td>${priorityCell(task.priority)}</td><td>${esc(task.status)}</td><td>${badge(daysLeftText(task), daysLeftClass(task))}</td><td class="nowrap"><button class="btn ghost sm" type="button" data-edit-task="${Number(task.id)}">编辑</button><button class="btn ghost sm danger-text" type="button" data-delete-task="${Number(task.id)}">删除</button></td></tr>`;
+        return `<tr><td>${Number(task.id)}</td><td class="cell-title">${esc(task.title)}</td><td>${esc(memberById(task.owner_id)?.name || "未指定")}</td><td>${esc(specialtyTaskStage(task) || "未归类")}</td><td>${esc(additional)}</td><td>${esc(taskProjectName(task) || "—")}</td><td class="nowrap">${esc(task.start_date || "未设置")}</td><td class="nowrap">${esc(task.due_date || "未设置")}</td><td>${priorityCell(task.priority)}</td><td>${esc(task.status)}</td><td>${badge(daysLeftText(task), daysLeftClass(task))}</td><td class="nowrap"><button class="btn ghost sm" type="button" data-edit-task="${Number(task.id)}">编辑</button><button class="btn ghost sm danger-text" type="button" data-delete-task="${Number(task.id)}">删除</button></td></tr>`;
       })
-      .join("") || '<tr><td colspan="9" class="empty">没有符合条件的任务</td></tr>';
+      .join("") || '<tr><td colspan="12" class="empty">没有符合条件的任务</td></tr>';
 }
 
 function catalogPanel(kind, items) {

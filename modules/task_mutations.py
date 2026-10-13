@@ -10,6 +10,7 @@ from modules.task_validation import active_ids, creates_cycle, normalize_ids, pa
 STATUSES = ("未开始", "进行中", "已完成", "阻塞", "已取消")
 PRIORITIES = ("高", "中", "低")
 SCALAR_FIELDS = ("title", "detail", "owner_id", "project_id", "parent_id", "priority", "status", "start_date", "due_date")
+REVISION_FIELDS = SCALAR_FIELDS + ("schedule_stage",)
 RELATION_FIELDS = ("participant_ids", "group_ids", "predecessor_ids")
 
 
