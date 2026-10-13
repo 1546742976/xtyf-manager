@@ -45,7 +45,7 @@ function taskCard(task, extraClass = "") {
   const participants = taskParticipants(task).map((id) => memberById(id)?.name || `成员 #${id}`);
   const warnings = task.dependency_warnings || [];
   const meta = [taskProjectName(task), participants.join("、")].filter(Boolean);
-  return `<article class="task ${isOverdue(task) ? "overdue" : ""} ${warnings.length ? "has-warning" : ""} ${extraClass}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
+  return `<article class="task ${isOverdue(task) ? "overdue" : ""} ${isDueSoon(task) ? "is-due-soon" : ""} ${warnings.length ? "has-warning" : ""} ${extraClass}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
     <div class="task-head"><h3>${esc(task.title)}</h3>${badge(task.status, STATUS_CLASS[task.status] || "gray")}</div>
     <div class="task-meta">${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}${meta.map((value) => `<span>${esc(value)}</span>`).join("")}</div>
     ${warnings.length ? `<p class="task-warning">依赖提醒：${esc(warnings.join("；"))}</p>` : ""}

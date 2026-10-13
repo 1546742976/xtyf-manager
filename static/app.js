@@ -72,6 +72,11 @@ function isManagement() {
 function canEdit(task) {
   return isManagement() || (!!state.me && taskParticipants(task).includes(Number(state.me.id)));
 }
+// The same 0–3 day threshold is used by both the task center and dashboard.
+function isDueSoon(task) {
+  return Number.isInteger(task.days_left) && task.days_left >= 0 && task.days_left <= 3 &&
+    !["已完成", "已取消"].includes(task.status);
+}
 function isOverdue(task) {
   return Number.isInteger(task.days_left) && task.days_left < 0 && !["已完成", "已取消"].includes(task.status);
 }

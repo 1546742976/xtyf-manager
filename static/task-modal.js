@@ -171,9 +171,59 @@ async function openTaskModal(id) {
   const generation = ++taskModalGeneration;
   showModal(taskModalShell(task), `任务：${task.title}`);
   const modal = document.getElementById("modal");
+  modal.classList.remove("task-preview");
   modal.dataset.taskId = String(task.id);
   modal.dataset.generation = String(generation);
   bindTaskForm(task, generation);
   bindTaskActions(task, generation);
   await Promise.all([loadTaskProgress(task, generation), loadAttachments(task, generation), loadRevisions(task, generation), loadLogs(task, generation)]);
+}
+
+/** Dashboard preview deliberately contains no task mutation actions or forms. */
+function taskPreviewShell(task) {
+  const percent = Math.max(0, Math.min(100, Number(task.progress) || 0));
+  const people = taskParticipants(task)
+    .map((id) => memberById(id)?.name || `成员 #${id}`).join("、") || "未分配";
+  return `<div class="modal-head">
+    <div><p class="ux-eyebrow">TASK #${Number(task.id)} / 只读预览</p><h2>${esc(task.title)}</h2></div>
+    <button class="btn ghost sm" type="button" data-close>关闭</button>
+  </div>
+  <div class="modal-info">
+    ${badge(task.status, STATUS_CLASS[task.status] || "gray")}
+    ${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}
+    ${badge(daysLeftText(task), daysLeftClass(task))}
+  </div>
+  <div class="readonly-settings">
+    <dl>
+      <div><dt>造车组别</dt><dd>${esc(taskProjectName(task) || "未归属")}</dd></div>
+      <div><dt>负责人及参与者</dt><dd>${esc(people)}</dd></div>
+      <div><dt>开始日期</dt><dd>${esc(task.start_date || "未设置")}</dd></div>
+      <div><dt>截止日期</dt><dd>${esc(task.due_date || "未设置")}</dd></div>
+    </dl>
+    ${task.detail ? `<div class="task-detail">${esc(task.detail)}</div>` : ""}
+    ${(task.dependency_warnings || []).length ? `<p class="task-warning">${esc(task.dependency_warnings.join("；"))}</p>` : ""}
+  </div>
+  <section class="modal-section">
+    <div class="task-progress-heading"><span>当前进度</span><strong>${percent}%</strong></div>
+    <div class="progress" role="progressbar" aria-label="当前进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><div class="progress-inner blue" style="width:${percent}%"></div></div>
+  </section>
+  <section class="modal-section"><h3>进度动态与截图</h3>
+    <div id="task-progress-list" class="progress-timeline"><p class="empty">正在加载进度记录…</p></div>
+  </section>
+  <section class="modal-section"><h3>近期任务动态</h3>
+    <div id="task-logs" class="logs"><p class="empty">正在加载动态…</p></div>
+  </section>`;
+}
+
+async function openTaskPreview(id) {
+  const task = state.tasks.find((item) => Number(item.id) === Number(id));
+  if (!task) return;
+  const generation = ++taskModalGeneration;
+  showModal(taskPreviewShell(task), `任务状态：${task.title}`);
+  const modal = document.getElementById("modal");
+  modal.classList.add("task-preview");
+  modal.dataset.taskId = String(task.id);
+  modal.dataset.generation = String(generation);
+  modal.querySelector("[data-close]")?.addEventListener("click", hideModal);
+  await Promise.all([loadTaskProgress(task, generation), loadLogs(task, generation)]);
 }
