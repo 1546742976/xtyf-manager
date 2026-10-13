@@ -1,12 +1,13 @@
-"""Authenticated, same-origin GitHub Issues and Discussions collaboration gateway."""
+"""Read-only GitHub Issues/Discussions mirror; participation stays on GitHub."""
 from __future__ import annotations
 
 import json
 import os
 import re
+from html.parser import HTMLParser
+from xml.etree import ElementTree as ET
 from typing import Final, TypedDict
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from flask import Blueprint, current_app, jsonify, render_template, request
@@ -26,6 +27,7 @@ class GitHubUrls(TypedDict):
     repository: str
     discussions: str
     new_issue: str
+    new_discussion: str
 
 
 class GitHubError(Exception):
@@ -53,16 +55,12 @@ def _github_urls(repository_value: str | None) -> GitHubUrls | None:
         "repository": base_url,
         "discussions": f"{base_url}/discussions",
         "new_issue": f"{base_url}/issues/new/choose",
+        "new_discussion": f"{base_url}/discussions/new/choose",
     }
 
 
 def _token() -> str:
     return str(current_app.config.get("GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
-
-
-def _write_enabled() -> bool:
-    enabled = current_app.config.get("GITHUB_WRITE_ENABLED", os.environ.get("GITHUB_WRITE_ENABLED", "0"))
-    return bool(_token()) and str(enabled).lower() in ("1", "true", "yes")
 
 
 def _remote(path: str, payload: dict | None = None, graphql: bool = False):
@@ -72,7 +70,9 @@ def _remote(path: str, payload: dict | None = None, graphql: bool = False):
         raise GitHubError("尚未配置有效的 GitHub 仓库", 503)
     token = _token()
     if graphql and not token:
-        raise GitHubError("查看 Discussions 需要服务器配置 GITHUB_TOKEN", 503)
+        raise GitHubError("完整读取 Discussions 需要配置只读 GITHUB_TOKEN", 503)
+    if payload is not None and not graphql:
+        raise GitHubError("工作台仅允许读取，发布请前往 GitHub", 405)
     url = "https://api.github.com/graphql" if graphql else f"https://api.github.com/repos/{repo}{path}"
     headers = {
         "Accept": "application/vnd.github+json",
@@ -92,8 +92,8 @@ def _remote(path: str, payload: dict | None = None, graphql: bool = False):
                 raise GitHubError("GitHub 响应超过限制")
             result = json.loads(content)
     except HTTPError as error:
-        if error.code in (401, 403):
-            raise GitHubError("GitHub 令牌无权限或 API 速率受限", 503) from error
+        if error.code in (401, 403, 429):
+            raise GitHubError("GitHub API 访问受限，请稍后重试", 503) from error
         if error.code == 404:
             raise GitHubError("GitHub 资源不存在或无访问权限", 404) from error
         raise GitHubError(f"GitHub API 暂不可用（HTTP {error.code}）") from error
@@ -108,6 +108,86 @@ def _remote(path: str, payload: dict | None = None, graphql: bool = False):
 
 def _graphql(query: str, variables: dict | None = None):
     return _remote("", {"query": query, "variables": variables or {}}, graphql=True)
+
+
+# Public GitHub Discussions expose a native Atom feed. It needs no token,
+# although unlike GraphQL it does not expose discussion comments or counts.
+_ATOM_NS = "{http://www.w3.org/2005/Atom}"
+_ATOM_MAX_BYTES = 1_000_000
+_DISCUSSION_LINK = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/discussions/([1-9][0-9]*)/?$")
+
+
+class _PlainText(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str):
+        self.parts.append(data)
+
+    def handle_starttag(self, tag: str, attrs):
+        if tag in ("p", "br", "div", "li", "h1", "h2", "h3"):
+            self.parts.append("\n")
+
+
+def _atom_items(feed: bytes, repo: str) -> list[dict]:
+    try:
+        root = ET.fromstring(feed)
+    except ET.ParseError as error:
+        raise GitHubError("GitHub Discussions 订阅源格式不正确") from error
+    if root.tag != _ATOM_NS + "feed":
+        raise GitHubError("GitHub Discussions 订阅源格式不正确")
+    results = []
+    for entry in root.findall(_ATOM_NS + "entry")[:30]:
+        link = next((link.get("href", "") for link in entry.findall(_ATOM_NS + "link")
+                     if link.get("rel", "alternate") == "alternate"), "")
+        match = _DISCUSSION_LINK.fullmatch(link)
+        if match is None or match.group(1) + "/" + match.group(2) != repo:
+            continue
+        raw_body = entry.findtext(_ATOM_NS + "content") or entry.findtext(_ATOM_NS + "summary") or ""
+        body_type = entry.find(_ATOM_NS + "content")
+        if body_type is None:
+            body_type = entry.find(_ATOM_NS + "summary")
+        if body_type is not None and body_type.get("type") == "html":
+            parser = _PlainText()
+            parser.feed(raw_body[:200_000])
+            raw_body = "".join(parser.parts)
+        results.append({
+            "number": int(match.group(3)),
+            "title": (entry.findtext(_ATOM_NS + "title") or "").strip()[:300],
+            "body": raw_body.strip()[:20_000],
+            "author": (entry.findtext(_ATOM_NS + "author/" + _ATOM_NS + "name") or "未知"),
+            "updated_at": entry.findtext(_ATOM_NS + "updated") or "",
+            "category": (entry.find(_ATOM_NS + "category").get("term", "")
+                         if entry.find(_ATOM_NS + "category") is not None else ""),
+            "comments_count": None,
+            "url": link,
+        })
+    return results
+
+
+def _atom_feed() -> list[dict]:
+    repo = _repository()
+    if repo is None:
+        raise GitHubError("尚未配置有效的 GitHub 仓库", 503)
+    # Repository value is strictly validated; the request host is fixed.
+    url = f"https://github.com/{repo}/discussions.atom"
+    req = Request(url, headers={
+        "User-Agent": "xtyf-manager-collaboration",
+        "Accept": "application/atom+xml",
+    })
+    try:
+        with urlopen(req, timeout=8) as response:
+            feed = response.read(_ATOM_MAX_BYTES + 1)
+        if len(feed) > _ATOM_MAX_BYTES:
+            raise GitHubError("GitHub Discussions 订阅源超过大小限制")
+        return _atom_items(feed, repo)
+    except HTTPError as error:
+        if error.code in (404, 406):
+            raise GitHubError("该仓库的公开 Discussions 订阅源不可用", 503) from error
+        raise GitHubError(f"GitHub Discussions 读取失败（HTTP {error.code}）") from error
+    except (URLError, TimeoutError, OSError) as error:
+        raise GitHubError("暂时无法连接 GitHub Discussions", 503) from error
 
 
 def _issue(item: dict) -> dict:
@@ -186,7 +266,6 @@ def index():
     return render_template(
         "discussions.html", me=current_user(), page="discussions",
         role_names=ROLE_NAMES, github_urls=_github_urls(repo),
-        github_can_write=_write_enabled(), github_has_token=bool(_token()),
     )
 
 
@@ -203,13 +282,19 @@ def items():
                 return jsonify(ok=False, error="页码不合法"), 400
             items = _remote(f"/issues?state=all&per_page=30&page={int(raw_page)}")
             return jsonify(ok=True, items=[_issue(item) for item in items if "pull_request" not in item],
-                           categories=[], can_write=_write_enabled())
-        data = (_graphql(_DISCUSSION_LIST, _parts()).get("repository") or {})
-        return jsonify(
-            ok=True, items=[_discussion(item) for item in (data.get("discussions") or {}).get("nodes") or []],
-            categories=(data.get("discussionCategories") or {}).get("nodes") or [],
-            can_write=_write_enabled(),
-        )
+                           source="rest", comments_available=True)
+        if _token():
+            try:
+                data = (_graphql(_DISCUSSION_LIST, _parts()).get("repository") or {})
+                return jsonify(
+                    ok=True, items=[_discussion(item) for item in
+                                    (data.get("discussions") or {}).get("nodes") or []],
+                    source="graphql", comments_available=True,
+                )
+            except GitHubError:
+                # A missing/expired read token must not hide public discussions.
+                pass
+        return jsonify(ok=True, items=_atom_feed(), source="atom", comments_available=False)
     except GitHubError as error:
         return jsonify(ok=False, error=str(error)), error.status
 
@@ -230,90 +315,22 @@ def detail(kind: str, number: int):
                 "body": c.get("body") or "", "created_at": c.get("created_at") or "",
             } for c in raw_comments]
             return jsonify(ok=True, item=_issue(item), comments=comments)
-        item = ((_graphql(_DISCUSSION_DETAIL, _parts() | {"number": number})
-                .get("repository") or {}).get("discussion"))
-        if item is None:
-            return jsonify(ok=False, error="讨论不存在"), 404
-        return jsonify(ok=True, item=_discussion(item),
-                       comments=_comments((item.get("commentsPage") or {}).get("nodes") or []))
-    except GitHubError as error:
-        return jsonify(ok=False, error=str(error)), error.status
-
-
-def _text(data: dict, key: str, limit: int, required: bool = True) -> str:
-    value = data.get(key)
-    if not isinstance(value, str):
-        raise ValueError(f"{key} 格式不合法")
-    result = value.strip()
-    if len(result) > limit or (required and not result):
-        raise ValueError(f"{key} 不能为空或超过 {limit} 字")
-    return result
-
-
-def _attributed(body: str) -> str:
-    actor = current_user()
-    name = str(actor["name"]).replace("\n", " ").replace("\r", " ")[:80]
-    return body + f"\n\n---\n由巡天御风管理系统成员「{name}」（ID #{actor['id']}）通过工作台提交。"
-
-
-@discussions_bp.post("/api/post")
-@login_required
-def post():
-    if not _write_enabled():
-        return jsonify(ok=False, error="站内提交未启用：请配置 GITHUB_TOKEN 和 GITHUB_WRITE_ENABLED=1"), 403
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return jsonify(ok=False, error="请求格式不正确"), 400
-    kind = data.get("kind")
-    if kind not in ("issues", "discussions"):
-        return jsonify(ok=False, error="板块不合法"), 400
-    action = data.get("action")
-    if action not in ("create", "comment"):
-        return jsonify(ok=False, error="操作不合法"), 400
-    try:
-        body = _attributed(_text(data, "body", 8000))
-        if action == "create":
-            title = _text(data, "title", 180)
-            if kind == "issues":
-                created = _remote("/issues", {"title": title, "body": body})
-                number = created["number"]
-            else:
-                config = (_graphql(_DISCUSSION_LIST, _parts()).get("repository") or {})
-                categories = (config.get("discussionCategories") or {}).get("nodes") or []
-                category = str(data.get("category_id") or "")
-                if category not in {item["id"] for item in categories}:
-                    return jsonify(ok=False, error="请选择有效的讨论分类"), 400
-                repo_info = _graphql(
-                    "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}",
-                    _parts(),
-                )
-                created = _graphql(
-                    "mutation($repo:ID!,$category:ID!,$title:String!,$body:String!){"
-                    "createDiscussion(input:{repositoryId:$repo,categoryId:$category,title:$title,body:$body})"
-                    "{discussion{number}}}",
-                    {"repo": repo_info["repository"]["id"], "category": category, "title": title, "body": body},
-                )
-                number = created["createDiscussion"]["discussion"]["number"]
-        else:
-            number = data.get("number")
-            if isinstance(number, bool) or not isinstance(number, int) or not 0 < number < 2**31:
-                return jsonify(ok=False, error="主题编号不合法"), 400
-            if kind == "issues":
-                _remote(f"/issues/{number}/comments", {"body": body})
-            else:
+        if _token():
+            try:
                 item = ((_graphql(_DISCUSSION_DETAIL, _parts() | {"number": number})
                         .get("repository") or {}).get("discussion"))
                 if item is None:
                     return jsonify(ok=False, error="讨论不存在"), 404
-                _graphql(
-                    "mutation($id:ID!,$body:String!){addDiscussionComment("
-                    "input:{discussionId:$id,body:$body}){comment{id}}}",
-                    {"id": item["id"], "body": body},
-                )
-        return jsonify(ok=True, number=number)
-    except ValueError as error:
-        return jsonify(ok=False, error=str(error)), 400
-    except (GitHubError, KeyError, TypeError) as error:
-        if isinstance(error, GitHubError):
-            return jsonify(ok=False, error=str(error)), error.status
-        return jsonify(ok=False, error="GitHub 返回了不符合预期的数据"), 502
+                return jsonify(ok=True, item=_discussion(item),
+                               comments=_comments((item.get("commentsPage") or {}).get("nodes") or []),
+                               comments_available=True)
+            except GitHubError:
+                pass
+        item = next((entry for entry in _atom_feed() if entry["number"] == number), None)
+        if item is None:
+            return jsonify(ok=False, error="当前订阅源未收录该讨论，请在 GitHub 查看", url=_github_urls(_repository())["discussions"]), 404
+        return jsonify(ok=True, item=item, comments=[], comments_available=False)
+    except GitHubError as error:
+        return jsonify(ok=False, error=str(error)), error.status
+
+

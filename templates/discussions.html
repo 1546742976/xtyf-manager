@@ -3,28 +3,26 @@
 {% block content %}
 <div class="ux-page-head">
   <div><p class="ux-eyebrow">WORKSPACE / GITHUB</p><h1>GitHub 协作</h1>
-    <p>在工作台查看 GitHub Issues 与 Discussions、阅读回复并参与讨论。</p></div>
+    <p>在工作台同步浏览 GitHub Issues 与 Discussions；创建、评论和回复请在 GitHub 完成。</p></div>
 </div>
 {% if github_urls %}
-<section class="panel github-hub" id="github-hub" data-can-write="{{ 'true' if github_can_write else 'false' }}">
+<section class="panel github-hub" id="github-hub" data-new-issue="{{ github_urls.new_issue }}" data-new-discussion="{{ github_urls.new_discussion }}">
   <div class="github-hub-toolbar">
     <div class="seg" role="tablist" aria-label="GitHub 协作板块">
       <button type="button" role="tab" class="active" aria-selected="true" data-github-kind="issues">Issues · 问题与建议</button>
       <button type="button" role="tab" aria-selected="false" data-github-kind="discussions">Discussions · 交流讨论</button>
     </div>
-    <button class="btn primary" id="github-new" type="button" {% if not github_can_write %}disabled title="需配置 GitHub 服务端写入权限"{% endif %}>新建主题</button>
+    <a class="btn primary" id="github-new" href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">去 GitHub 创建 Issue ↗</a>
   </div>
-  <div id="github-compose" hidden></div>
+  <p class="ux-note github-source-note" id="github-source-note" aria-live="polite"></p>
   <div class="github-hub-grid">
     <div class="github-topic-list" id="github-topic-list" aria-label="主题列表" aria-live="polite"><p class="empty">正在加载…</p></div>
     <div class="github-topic-detail" id="github-topic-detail" aria-label="主题详情"><p class="empty">从左侧选择主题查看正文与回复。</p></div>
   </div>
   <div class="github-pages"><button type="button" class="btn ghost sm" id="github-prev" disabled>上一页</button><span id="github-page">第 1 页</span><button type="button" class="btn ghost sm" id="github-next">下一页</button></div>
 </section>
-<p class="ux-note">站内内容同步自 <a href="{{ github_urls.repository }}" target="_blank" rel="noopener noreferrer">GitHub 仓库</a>。
-  {% if not github_has_token %}Discussions 阅读需要服务器配置 <code>GITHUB_TOKEN</code>。{% endif %}
-  {% if not github_can_write %}站内发帖与回复需要管理员启用 <code>GITHUB_WRITE_ENABLED=1</code> 并提供具有对应权限的 Token。{% else %}提交内容将由服务器所配置的 GitHub 账号代发，并标注工作台成员身份。{% endif %}
-  也可以使用 <a href="{{ github_urls.discussions }}" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> 或 <a href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">Issue 模板</a>；请勿公开敏感信息。</p>
+<p class="ux-note">只读展示板：Issues 直接读取公开 API；Discussions 可通过 GitHub 官方 Atom 订阅源读取近期公开主题，无须配置 Token。若服务器配置只读 <code>GITHUB_TOKEN</code>，可查看讨论回复。
+  创建和参与讨论需使用个人 GitHub 账号，前往 <a href="{{ github_urls.discussions }}" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> 或 <a href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">新建 Issue</a>。请勿公开敏感信息。</p>
 {% else %}
 <section class="panel"><h2>尚未配置 GitHub 仓库</h2><p class="ux-note">请联系管理员配置 GITHUB_REPOSITORY（格式：owner/repository），然后重新打开此页面。</p></section>
 {% endif %}

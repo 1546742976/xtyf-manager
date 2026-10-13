@@ -82,13 +82,8 @@ body.modal-open{overflow:hidden}.modal{max-width:880px}.task-settings{margin-top
 .github-reply strong { font-size: 13px; }
 .github-reply small { display: block; color: var(--muted); }
 .github-reply p { margin: 8px 0 0; }
-.github-composer { display: grid; gap: 12px; margin: 0; }
-#github-compose { padding: 16px; border-bottom: 1px solid var(--border); background: var(--collab-soft); }
-.github-composer h3 { margin: 0; }
-.github-composer label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
-.github-composer input,.github-composer textarea,.github-composer select { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 9px; background: var(--card); color: var(--text); font: inherit; }
-.github-form-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.github-form-actions .form-message { margin: 0; }
+.github-source-note { margin: 0; padding: 9px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.github-source-note:empty { display: none; }
 .github-pages { display: flex; justify-content: center; align-items: center; gap: 16px; padding: 12px; border-top: 1px solid var(--border); }
 @media (max-width: 800px) {
   .github-hub-grid { grid-template-columns: 1fr; }

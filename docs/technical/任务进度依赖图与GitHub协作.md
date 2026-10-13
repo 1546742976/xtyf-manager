@@ -17,24 +17,31 @@ API:
 
 任务中心的“任务树”改为有向连线图。前置任务和历史父任务统一作为上游节点；箭头指向后续任务。保留原有 parent_id 和 predecessor_ids 数据结构，避免迁移丢失已有关系。管理员、经理、任务负责人及参与成员在各自权限内都可编辑主前置（父）任务。跨两种关系进行联合循环检测，支持多前置任务；筛选时自动保留上游任务作为上下文。
 
-## GitHub 协作页
+## GitHub 协作页：只读展示板
 
-在 /discussions 页面内浏览 Issues、Discussions、详情和回复；拥有服务端授权后还能新建主题、直接回复。GitHub 官方页面只作为可选备用链接。
+工作台 `/discussions` 同步浏览仓库 Issues、Discussions 的公开主题、正文预览与可用的回复。**创建、评论、回复始终在 GitHub 官方网站完成**，成员使用自己的 GitHub 账号登录，不在工作台设置共用的代发身份，也没有写入 GitHub 的 API。
+
+数据源与降级：
+
+| 资源 | 无 Token | 可选只读 GITHUB_TOKEN |
+| --- | --- | --- |
+| Issues | GitHub REST API：列表、正文、评论（公开仓库直接读取） | 同样可读，可能改善 API 限流 |
+| Discussions | GitHub 官方 `/discussions.atom`：近期公开主题及摘要，**不包含完整回复** | GitHub GraphQL：讨论正文和近期回复；读取失败时回退 Atom |
+
+该仓库必须为公开仓库，且已启用 Discussions。Atom 只提供近期主题（默认最多 30 条），不是完整历史库，无法依赖它分页、准确获得评论数或同步所有回复。若当前订阅源不包含某个主题，可以点击 GitHub 站外链接阅读。网络不可用或 API 限流时提供可见错误提示，不假装已同步成功。
 
 服务端环境变量：
 
 | 变量 | 用途 |
 | --- | --- |
-| GITHUB_REPOSITORY | 仓库 owner/repository，默认 SHM-white/xtyf-manager |
-| GITHUB_TOKEN | GitHub API 令牌，保存在服务器端。Discussions GraphQL 读取需要令牌 |
-| GITHUB_WRITE_ENABLED | 默认为 0（只读）；显式设成 1 才允许站内代发主题和回复 |
+| `GITHUB_REPOSITORY` | 仓库 `owner/repository`，默认 `SHM-white/xtyf-manager` |
+| `GITHUB_TOKEN` | **可选**只读 Token，用于获取 Discussions GraphQL 完整内容，保存在服务器端。公开 Issues / Atom 不依赖它 |
 
-fine-grained PAT 建议只授权目标仓库的 Issues (Read and write)、Discussions (Read and write)、Metadata (Read)。纯阅读使用 Read 权限，并保持写入开关关闭。公开 Issues 不配置 Token 也可读；Discussions 需要 Token。切勿将 Token 写进仓库、模板或浏览器端脚本，配置更新后重启服务。
+无需配置 `GITHUB_WRITE_ENABLED`；`/discussions/api/post` 已移除，**即使部署环境遗留该变量也不会授权写入**。建议 fine-grained PAT 仅给目标仓库 Discussions 的读取权限，切勿将 Token 写进仓库或浏览器端。
 
-**重要**：写入使用共享 GitHub 服务账号，工作台会在末尾标识发帖成员的姓名和内部 ID。此功能不代表成员个人 GitHub 身份，请仅对可信成员启用。需要按个人 GitHub 权限发布时应扩展成逐用户 OAuth 授权。
+所有远程文本都在前端 HTML 转义；Atom HTML 摘要先剥离标签。用于发帖和查看原帖的链接由已验证的 GitHub 仓库地址生成或经过 GitHub 域名检查。工作台不会自动上传任务、成员或内部数据。
 
-所有远程内容在站内以纯文本转义后显示，避免外部内容直接成为 HTML；不自动上传任务或成员资料。GitHub API 出错时在原页面提示错误。
 
 ## 验证
 
-CI 会检查 Python 语法、API 测试、JS 语法和单测。新增测试覆盖进度校验/冲突/截图/权限、混合依赖环路、前端图形与转义，以及 GitHub API mock（测试不会真实发帖）。
+CI 会检查 Python 语法、API 测试、JS 语法和单测。新增测试覆盖进度校验/冲突/截图/权限、混合依赖环路、前端图形与转义，以及 GitHub API/Atom 解析和只读外链（测试不会真实发帖）。
