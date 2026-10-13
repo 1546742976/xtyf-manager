@@ -687,7 +687,8 @@ def _safe_name(s):
 
 
 # ---- 生成标准文件名（供整理/入库复用）----
-def _generate_standard_name(filepath, confirmed_amount=None):
+def _generate_standard_name(filepath, confirmed_amount=None, *, confirmed_date=None,
+                            confirmed_vendor=None, confirmed_category=None):
     """根据PDF内容和文件名生成标准化名称: {category}-{amount}元-{vendor}-{inv_num}-{date}-发票.pdf"""
     info = extract_invoice_info(filepath)
     fn_info = parse_invoice_filename(os.path.basename(filepath))
@@ -712,16 +713,21 @@ def _generate_standard_name(filepath, confirmed_amount=None):
         # 从文件名尝试提取
         m = re.search(r'(\d{4}\.\d{2}\.\d{2})', os.path.basename(filepath))
         if m: date_str = m.group(1)
+    if confirmed_date is not None:
+        date_str = confirmed_date.replace('-', '.')
 
     # 供应商
     vendor = (fn_info or {}).get('vendor', '') if fn_info else ''
     if not vendor or vendor == os.path.basename(filepath)[:-4] or '销名称' in vendor or '销 名称' in vendor:
         vendor = info.get('vendor', '')
-    vendor = _safe_name(vendor)
+    vendor = _safe_name(vendor if confirmed_vendor is None else confirmed_vendor)
 
     # 类别
     category = (fn_info or {}).get('category', '') if fn_info else ''
+    if confirmed_category is not None:
+        category = confirmed_category
     if not category: category = '其他'
+    category = _safe_name(category)
 
     # 发票号码
     inv_num = info.get('invoice_number', '')
@@ -739,9 +745,16 @@ def _generate_standard_name(filepath, confirmed_amount=None):
 
 
 def _do_move(results, meta, inv_id, old_path, new_path, month, status):
+    inv_id = os.path.relpath(old_path, BASE_DIR).replace('\\', '/')
+    existing = meta.get(inv_id, {})
     # 尝试生成标准化文件名
     try:
-        std_name = _generate_standard_name(old_path)
+        cents = existing.get('confirmed_amount_cents')
+        std_name = _generate_standard_name(
+            old_path, Decimal(format_cents(cents)) if cents is not None else None,
+            confirmed_date=existing.get('confirmed_date'),
+            confirmed_vendor=existing.get('confirmed_vendor'),
+            confirmed_category=existing.get('category_override'))
     except:
         std_name = os.path.basename(new_path)
     target_dir = os.path.dirname(new_path)
@@ -764,8 +777,8 @@ def _do_move(results, meta, inv_id, old_path, new_path, month, status):
         if os.path.isfile(old_path):
             shutil.move(old_path, new_path)
             results['moved'] += 1
-            old_rel = os.path.relpath(old_path, BASE_DIR)
-            new_rel = os.path.relpath(new_path, BASE_DIR)
+            old_rel = os.path.relpath(old_path, BASE_DIR).replace('\\', '/')
+            new_rel = os.path.relpath(new_path, BASE_DIR).replace('\\', '/')
             old_meta = meta.pop(inv_id, {})
             old_meta.update({
                 'rel_path': new_rel, 'month': month,
@@ -910,7 +923,8 @@ def _add_invoice(invoices, meta, month, status, filepath, use_cache=True):
         'id': inv_id, 'month': inv_meta.get('month', month),
         'folder': os.path.dirname(rel_path), 'rel_path': rel_path, 'filename': filename,
         'category': inv_meta.get('category_override') or info['category'],
-        'amount': info['amount'], 'vendor': info['vendor'], 'date': info['date'],
+        'amount': info['amount'], 'vendor': inv_meta.get('confirmed_vendor', info['vendor']),
+        'date': inv_meta.get('confirmed_date', info['date']),
         'seq': info['seq'], 'status': final_status,
         'submitter': inv_meta.get('submitter', ''), 'submitter_id': inv_meta.get('submitter_id'),
         'ownership_unresolved': not bool(inv_meta.get('submitter_id')),
@@ -1306,9 +1320,9 @@ def _organize_impl(progress_cb=None):
                      if os.path.isfile(os.path.join(entry_path, f)) and f.lower().endswith('.pdf')]
             for f in loose:
                 old_path = os.path.join(entry_path, f)
-                month2 = _file_month(entry, f, old_path)
                 inv_id = f"{entry}/{f}"
                 inv_meta_data = meta.get(inv_id, {})
+                month2 = inv_meta_data.get('month') or _file_month(entry, f, old_path)
                 status = inv_meta_data.get('status', '未报销')
                 if status not in STATUS_NAMES: status = '未报销'
                 target_dir = os.path.join(BASE_DIR, month2, status)
@@ -1327,9 +1341,9 @@ def _organize_impl(progress_cb=None):
             for f in files:
                 if not f.lower().endswith('.pdf'): continue
                 old_path = os.path.join(root, f)
-                month = _file_month(entry, f, old_path)
-                inv_id = f"{entry}/{f}"
+                inv_id = os.path.relpath(old_path, BASE_DIR).replace('\\', '/')
                 inv_meta_data = meta.get(inv_id, {})
+                month = inv_meta_data.get('month') or _file_month(entry, f, old_path)
                 status = inv_meta_data.get('status', '')
                 if not status or status not in STATUS_NAMES:
                     status = '已报销' if '已报' in entry else '未报销'
@@ -1603,7 +1617,9 @@ def api_upload_confirm():
     ensure_dir(target_dir)
 
     # 使用标准化命名
-    new_name = _generate_standard_name(tmp_path, confirmed_amount=amount)
+    new_name = _generate_standard_name(tmp_path, confirmed_amount=amount,
+                                      confirmed_date=data.get('date'), confirmed_vendor=data.get('vendor'),
+                                      confirmed_category=category)
     new_path = os.path.join(target_dir, new_name)
     counter = 1
     while os.path.exists(new_path):
@@ -1627,6 +1643,9 @@ def api_upload_confirm():
         'uploaded': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
+    for field in ('date', 'vendor'):
+        if field in data:
+            meta[rel_path]['confirmed_' + field] = data[field]
     save_meta(meta)
 
     if amount > 0:
@@ -1699,7 +1718,9 @@ def api_upload_confirm_batch():
         target_dir = os.path.join(BASE_DIR, month, status)
         ensure_dir(target_dir)
 
-        new_name = _generate_standard_name(tmp_path, confirmed_amount=amount)
+        new_name = _generate_standard_name(tmp_path, confirmed_amount=amount,
+                                          confirmed_date=item.get('date'), confirmed_vendor=item.get('vendor'),
+                                          confirmed_category=category)
         new_path = os.path.join(target_dir, new_name)
         counter = 1
         while os.path.exists(new_path):
@@ -1720,6 +1741,9 @@ def api_upload_confirm_batch():
                 'uploaded': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             }
+            for field in ('date', 'vendor'):
+                if field in item:
+                    meta[rel_path]['confirmed_' + field] = item[field]
             save_meta(meta)
             if amount > 0:
                 cache = load_cache()
@@ -1771,9 +1795,9 @@ def api_organize_preview():
             for f in os.listdir(entry_path):
                 fp = os.path.join(entry_path, f)
                 if os.path.isfile(fp) and f.lower().endswith('.pdf'):
-                    month2 = _file_month(entry, f, fp)
                     inv_id = f"{entry}/{f}"
                     inv_meta_data = meta.get(inv_id, {})
+                    month2 = inv_meta_data.get('month') or _file_month(entry, f, fp)
                     status = inv_meta_data.get('status', '未报销')
                     if status not in STATUS_NAMES: status = '未报销'
                     to_move.append({'from': os.path.relpath(fp, BASE_DIR),
@@ -1784,9 +1808,9 @@ def api_organize_preview():
             for f in files:
                 if not f.lower().endswith('.pdf'): continue
                 old_path = os.path.join(root, f)
-                month = _file_month(entry, f, old_path)
-                inv_id = f"{entry}/{f}"
+                inv_id = os.path.relpath(old_path, BASE_DIR).replace('\\', '/')
                 inv_meta_data = meta.get(inv_id, {})
+                month = inv_meta_data.get('month') or _file_month(entry, f, old_path)
                 status = inv_meta_data.get('status', '')
                 if not status or status not in STATUS_NAMES:
                     status = '已报销' if '已报' in entry else '未报销'

@@ -1,5 +1,6 @@
 """Regressions for the defects reproduced during the whole-project review."""
 import io
+import csv
 import os
 import sqlite3
 import tempfile
@@ -132,3 +133,82 @@ class TestReviewFixes(unittest.TestCase):
         self.assertEqual(reply['code'], 'DUPLICATE')
         self.assertTrue(reply['duplicates'])
         self.assertTrue(all(entry['path'] == '' for entry in reply['duplicates']))
+
+    def test_confirmed_date_vendor_used_by_single_batch_search_and_csv(self):
+        date, vendor = '2026-10-14', '确认商家_' + uuid4().hex[:8]
+        single = self.confirm(self.upload(), date=date, vendor=vendor).get_json()['rel_path']
+        batch = self.member.post('/invoices/api/upload/confirm/batch', json={'items': [{
+            'tmp_path': self.upload(), 'month': '2026.10', 'amount': '2.00',
+            'date': date, 'vendor': vendor}]}).get_json()['results'][0]['path']
+        for rel in (single, batch):
+            row = self.member.get('/invoices/api/invoices', query_string={'id': rel}).get_json()['data'][0]
+            self.assertEqual((row['date'], row['vendor']), (date, vendor))
+            self.assertIn(vendor, rel)
+        found = self.member.get('/invoices/api/invoices', query_string={'search': vendor}).get_json()['data']
+        self.assertEqual({row['id'] for row in found}, {single, batch})
+        download = self.admin.get('/invoices/api/export/download')
+        rows = list(csv.DictReader(io.StringIO(download.get_data(as_text=True).lstrip('\ufeff'))))
+        download.close()
+        selected = [row for row in rows if row['文件路径'] in (single, batch)]
+        self.assertEqual(len(selected), 2)
+        self.assertTrue(all((row['开票日期'], row['供应商']) == (date, vendor) for row in selected))
+
+    def test_explicit_blank_date_vendor_override_filename_but_missing_fields_fall_back(self):
+        filename = '类别-1元-原商家-2026.10.13-发票.pdf'
+        blank = self.confirm(self.upload(filename=filename), date='', vendor='').get_json()['rel_path']
+        legacy = self.confirm(self.upload(filename=filename)).get_json()['rel_path']
+        blank_row = self.member.get('/invoices/api/invoices', query_string={'id': blank}).get_json()['data'][0]
+        old_row = self.member.get('/invoices/api/invoices', query_string={'id': legacy}).get_json()['data'][0]
+        self.assertEqual((blank_row['date'], blank_row['vendor']), ('', ''))
+        self.assertEqual((old_row['date'], old_row['vendor']), ('2026-10-13', '原商家'))
+
+    def test_nested_organize_preserves_metadata_cache_and_is_idempotent(self):
+        with invoices._invoice_lock, tempfile.TemporaryDirectory() as root, patch.multiple(
+            invoices, BASE_DIR=root, META_FILE=os.path.join(root, '.invoice_meta.json'),
+            CACHE_FILE=os.path.join(root, '.invoice_cache.json')):
+            meta = {}
+            for sub in ('a', 'b'):
+                rel = f'legacy/deep/{sub}/类别-1元-商家-2026.10.13-发票.pdf'
+                full = os.path.join(root, rel)
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, 'wb') as stream: stream.write(b'%PDF-1.4\n' + sub.encode())
+                meta[rel] = {'rel_path': rel, 'filename': os.path.basename(rel), 'month': '2026.9',
+                             'status': '已报销', 'submitter_id': self.uid, 'submitter': '历史显示名',
+                             'notes': sub, 'confirmed_amount_cents': 9999,
+                             'confirmed_vendor': '确认商家', 'confirmed_date': '2026-09-20',
+                             'tags': ['验收'], 'invoice_number': 'fixture-' + sub,
+                             'category_override': '确认类别', 'reimbursed_date': '2026-10-01'}
+            invoices.save_meta(meta)
+            invoices.save_json(invoices.CACHE_FILE, {key: {'amount_cents': 9999} for key in meta})
+            preview = self.admin.get('/invoices/api/organize/preview').get_json()
+            self.assertEqual(preview['count'], 2)
+            self.assertTrue(all(row['status'] == '已报销' and row['month'] == '2026.9' for row in preview['files']))
+            result = invoices.organize_all_files()
+            self.assertEqual((result['moved'], result['errors']), (2, 0))
+            moved = invoices.load_meta()
+            self.assertEqual(len(moved), 2)
+            for entry in moved.values():
+                original = next(value for value in meta.values() if value['notes'] == entry['notes'])
+                for field in ('submitter_id', 'submitter', 'status', 'month', 'confirmed_amount_cents',
+                              'tags', 'invoice_number', 'category_override', 'confirmed_vendor',
+                              'confirmed_date', 'reimbursed_date'):
+                    self.assertEqual(entry[field], original[field])
+                self.assertTrue(os.path.isfile(os.path.join(root, entry['rel_path'])))
+                self.assertNotIn('\\', entry['rel_path'])
+            self.assertEqual(set(invoices.load_cache()), set(moved))
+            self.assertEqual(invoices.organize_all_files()['moved'], 0)
+            self.assertEqual(invoices.load_meta(), moved)
+            rows = self.member.get('/invoices/api/invoices').get_json()['data']
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all(row['amount'] == '99.99' for row in rows))
+
+    def test_special_character_preview_and_ownership(self):
+        rel = self.confirm(self.upload(), vendor="商家'% +", date='2026-10-14').get_json()['rel_path']
+        response = self.member.get('/invoices/api/open_file', query_string={'rel_path': rel})
+        self.assertEqual(response.status_code, 200)
+        self.member.get(response.get_json()['url']).close()
+        name = 'other_' + uuid4().hex[:8]
+        self.admin.post('/api/member', json={'name': name, 'username': name, 'password': 'review-password'})
+        other = app_module.app.test_client()
+        other.post('/login', json={'username': name, 'password': 'review-password'})
+        self.assertEqual(other.get('/invoices/api/open_file', query_string={'rel_path': rel}).status_code, 403)
