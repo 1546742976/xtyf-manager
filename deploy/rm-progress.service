@@ -10,8 +10,8 @@ WorkingDirectory={{APP_DIR}}
 Environment=PYTHONUNBUFFERED=1
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-# 关键：单 worker（发票 SSE 后台任务依赖进程内状态）；8 线程；绑定 80 端口（配合 AmbientCapabilities）
-ExecStart={{APP_DIR}}/venv/bin/gunicorn --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:80 --access-logfile - app:app
+# 默认 1 worker / 8 线程；配置钩子在服务重启后自动接续持久化发票队列
+ExecStart={{APP_DIR}}/venv/bin/gunicorn --config deploy/gunicorn.conf.py --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:80 --access-logfile - app:app
 Restart=always
 RestartSec=3
 

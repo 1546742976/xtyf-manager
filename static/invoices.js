@@ -15,10 +15,10 @@ try {
 var ss=s.status_stats||{};
 document.getElementById('statsGrid').innerHTML=[
 {l:'发票总数',v:s.total_count,cls:'accent-blue'},
-{l:'总金额',v:'\xA5'+(s.total_amount||0).toLocaleString(),cls:'accent-blue'},
-{l:'已报销',v:(ss['已报销']||{}).count+' / \xA5'+((ss['已报销']||{}).amount||0).toLocaleString(),cls:'accent-green'},
-{l:'正在报销',v:(ss['正在报销']||{}).count+' / \xA5'+((ss['正在报销']||{}).amount||0).toLocaleString(),cls:'accent-orange'},
-{l:'未报销',v:(ss['未报销']||{}).count+' / \xA5'+((ss['未报销']||{}).amount||0).toLocaleString(),cls:'accent-red'},
+{l:'总金额',v:'\xA5'+Money.format(s.total_amount),cls:'accent-blue'},
+{l:'已报销',v:(ss['已报销']||{}).count+' / \xA5'+Money.format((ss['已报销']||{}).amount),cls:'accent-green'},
+{l:'正在报销',v:(ss['正在报销']||{}).count+' / \xA5'+Money.format((ss['正在报销']||{}).amount),cls:'accent-orange'},
+{l:'未报销',v:(ss['未报销']||{}).count+' / \xA5'+Money.format((ss['未报销']||{}).amount),cls:'accent-red'},
 {l:'提交人',v:Object.keys(s.submitter_stats||{}).filter(function(k){return k!=='未指定'}).length+' 人',cls:'accent-purple'},
 ].map(function(c){return '<div class="stat-card '+c.cls+'"><div class="label">'+c.l+'</div><div class="value">'+c.v+'</div></div>'}).join('');
 ['filterMonth','filterCategory'].forEach(function(id){setOptions(id,Object.keys(s[id.replace('filter','').toLowerCase()+'_stats']||{}).sort().reverse())});
@@ -60,8 +60,8 @@ if(data.data.length===0){tb.innerHTML='';em.style.display='block'}else{em.style.
 tb.innerHTML=data.data.map(function(inv){
 var sc=App.selected[inv.id]?' row-selected':'';
 if(dupPaths.length&&dupPaths.indexOf(inv.rel_path)>=0)sc+=' row-dup';
-var ah=inv.amount>0?'\xA5'+inv.amount.toLocaleString():'<span class="amount-col missing">\xA50.00</span>';
-var st=inv.source==='PDF'?'<span class="badge tag-pdf">PDF</span>':inv.source==='PDF(\u7f13\u5b58)'?'<span class="badge tag-pdf">PDF\u7f13\u5b58</span>':inv.source==='文件名'?'<span class="badge tag-filename">文件名</span>':'<span class="badge tag-unknown">待识别</span>';
+var ah=Money.compare(inv.amount,'0.00')>0?'\xA5'+Money.format(inv.amount):'<span class="amount-col missing">\xA50.00</span>';
+var st=inv.source==='人工确认'?'<span class="badge tag-filename">人工确认</span>':inv.source==='PDF'?'<span class="badge tag-pdf">PDF</span>':inv.source==='PDF(\u7f13\u5b58)'?'<span class="badge tag-pdf">PDF\u7f13\u5b58</span>':inv.source==='文件名'?'<span class="badge tag-filename">文件名</span>':'<span class="badge tag-unknown">待识别</span>';
 var eid = jsEscape(inv.id);
 var erp = encodeURIComponent(inv.rel_path||'');
 var subHtml=inv.submitter?'<span class="clickable" onclick="DetailModal.open(\''+eid+'\')">'+escHtml(inv.submitter)+'</span>':'<span style="color:#ccc;cursor:pointer" onclick="DetailModal.open(\''+eid+'\')">-</span>';
@@ -171,7 +171,7 @@ async function quickConfirm(d){
 if(IS_FINANCE){await BUModal.open([d]);return}
 var sub=ME_NAME;
 if(!sub||!sub.trim()){showToast('需要填写提交人才能入库','error');cleanupTmp([d.tmp_path]);return}
-var body={tmp_path:d.tmp_path,original_name:d.original_name,month:d.info.month||'未归类',status:'未报销',submitter:sub.trim(),category:d.info.category||'',notes:'',amount:d.info.amount||0,vendor:d.info.vendor||'',date:d.info.date||'',invoice_number:d.info.invoice_number||'',skip_duplicate_check:!d.has_duplicate||confirm('检测到可能重复，仍要入库吗？')};
+var body={tmp_path:d.tmp_path,original_name:d.original_name,month:d.info.month||'未归类',status:'未报销',submitter:sub.trim(),category:d.info.category||'',notes:'',amount:d.info.amount||'0.00',vendor:d.info.vendor||'',date:d.info.date||'',invoice_number:d.info.invoice_number||'',skip_duplicate_check:!d.has_duplicate||confirm('检测到可能重复，仍要入库吗？')};
 Progress.show('正在入库...');
 try{var r=await fetch('/invoices/api/upload/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var dd=await r.json();Progress.hide();if(dd.success){showToast(dd.message,'success');App.stats=null;loadStats();loadInvoices(1)}else if(dd.code==='DUPLICATE'){showToast('存在重复发票，已拦截','error');cleanupTmp([d.tmp_path])}else{showToast(dd.error,'error');cleanupTmp([d.tmp_path])}}
 catch(e){Progress.hide();showToast('入库失败: '+e.message,'error')}
@@ -194,7 +194,7 @@ var dupInfo=r.has_duplicate?'<span class="badge tag-dup" title="'+r.duplicates.m
 return '<tr class="'+dupClass+'">'+
 '<td>'+(idx+1)+'</td>'+
 '<td title="'+escHtml(r.original_name)+'">'+escHtml(r.original_name.substring(0,25))+'</td>'+
-'<td><input type="number" step="0.01" value="'+(d.amount||'')+'" style="width:70px" class="bu-amount-'+idx+'"></td>'+
+'<td><input type="number" step="any" min="0" title="金额按分四舍五入" value="'+(d.amount||'')+'" style="width:70px" class="bu-amount-'+idx+'"></td>'+
 '<td><input type="text" value="'+(d.date||'')+'" style="width:90px" class="bu-date-'+idx+'"></td>'+
 '<td><input type="text" value="'+(d.month||'')+'" style="width:55px" class="bu-month-'+idx+'"></td>'+
 '<td><input type="text" value="'+escHtml(d.vendor||'')+'" style="width:120px" class="bu-vendor-'+idx+'"></td>'+
@@ -221,7 +221,7 @@ for(var i=0;i<BUModal._data.length;i++){
 var r=BUModal._data[i];
 if(!r.success)continue;
 var sub=document.querySelector('.bu-sub-'+i);
-items.push({tmp_path:r.tmp_path,original_name:r.original_name,status:globalStatus,submitter_id:Number((sub&&sub.value)||globalSub),category:document.querySelector('.bu-cat-'+i).value,notes:'',amount:parseFloat(document.querySelector('.bu-amount-'+i).value)||0,vendor:document.querySelector('.bu-vendor-'+i).value,date:document.querySelector('.bu-date-'+i).value,month:document.querySelector('.bu-month-'+i).value||'未归类',invoice_number:document.querySelector('.bu-inum-'+i).value});
+items.push({tmp_path:r.tmp_path,original_name:r.original_name,status:globalStatus,submitter_id:Number((sub&&sub.value)||globalSub),category:document.querySelector('.bu-cat-'+i).value,notes:'',amount:document.querySelector('.bu-amount-'+i).value||'0.00',vendor:document.querySelector('.bu-vendor-'+i).value,date:document.querySelector('.bu-date-'+i).value,month:document.querySelector('.bu-month-'+i).value||'未归类',invoice_number:document.querySelector('.bu-inum-'+i).value});
 }
 if(!items.every(function(it){return it.submitter_id>0})){showToast('请选择每张发票的提交人或统一提交人','error');return}
 Progress.show('正在入库 '+items.length+' 张发票...');
@@ -239,35 +239,108 @@ else{showToast('入库失败','error')}
 };
 document.getElementById('batchUploadModal').addEventListener('click',function(e){if(e.target===this)BUModal.close()});
 
-// ====== 实时进度 SSE ======
-function startJob(type, onResult){
-Progress.show('准备中...');
-fetch('/invoices/api/job/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:type})})
-.then(function(r){return r.json()})
-.then(function(d){
-if(d.error){Progress.hide();showToast(d.error,'error');return}
-var src=new EventSource('/invoices/api/job/stream/'+d.job_id);
-src.onmessage=function(e){
-var data=JSON.parse(e.data);
-Progress.update(data.progress, data.message);
-if(data.status==='done'){
-src.close();
-Progress.hide();
-if(onResult)onResult(data);
-}else if(data.status==='error'){
-src.close();
-Progress.hide();
-showToast('操作失败: '+data.message,'error');
-}
+// ====== 持久化任务列表与可重连 SSE ======
+var InvoiceJobs={
+  names:{scan_dups:'查重',organize:'整理文件',refresh:'刷新 PDF 金额',delete_dups:'删除重复'},
+  states:{queued:'排队中',running:'执行中',done:'已完成',error:'失败',interrupted:'执行中断'},
+  active:new Map(),timer:null,loading:false,
+  resetButtons:function(){
+    var organize=document.getElementById('organizeBtn'),refresh=document.getElementById('refreshBtn');
+    if(organize){organize.disabled=false;organize.textContent='整理文件'}
+    if(refresh){refresh.disabled=false;refresh.textContent='刷新PDF金额'}
+  },
+  load:async function(){
+    if(!IS_FINANCE||InvoiceJobs.loading)return;
+    clearTimeout(InvoiceJobs.timer);InvoiceJobs.loading=true;
+    var delay=15000;
+    try{
+      var response=await fetch('/invoices/api/jobs');
+      if(response.status===401||response.status===403){
+        InvoiceJobs.active.forEach(function(entry){entry.source.close()});InvoiceJobs.active.clear();
+        document.getElementById('invoiceJobsList').textContent='请重新登录并确认财务权限';
+        return;
+      }
+      if(!response.ok)throw new Error('任务列表加载失败');
+      var data=await response.json(),jobs=data.jobs||[];
+      if(jobs.some(function(job){return job.status==='queued'||job.status==='running'}))delay=3000;
+      document.getElementById('invoiceJobsList').innerHTML=jobs.length?jobs.map(function(job){
+        var date=new Date(job.created_at*1000).toLocaleString();
+        return '<div class="invoice-job-row" data-status="'+escHtml(job.status)+'"><div class="invoice-job-info"><strong>'+escHtml(InvoiceJobs.names[job.type]||job.type)+'</strong> · '+escHtml(InvoiceJobs.states[job.status]||job.status)+' · '+Number(job.progress)+'%<small>'+escHtml(job.message)+'</small><small>'+escHtml(job.actor_name)+' · '+escHtml(date)+'</small></div><button type="button" class="btn-sm" data-job-id="'+escHtml(job.id)+'">查看'+(['queued','running'].includes(job.status)?'进度':'结果')+'</button></div>';
+      }).join(''):'暂无后台任务';
+      document.querySelectorAll('#invoiceJobsList [data-job-id]').forEach(function(button){button.addEventListener('click',function(){InvoiceJobs.view(button.dataset.jobId)})});
+      for(var job of jobs){
+        if(InvoiceJobs.active.has(job.id)&&['done','error','interrupted'].includes(job.status)){
+          var detail=await fetch('/invoices/api/job/'+encodeURIComponent(job.id));
+          if(detail.ok)InvoiceJobs.finish(job.id,await detail.json());
+        }
+      }
+    }catch(error){document.getElementById('invoiceJobsList').textContent=error.message+'，稍后自动重试';delay=5000}
+    finally{InvoiceJobs.loading=false}
+    InvoiceJobs.timer=setTimeout(InvoiceJobs.load,delay);
+  },
+  watch:function(id,onResult){
+    if(InvoiceJobs.active.has(id))return;
+    var source=new EventSource('/invoices/api/job/stream/'+encodeURIComponent(id));
+    InvoiceJobs.active.set(id,{source:source,onResult:onResult});
+    source.onmessage=function(event){
+      try{
+        var data=JSON.parse(event.data);
+        if(['done','error','interrupted'].includes(data.status))InvoiceJobs.finish(id,data);
+      }catch(error){showToast('任务进度解析失败，可在任务列表查看结果','error')}
+    };
+    // EventSource reconnects automatically. The list also retrieves terminal results.
+    source.onerror=function(){InvoiceJobs.load()};
+    InvoiceJobs.load();
+  },
+  finish:function(id,data){
+    var entry=InvoiceJobs.active.get(id);if(!entry)return;
+    entry.source.close();InvoiceJobs.active.delete(id);InvoiceJobs.resetButtons();
+    if(data.status==='done'){
+      var result=data.result||{};
+      if(result.failed||result.errors){
+        App.stats=null;loadStats();loadInvoices(App.currentPage);
+        InvoiceJobs.showResult(data);showToast('任务完成，部分项目失败，请查看结果','error');
+      }else if(entry.onResult)entry.onResult(data);
+      else{App.stats=null;loadStats();loadInvoices(App.currentPage);InvoiceJobs.showResult(data)}
+    }else{showToast(data.message||'任务执行失败','error');InvoiceJobs.showResult(data)}
+    InvoiceJobs.load();
+  },
+  view:async function(id){
+    try{
+      var response=await fetch('/invoices/api/job/'+encodeURIComponent(id));
+      var job=await response.json();if(!response.ok)throw new Error(job.error||'任务读取失败');
+      if(job.status==='queued'||job.status==='running'){
+        InvoiceJobs.watch(id);showToast(job.message+' · '+job.progress+'%','info');
+      }else if(job.type==='scan_dups'&&job.status==='done')showDuplicateResult(job);
+      else InvoiceJobs.showResult(job);
+    }catch(error){showToast(error.message,'error')}
+  },
+  showResult:function(job){
+    var result=job.result||{},lines=[];
+    var labels={moved:'移动文件',skipped:'跳过文件',errors:'失败项目',empty_dirs_removed:'清理空目录',total:'发票总数',pdf_extracted:'识别金额',deleted:'删除文件',failed:'失败文件',groups:'重复组',dup_count:'重复项目'};
+    Object.keys(labels).forEach(function(key){if(result[key]!==undefined)lines.push(labels[key]+'：'+result[key])});
+    (result.details||[]).forEach(function(item){lines.push(String(item))});
+    (result.failed_details||[]).forEach(function(item){lines.push(item.path+'：'+item.error)});
+    if(result.deleted_paths&&result.deleted_paths.length)lines.push('已删除文件（最多显示 50 项）：',...result.deleted_paths);
+    document.getElementById('invoiceJobResultTitle').textContent=(InvoiceJobs.names[job.type]||'后台任务')+' · '+(InvoiceJobs.states[job.status]||'结果');
+    document.getElementById('invoiceJobResultMessage').textContent=job.message||result.error||'';
+    document.getElementById('invoiceJobResultDetails').textContent=lines.join('\n');
+    document.getElementById('invoiceJobModal').classList.add('show');
+  }
 };
-src.onerror=function(){src.close();Progress.hide();showToast('连接中断','error')};
-})
-.catch(function(e){Progress.hide();showToast('启动失败: '+e.message,'error')});
+async function startJob(type,onResult){
+  try{
+    var response=await fetch('/invoices/api/job/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:type})});
+    var data=await response.json();if(!response.ok||!data.job_id)throw new Error(data.error||'启动失败');
+    InvoiceJobs.watch(data.job_id,onResult);
+    showToast(data.created?'任务已提交，可在后台任务中查看':'已有同类任务，已连接到当前任务','info');
+  }catch(error){showToast('启动失败：'+error.message,'error')}
+  finally{InvoiceJobs.resetButtons()}
 }
 
 // ====== 查重 ======
-function scanDuplicates(){
-startJob('scan_dups', function(data){
+function scanDuplicates(){startJob('scan_dups',showDuplicateResult)}
+function showDuplicateResult(data){
 var res=data.result||{};
 var dups=res.duplicates||{};
 var dupCount=res.dup_count||0;
@@ -284,7 +357,6 @@ loadInvoices(App.currentPage,true);
 // 显示删除确认弹窗
 DelDupModal.show(dups, allPaths);
 }
-});
 }
 
 var DelDupModal={
@@ -336,7 +408,7 @@ document.getElementById('detSubmitter').innerHTML=invoiceOwnerOptions(inv.submit
 document.getElementById('detSubmitter').value=String(inv.submitter_id||0);
 document.getElementById('detCategory').value=inv.category||'';
 document.getElementById('detVendor').value=inv.vendor;
-document.getElementById('detAmount').value='\xA5'+inv.amount.toLocaleString();
+document.getElementById('detAmount').value='\xA5'+Money.format(inv.amount);
 document.getElementById('detNotes').value=inv.notes||'';
 document.getElementById('detInvNum').value=inv.invoice_number||'';
 document.getElementById('detTags').value=(inv.tags||[]).join(', ');
@@ -357,11 +429,11 @@ document.getElementById('detailModal').addEventListener('click',function(e){if(e
 // ====== 统计弹窗 (精简) ======
 var StatsModal={show:async function(){
 if(!App.stats){var r=await fetch('/invoices/api/stats');App.stats=await r.json()}var s=App.stats,ss=s.status_stats||{};
-document.getElementById('modalStatsGrid').innerHTML=[{l:'发票总数',v:s.total_count,cls:'accent-blue'},{l:'总金额',v:'\xA5'+(s.total_amount||0).toLocaleString(),cls:'accent-blue'},{l:'已报销',v:(ss['已报销']||{}).count+'张 / \xA5'+((ss['已报销']||{}).amount||0).toLocaleString(),cls:'accent-green'},{l:'正在报销',v:(ss['正在报销']||{}).count+'张 / \xA5'+((ss['正在报销']||{}).amount||0).toLocaleString(),cls:'accent-orange'},{l:'未报销',v:(ss['未报销']||{}).count+'张 / \xA5'+((ss['未报销']||{}).amount||0).toLocaleString(),cls:'accent-red'}].map(function(o){return '<div class="stat-card '+o.cls+'"><div class="label">'+o.l+'</div><div class="value">'+o.v+'</div></div>'}).join('');
-var months=Object.entries(s.month_stats||{}).sort(),maxM=Math.max.apply(null,months.map(function(e){return e[1].amount}))||1;document.getElementById('monthChart').innerHTML=months.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+(e[1].amount/maxM*100).toFixed(1)+'%"></div></div><div class="bar-value">\xA5'+e[1].amount.toLocaleString()+' ('+e[1].count+'张)</div></div>'}).join('');
-document.getElementById('statusChart').innerHTML=['未报销','正在报销','已报销'].map(function(st){var d=ss[st]||{count:0,amount:0},cls=st==='已报销'?'accent-green':st==='正在报销'?'accent-orange':'accent-red',pct=s.total_count?(d.count/s.total_count*100).toFixed(1):0;return '<div class="chart-bar '+cls+'"><div class="name">'+st+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Math.max(pct,2)+'%"></div></div><div class="bar-value">\xA5'+d.amount.toLocaleString()+' ('+d.count+'张)</div></div>'}).join('');
-var cats=Object.entries(s.category_stats||{}).sort(function(a,b){return b[1].amount-a[1].amount}),maxC=Math.max.apply(null,cats.map(function(e){return e[1].amount}))||1;document.getElementById('categoryChart').innerHTML=cats.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+(e[1].amount/maxC*100).toFixed(1)+'%"></div></div><div class="bar-value">\xA5'+e[1].amount.toLocaleString()+' ('+e[1].count+'张)</div></div>'}).join('');
-var subs=Object.entries(s.submitter_stats||{}).sort(function(a,b){return b[1].amount-a[1].amount}),maxS=Math.max.apply(null,subs.map(function(e){return e[1].amount}))||1;document.getElementById('submitterChart').innerHTML=subs.length===0?'<div style="color:#aaa;text-align:center;padding:20px">暂无提交人数据</div>':subs.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+(e[1].amount/maxS*100).toFixed(1)+'%"></div></div><div class="bar-value">\xA5'+e[1].amount.toLocaleString()+' ('+e[1].count+'张)</div></div>'}).join('');
+document.getElementById('modalStatsGrid').innerHTML=[{l:'发票总数',v:s.total_count,cls:'accent-blue'},{l:'总金额',v:'\xA5'+Money.format(s.total_amount),cls:'accent-blue'},{l:'已报销',v:(ss['已报销']||{}).count+'张 / \xA5'+Money.format((ss['已报销']||{}).amount),cls:'accent-green'},{l:'正在报销',v:(ss['正在报销']||{}).count+'张 / \xA5'+Money.format((ss['正在报销']||{}).amount),cls:'accent-orange'},{l:'未报销',v:(ss['未报销']||{}).count+'张 / \xA5'+Money.format((ss['未报销']||{}).amount),cls:'accent-red'}].map(function(o){return '<div class="stat-card '+o.cls+'"><div class="label">'+o.l+'</div><div class="value">'+o.v+'</div></div>'}).join('');
+var months=Object.entries(s.month_stats||{}).sort(),maxM=Money.max(months.map(function(e){return e[1].amount}));document.getElementById('monthChart').innerHTML=months.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Money.percent(e[1].amount,maxM)+'%"></div></div><div class="bar-value">\xA5'+Money.format(e[1].amount)+' ('+e[1].count+'张)</div></div>'}).join('');
+document.getElementById('statusChart').innerHTML=['未报销','正在报销','已报销'].map(function(st){var d=ss[st]||{count:0,amount:'0.00'},cls=st==='已报销'?'accent-green':st==='正在报销'?'accent-orange':'accent-red',pct=s.total_count?(d.count/s.total_count*100).toFixed(1):0;return '<div class="chart-bar '+cls+'"><div class="name">'+st+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Math.max(pct,2)+'%"></div></div><div class="bar-value">\xA5'+Money.format(d.amount)+' ('+d.count+'张)</div></div>'}).join('');
+var cats=Object.entries(s.category_stats||{}).sort(function(a,b){return Money.compare(b[1].amount,a[1].amount)}),maxC=Money.max(cats.map(function(e){return e[1].amount}));document.getElementById('categoryChart').innerHTML=cats.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Money.percent(e[1].amount,maxC)+'%"></div></div><div class="bar-value">\xA5'+Money.format(e[1].amount)+' ('+e[1].count+'张)</div></div>'}).join('');
+var subs=Object.entries(s.submitter_stats||{}).sort(function(a,b){return Money.compare(b[1].amount,a[1].amount)}),maxS=Money.max(subs.map(function(e){return e[1].amount}));document.getElementById('submitterChart').innerHTML=subs.length===0?'<div style="color:#aaa;text-align:center;padding:20px">暂无提交人数据</div>':subs.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Money.percent(e[1].amount,maxS)+'%"></div></div><div class="bar-value">\xA5'+Money.format(e[1].amount)+' ('+e[1].count+'张)</div></div>'}).join('');
 document.getElementById('statsModal').classList.add('show')},close:function(){document.getElementById('statsModal').classList.remove('show')}};
 document.getElementById('statsModal').addEventListener('click',function(e){if(e.target===this)StatsModal.close()});
 
@@ -404,6 +476,8 @@ showToast('PDF金额刷新完成','success');
 window.IS_FINANCE=window.IS_FINANCE||false;window.ME_NAME=window.ME_NAME||'';
 if(!window.IS_FINANCE){document.body.classList.add('member');document.querySelectorAll('#detailModal input,#detailModal select,#detailModal textarea').forEach(function(el){el.disabled=true});}
 loadStats().then(function(){loadInvoices()});
+if(window.IS_FINANCE)InvoiceJobs.load();
+window.addEventListener('beforeunload',function(){InvoiceJobs.active.forEach(function(entry){entry.source.close()})});
 
 function invoiceOwnerOptions(selected, placeholder, allowUnassigned){
   var zero=allowUnassigned?'0':'';

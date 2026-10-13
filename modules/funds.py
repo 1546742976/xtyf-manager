@@ -13,15 +13,18 @@
 import base64
 import csv
 import io
-import math
 import os
 import sqlite3
+import tempfile
 from datetime import datetime
 
 from flask import Blueprint, jsonify, redirect, render_template, request, send_file
 
 from common import current_user
 from modules.security import has_permission
+from modules.money import to_cents, format_cents, money_fields, money_json
+from modules.funds_migrations import migrate as migrate_funds_money
+from modules.invoice_storage import InvoiceFileLock
 
 # ---- 数据目录：默认 <项目>/data/funds，可用环境变量 FUNDS_DIR 覆盖 ----
 FUNDS_DIR = os.environ.get(
@@ -32,6 +35,7 @@ FUNDS_DB = os.path.join(FUNDS_DIR, "funds.db")
 FUNDS_TXT = os.path.join(FUNDS_DIR, "资金管理记录.txt")
 
 os.makedirs(FUNDS_DIR, exist_ok=True)
+_ledger_lock = InvoiceFileLock(os.path.join(FUNDS_DIR, ".funds-ledger.lock"))
 
 import matplotlib
 matplotlib.use("Agg")
@@ -62,86 +66,99 @@ def valid_record_date(value):
 
 
 def get_funds_db():
-    conn = sqlite3.connect(FUNDS_DB)
+    conn = sqlite3.connect(FUNDS_DB, timeout=30)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-# ---- 台账同步：把全部记录生成人类可读的 txt（utf-8-sig，含"审核"列），每次增删改/审核后调用 ----
+def summarize_records(records):
+    """One snapshot and Python integer sums for every total, grouping and chart."""
+    stats = {'total_in': 0, 'total_out': 0, 'record_count': len(records)}
+    groups = {key: {} for key in ('category_stats', 'monthly_stats', 'applicant_stats', 'source_stats', 'handler_stats')}
+    def add(key, label, value, name):
+        bucket = groups[key].setdefault(label, {name: label, 'total': 0, 'cnt': 0})
+        bucket['total'] += value
+        bucket['cnt'] += 1
+    for row in records:
+        amount = row['amount_cents']
+        income = row['record_type'] == '进'
+        stats['total_in' if income else 'total_out'] += amount
+        month = row['record_date'][:7]
+        monthly = groups['monthly_stats'].setdefault(month, {'month': month, 'income': 0, 'expense': 0})
+        monthly['income' if income else 'expense'] += amount
+        if income:
+            add('source_stats', row['source_dest'] or '', amount, 'source')
+        else:
+            add('category_stats', row['category'] or '', amount, 'category')
+            for group, column in [('applicant_stats', 'applicant'), ('handler_stats', 'handler')]:
+                add(group, row[column] or '', amount, column)
+    stats['balance'] = stats['total_in'] - stats['total_out']
+    for key, values in groups.items():
+        stats[key] = (sorted(values.values(), key=lambda row: row['month']) if key == 'monthly_stats'
+                      else sorted(values.values(), key=lambda row: -row['total']))
+    return stats
+
+
+def record_payload(row):
+    result = dict(row)
+    result.update(money_fields(row['amount_cents']))
+    return result
+
+
+def stats_payload(stats):
+    result = {'record_count': stats['record_count']}
+    for key in ('total_in', 'total_out', 'balance'):
+        result.update(money_fields(stats[key], key))
+    for key in ('category_stats', 'monthly_stats', 'applicant_stats', 'source_stats', 'handler_stats'):
+        result[key] = []
+        for row in stats[key]:
+            item = dict(row)
+            for field in ('total', 'income', 'expense'):
+                if field in item:
+                    item.update(money_fields(row[field], field))
+            result[key].append(item)
+    return result
+
+
+# ---- 台账同步：与 API 共用整数分统计，串行快照、原子替换 ----
 def sync_txt():
-    conn = sqlite3.connect(FUNDS_DB)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT * FROM records ORDER BY record_date DESC, id DESC").fetchall()
-    records = [dict(r) for r in rows]
-
-    total_in = sum(r["amount"] for r in records if r["record_type"] == "进")
-    total_out = sum(r["amount"] for r in records if r["record_type"] == "出")
-
-    lines = []
-    lines.append("=" * 70)
-    lines.append("  RoboMaster 巡天御风 | 资金管理记录")
-    lines.append(f'  更新时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
-    lines.append(f"  总进账:   ￥{total_in:>12.2f}")
-    lines.append(f"  总支出:   ￥{total_out:>12.2f}")
-    lines.append(f"  结余:     ￥{total_in - total_out:>12.2f}")
-    lines.append("=" * 70)
-    lines.append("")
-    lines.append(f'{"ID":>4}  {"类型":4}  {"金额":>10}  {"类别":8}  {"来源/去向":20}  {"申请人":8}  {"发票":4}  {"处理人":8}  {"日期":12}  {"审核":4}  备注')
-    lines.append("-" * 70)
-
-    for r in records:
-        rt = "进账" if r["record_type"] == "进" else "支出"
-        amt = f'￥{r["amount"]:,.2f}'
-        cat = r["category"] or "-"
-        sd = r["source_dest"] or "-"
-        apl = r["applicant"] or "-"
-        inv = str(r["invoice_count"])
-        hdl = r["handler"] or "-"
-        dt = r["record_date"]
-        review = "待审" if (dict(r).get("review_status") or "") == "待审核" else "已审"
-        notes = r["notes"] or ""
-        lines.append(f'{r["id"]:>4}  {rt:4}  {amt:>10}  {cat:8}  {sd:20}  {apl:8}  {inv:>4}  {hdl:8}  {dt:12}  {review:4}  {notes}')
-
-    lines.append("-" * 70)
-    lines.append(f"  共 {len(records)} 条记录")
-    lines.append("=" * 70)
-    lines.append("")
-
-    with open(FUNDS_TXT, "w", encoding="utf-8-sig") as f:
-        f.write("\n".join(lines))
-
-    conn.close()
+    with _ledger_lock:
+        conn = get_funds_db()
+        try:
+            records = conn.execute('SELECT * FROM records ORDER BY record_date DESC,id DESC').fetchall()
+        finally:
+            conn.close()
+        stats = summarize_records(records)
+        lines = ['=' * 70, '  RoboMaster 巡天御风 | 资金管理记录',
+                 f'  更新时间: {datetime.now():%Y-%m-%d %H:%M:%S}',
+                 f"  总进账:   ￥{format_cents(stats['total_in']):>12}",
+                 f"  总支出:   ￥{format_cents(stats['total_out']):>12}",
+                 f"  结余:     ￥{format_cents(stats['balance']):>12}", '=' * 70, '',
+                 f'{"ID":>4}  {"类型":4}  {"金额":>10}  {"类别":8}  {"来源/去向":20}  {"申请人":8}  {"发票":4}  {"处理人":8}  {"日期":12}  {"审核":4}  备注', '-' * 70]
+        for row in records:
+            rt = '进账' if row['record_type'] == '进' else '支出'
+            amount = '￥' + format_cents(row['amount_cents'], grouping=True)
+            review = '待审' if row['review_status'] == '待审核' else '已审'
+            lines.append(f"{row['id']:>4}  {rt:4}  {amount:>10}  {row['category'] or '-':8}  {row['source_dest'] or '-':20}  {row['applicant'] or '-':8}  {str(row['invoice_count']):>4}  {row['handler'] or '-':8}  {row['record_date']:12}  {review:4}  {row['notes'] or ''}")
+        lines.extend(['-' * 70, f'  共 {len(records)} 条记录', '=' * 70, ''])
+        fd, temporary = tempfile.mkstemp(prefix='.ledger-', suffix='.tmp', dir=FUNDS_DIR)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8-sig') as stream:
+                stream.write('\n'.join(lines))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, FUNDS_TXT)
+        finally:
+            if os.path.exists(temporary):
+                os.remove(temporary)
 
 
-# ---- 建表 + 结构迁移：老库自动补 review_status / reviewed_by / reviewed_at 三列 ----
 def init_funds_db():
-    conn = sqlite3.connect(FUNDS_DB)
-    conn.execute('''CREATE TABLE IF NOT EXISTS records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        record_type TEXT NOT NULL CHECK(record_type IN ('进','出')),
-        amount REAL NOT NULL,
-        category TEXT DEFAULT '',
-        source_dest TEXT DEFAULT '',
-        applicant TEXT DEFAULT '',
-        invoice_count INTEGER DEFAULT 0,
-        handler TEXT DEFAULT '',
-        record_date TEXT NOT NULL,
-        notes TEXT DEFAULT '',
-        review_status TEXT DEFAULT '',
-        reviewed_by TEXT DEFAULT '',
-        reviewed_at TEXT DEFAULT '',
-        created_at TEXT DEFAULT (datetime('now','localtime'))
-    )''')
-    cols = [row[1] for row in conn.execute("PRAGMA table_info(records)").fetchall()]
-    for col, ddl in [
-        ("review_status", "ALTER TABLE records ADD COLUMN review_status TEXT DEFAULT ''"),
-        ("reviewed_by", "ALTER TABLE records ADD COLUMN reviewed_by TEXT DEFAULT ''"),
-        ("reviewed_at", "ALTER TABLE records ADD COLUMN reviewed_at TEXT DEFAULT ''"),
-    ]:
-        if col not in cols:
-            conn.execute(ddl)
-    conn.commit()
-    conn.close()
+    conn = sqlite3.connect(FUNDS_DB, timeout=30)
+    try:
+        migrate_funds_money(conn)
+    finally:
+        conn.close()
     sync_txt()
 
 
@@ -211,11 +228,9 @@ def get_records():
         val = request.args.get(f, "").strip()
         if val:
             op = ">=" if "min" in f else "<="
-            q += f" AND amount {op} ?"
+            q += f" AND amount_cents {op} ?"
             try:
-                numeric = float(val)
-                if not math.isfinite(numeric):
-                    raise ValueError()
+                numeric = to_cents(val)
             except (TypeError, ValueError):
                 conn.close()
                 return jsonify({"code": 1, "msg": "金额筛选条件无效"}), 400
@@ -232,10 +247,12 @@ def get_records():
     allowed = {"id", "record_type", "amount", "record_date", "created_at"}
     if sort_by not in allowed:
         sort_by = "record_date"
+    if sort_by == "amount":
+        sort_by = "amount_cents"
     sort_order = "DESC" if sort_order != "ASC" else "ASC"
     q += f" ORDER BY {sort_by} {sort_order}"
 
-    records = [dict(r) for r in conn.execute(q, params).fetchall()]
+    records = [record_payload(r) for r in conn.execute(q, params).fetchall()]
     conn.close()
     return jsonify({"code": 0, "data": records})
 
@@ -243,17 +260,15 @@ def get_records():
 @funds_bp.route("/api/records", methods=["POST"])
 # ---- 新增记录：申请人自动填当前登录人；未获审核授权的人添加 → 待审核（审核人自动已审核）----
 def add_record():
-    data = request.get_json(silent=True) or {}
+    data = money_json()
     rt = data.get("record_type", "")
     if rt not in ("进", "出"):
         return jsonify({"code": 1, "msg": "类型必须为“进”或“出”"})
 
     try:
-        amount = float(data.get("amount", 0))
-    except (TypeError, ValueError):
-        return jsonify({"code": 1, "msg": "金额格式无效"})
-    if not math.isfinite(amount) or amount <= 0:
-        return jsonify({"code": 1, "msg": "金额必须是大于0的有限数值"}), 400
+        amount = to_cents(data.get("amount", 0), positive=True)
+    except ValueError as exc:
+        return jsonify({"code": 1, "msg": str(exc)}), 400
     try:
         invoice_count = int(data.get("invoice_count", 0))
         if invoice_count < 0:
@@ -281,7 +296,7 @@ def add_record():
 
     conn = get_funds_db()
     conn.execute('''INSERT INTO records
-        (record_type,amount,category,source_dest,applicant,invoice_count,handler,record_date,notes,review_status,reviewed_by,reviewed_at)
+        (record_type,amount_cents,category,source_dest,applicant,invoice_count,handler,record_date,notes,review_status,reviewed_by,reviewed_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (
         rt, amount, data.get("category", ""),
         data.get("source_dest", "") if rt == "进" else data.get("source_dest", "").strip(),
@@ -294,15 +309,16 @@ def add_record():
     conn.close()
     sync_txt()
     return jsonify({"code": 0, "msg": "添加成功", "id": rid,
-                    "applicant": applicant, "review_status": review_status})
+                    "applicant": applicant, "review_status": review_status, **money_fields(amount)})
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["PUT"])
 # ---- 编辑记录（不触碰审核字段）----
 def update_record(rid):
     """仅在内容实际变化时写库；已审核记录改动后重新进入待审核。"""
-    data = request.get_json(silent=True) or {}
+    data = money_json()
     conn = get_funds_db()
+    conn.execute("BEGIN IMMEDIATE")
     existing = conn.execute("SELECT * FROM records WHERE id=?", (rid,)).fetchone()
     if existing is None:
         conn.close()
@@ -321,9 +337,10 @@ def update_record(rid):
         conn.close()
         return jsonify({"code": 1, "msg": "日期格式不正确（YYYY-MM-DD）"}), 400
     try:
-        candidate["amount"] = float(candidate["amount"])
+        amount_cents = to_cents(candidate["amount"], positive=True)
+        candidate["amount"] = format_cents(amount_cents)
         candidate["invoice_count"] = int(candidate["invoice_count"])
-        if not math.isfinite(candidate["amount"]) or candidate["amount"] <= 0 or candidate["invoice_count"] < 0:
+        if candidate["invoice_count"] < 0:
             raise ValueError()
     except (ValueError, TypeError):
         conn.close()
@@ -338,7 +355,10 @@ def update_record(rid):
                if candidate[key] != original[key]}
     if not changes:
         conn.close()
-        return jsonify({"code": 0, "msg": "内容未变化"})
+        return jsonify({"code": 0, "msg": "内容未变化", **money_fields(amount_cents)})
+    if "amount" in changes:
+        changes.pop("amount")
+        changes["amount_cents"] = amount_cents
     # 已审核记录修改后重新待审，避免审核通过后改写金额绕过复核。
     if original["review_status"] == "已审核":
         changes.update(review_status="待审核", reviewed_by="", reviewed_at="")
@@ -347,7 +367,7 @@ def update_record(rid):
     conn.commit()
     conn.close()
     sync_txt()
-    return jsonify({"code": 0, "msg": "已更新", "review_required": "review_status" in changes})
+    return jsonify({"code": 0, "msg": "已更新", "review_required": "review_status" in changes, **money_fields(amount_cents)})
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["DELETE"])
@@ -419,7 +439,7 @@ def export_csv():
     for r in rows:
         d = dict(r)
         review = "待审核" if (d.get("review_status") or "") == "待审核" else "已审核"
-        w.writerow([d["id"], d["record_type"], d["amount"], d["category"],
+        w.writerow([d["id"], d["record_type"], format_cents(d["amount_cents"]), d["category"],
                     d["source_dest"], d["applicant"], d["invoice_count"],
                     d["handler"], d["record_date"], review, d["notes"], d["created_at"]])
     out.seek(0)
@@ -435,23 +455,12 @@ def export_csv():
 # ---- 统计聚合：总进/总出/结余 + 类别/月度/申请人/来源/处理人分布 ----
 def get_stats():
     conn = get_funds_db()
-    total_in = conn.execute("SELECT COALESCE(SUM(amount),0) FROM records WHERE record_type='进'").fetchone()[0]
-    total_out = conn.execute("SELECT COALESCE(SUM(amount),0) FROM records WHERE record_type='出'").fetchone()[0]
+    try:
+        stats = summarize_records(conn.execute('SELECT * FROM records ORDER BY id').fetchall())
+    finally:
+        conn.close()
+    return jsonify({'code': 0, 'data': stats_payload(stats)})
 
-    def query(sql):
-        return [dict(r) for r in conn.execute(sql).fetchall()]
-
-    data = {
-        "total_in": total_in, "total_out": total_out,
-        "balance": total_in - total_out,
-        "category_stats": query("SELECT category,SUM(amount) as total FROM records WHERE record_type='出' GROUP BY category ORDER BY total DESC"),
-        "monthly_stats": query("SELECT substr(record_date,1,7) as month, SUM(CASE WHEN record_type='进' THEN amount ELSE 0 END) as income, SUM(CASE WHEN record_type='出' THEN amount ELSE 0 END) as expense FROM records GROUP BY month ORDER BY month"),
-        "applicant_stats": query("SELECT applicant,SUM(amount) as total,COUNT(*) as cnt FROM records WHERE record_type='出' AND applicant!='' GROUP BY applicant ORDER BY total DESC"),
-        "source_stats": query("SELECT source_dest as source,SUM(amount) as total,COUNT(*) as cnt FROM records WHERE record_type='进' AND source_dest!='' GROUP BY source_dest ORDER BY total DESC"),
-        "handler_stats": query("SELECT handler,SUM(amount) as total,COUNT(*) as cnt FROM records WHERE record_type='出' AND handler!='' GROUP BY handler ORDER BY total DESC"),
-    }
-    conn.close()
-    return jsonify({"code": 0, "data": data})
 
 
 @funds_bp.route("/api/chart")
@@ -461,60 +470,58 @@ def get_chart():
     conn = get_funds_db()
 
     try:
-        if chart_type == "monthly":
-            rows = conn.execute("""SELECT substr(record_date,1,7) as label,
-                SUM(CASE WHEN record_type='进' THEN amount ELSE 0 END) as income,
-                SUM(CASE WHEN record_type='出' THEN amount ELSE 0 END) as expense
-                FROM records GROUP BY label ORDER BY label""").fetchall()
-            labels, inc, exp = [r["label"] for r in rows], [r["income"] for r in rows], [r["expense"] for r in rows]
+        stats = summarize_records(conn.execute('SELECT * FROM records ORDER BY id').fetchall())
+        if chart_type == 'monthly':
+            rows = stats['monthly_stats']
+            labels = [r['month'] for r in rows]
+            # Float conversion is restricted to plot geometry; labels use exact cents.
+            inc, exp = [r['income'] / 100 for r in rows], [r['expense'] / 100 for r in rows]
             fig, ax = plt.subplots(figsize=(10, 5))
             x, w = range(len(labels)), 0.35
-            b1 = ax.bar([i - w / 2 for i in x], inc, w, label="Income", color="#52c41a")
-            b2 = ax.bar([i + w / 2 for i in x], exp, w, label="Expense", color="#ff4d4f")
+            b1 = ax.bar([i - w / 2 for i in x], inc, w, label='Income', color='#52c41a')
+            b2 = ax.bar([i + w / 2 for i in x], exp, w, label='Expense', color='#ff4d4f')
             ax.set_xticks(list(x))
-            ax.set_xticklabels(labels, rotation=45, ha="right")
+            ax.set_xticklabels(labels, rotation=45, ha='right')
             ax.legend()
-            ax.set_ylabel("Amount (CNY)")
-            ax.set_title("Monthly Income vs Expense")
-            for bars in [b1, b2]:
-                for b in bars:
-                    h = b.get_height()
-                    if h:
-                        ax.text(b.get_x() + b.get_width() / 2., h, f"{h:.0f}", ha="center", va="bottom", fontsize=8)
-
-        elif chart_type == "category":
-            rows = conn.execute("SELECT category as label,SUM(amount) as total FROM records WHERE record_type='出' GROUP BY label ORDER BY total DESC").fetchall()
-            labels = [r["label"] or "Other" for r in rows]
-            values = [r["total"] for r in rows]
+            ax.set_ylabel('Amount (CNY)')
+            ax.set_title('Monthly Income vs Expense')
+            for bars, field in [(b1, 'income'), (b2, 'expense')]:
+                for bar, row in zip(bars, rows):
+                    if row[field]:
+                        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                                format_cents(row[field]), ha='center', va='bottom', fontsize=8)
+        elif chart_type in ('category', 'applicant', 'source'):
+            key, label, title = {
+                'category': ('category_stats', 'category', 'Expense by Category'),
+                'applicant': ('applicant_stats', 'applicant', 'Member Expense Ranking'),
+                'source': ('source_stats', 'source', 'Income Source Distribution'),
+            }[chart_type]
+            rows = stats[key][:15] if chart_type == 'applicant' else stats[key]
             fig, ax = plt.subplots(figsize=(8, 5))
-            colors = ["#ff4d4f", "#ff7a45", "#ffa940", "#ffc53d", "#ffec3d", "#bae637", "#36cfc9", "#40a9ff", "#597ef7", "#9254de"]
-            ax.bar(labels, values, color=colors[:len(labels)])
-            ax.set_ylabel("Amount (CNY)")
-            ax.set_title("Expense by Category")
-            plt.xticks(rotation=45, ha="right")
-            for bar, v in zip(ax.patches, values):
-                ax.text(bar.get_x() + bar.get_width() / 2., bar.get_height(), f"{v:.0f}", ha="center", va="bottom", fontsize=9)
-
-        elif chart_type == "applicant":
-            rows = conn.execute("SELECT applicant as label,SUM(amount) as total FROM records WHERE record_type='出' AND applicant!='' GROUP BY label ORDER BY total DESC LIMIT 15").fetchall()
-            labels = [r["label"] for r in rows]
-            values = [r["total"] for r in rows]
-            fig, ax = plt.subplots(figsize=(8, 5))
-            ax.barh(labels[::-1], values[::-1], color="#597ef7")
-            ax.set_xlabel("Amount (CNY)")
-            ax.set_title("Member Expense Ranking")
-            for bar, v in zip(ax.patches, values[::-1]):
-                ax.text(bar.get_width() + 10, bar.get_y() + bar.get_height() / 2., f"{v:.0f}", ha="left", va="center", fontsize=9)
-
-        elif chart_type == "source":
-            rows = conn.execute("SELECT source_dest as label,SUM(amount) as total FROM records WHERE record_type='进' AND source_dest!='' GROUP BY label ORDER BY total DESC").fetchall()
-            fig, ax = plt.subplots(figsize=(7, 7))
-            ax.pie([r["total"] for r in rows], labels=[r["label"] for r in rows],
-                   autopct="%1.1f%%", startangle=90,
-                   colors=["#52c41a", "#1890ff", "#722ed1", "#fa8c16", "#13c2c2", "#eb2f96", "#a0d911"])
-            ax.set_title("Income Source Distribution")
+            if chart_type == 'source':
+                if rows:
+                    ax.pie([r['total'] / 100 for r in rows],
+                           labels=[(r[label] or 'Other') + ' · ' + format_cents(r['total']) for r in rows],
+                           autopct='%1.1f%%', startangle=90)
+                else:
+                    ax.text(0.5, 0.5, 'No data', ha='center', va='center')
+            elif chart_type == 'applicant':
+                rows = rows[::-1]
+                bars = ax.barh([r[label] or 'Unspecified' for r in rows], [r['total'] / 100 for r in rows], color='#597ef7')
+                ax.set_xlabel('Amount (CNY)')
+                for bar, row in zip(bars, rows):
+                    ax.text(bar.get_width(), bar.get_y() + bar.get_height() / 2,
+                            format_cents(row['total']), ha='left', va='center', fontsize=9)
+            else:
+                bars = ax.bar([r[label] or 'Other' for r in rows], [r['total'] / 100 for r in rows], color='#ff4d4f')
+                ax.set_ylabel('Amount (CNY)')
+                plt.xticks(rotation=45, ha='right')
+                for bar, row in zip(bars, rows):
+                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                            format_cents(row['total']), ha='center', va='bottom', fontsize=9)
+            ax.set_title(title)
         else:
-            return jsonify({"code": 1, "msg": "Unknown chart type"})
+            return jsonify({'code': 1, 'msg': 'Unknown chart type'})
 
         plt.tight_layout()
         buf = io.BytesIO()

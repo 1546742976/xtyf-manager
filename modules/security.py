@@ -123,23 +123,35 @@ def _audit_details(data):
     return result
 
 
-def audit_background_start(job_type, job_id):
+def audit_background_start(job_type, job_id, db=None):
+    if db is None:
+        connection = sqlite3.connect(DB_PATH, timeout=15)
+        try:
+            with connection:
+                return audit_background_start(job_type, job_id, db=connection)
+        finally:
+            connection.close()
     user = current_user()
-    with sqlite3.connect(DB_PATH, timeout=15) as db:
-        return db.execute(
-            "INSERT INTO security_audit(actor_id,actor_name,action,method,target,details,created_at) VALUES(?,?,?,?,?,?,?)",
-            (user["id"], user["name"], "invoices.job." + job_type, "JOB", job_id,
-             json.dumps({"request_audit_id": getattr(g, "audit_id", None)}), now_str()),
-        ).lastrowid
+    return db.execute(
+        "INSERT INTO security_audit(actor_id,actor_name,action,method,target,details,created_at) VALUES(?,?,?,?,?,?,?)",
+        (user["id"], user["name"], "invoices.job." + job_type, "JOB", job_id,
+         json.dumps({"request_audit_id": getattr(g, "audit_id", None)}), now_str()),
+    ).lastrowid
 
 
-def audit_background_finish(audit_id, outcome, result):
-    with sqlite3.connect(DB_PATH, timeout=15) as db:
-        prior = db.execute("SELECT details FROM security_audit WHERE id=?", (audit_id,)).fetchone()
-        details = json.loads(prior[0]) if prior else {}
-        details["result"] = result
-        db.execute("UPDATE security_audit SET outcome=?,details=?,finished_at=? WHERE id=?",
-                   (outcome, json.dumps(details, ensure_ascii=False), now_str(), audit_id))
+def audit_background_finish(audit_id, outcome, result, db=None):
+    if db is None:
+        connection = sqlite3.connect(DB_PATH, timeout=15)
+        try:
+            with connection:
+                return audit_background_finish(audit_id, outcome, result, db=connection)
+        finally:
+            connection.close()
+    prior = db.execute("SELECT details FROM security_audit WHERE id=?", (audit_id,)).fetchone()
+    details = json.loads(prior[0]) if prior else {}
+    details["result"] = result
+    db.execute("UPDATE security_audit SET outcome=?,details=?,finished_at=? WHERE id=?",
+               (outcome, json.dumps(details, ensure_ascii=False), now_str(), audit_id))
 
 
 def init_security(app):
@@ -195,7 +207,7 @@ def init_security(app):
                     item.get("status") == "error" for item in payload["results"] if isinstance(item, dict)
                 ):
                     outcome = "partial"
-                summary = {key: payload[key] for key in ("id", "rel_path", "job_id", "count", "moved", "review_required") if key in payload}
+                summary = {key: payload[key] for key in ("id", "rel_path", "job_id", "count", "moved", "review_required", "amount", "amount_cents") if key in payload}
                 if isinstance(payload.get("created"), list):
                     summary["created_count"] = len(payload["created"])
                 if summary:

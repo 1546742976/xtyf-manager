@@ -40,6 +40,14 @@
 
 <div class="stats-grid" id="statsGrid"></div>
 
+{% if is_finance %}
+<section class="invoice-jobs" aria-labelledby="invoiceJobsTitle">
+<div class="invoice-jobs-head"><h2 id="invoiceJobsTitle">后台任务</h2><button type="button" onclick="InvoiceJobs.load()">刷新任务</button></div>
+<p>显示最近 30 项任务。关闭页面后仍会执行，可随时回来查看进度和结果。</p>
+<div id="invoiceJobsList" aria-live="polite">正在加载任务…</div>
+</section>
+{% endif %}
+
 <div class="batch-bar finance-only" id="batchBar">
 <span id="batchCount">已选 0 张</span>
 <select id="batchStatus"><option value="">-- 批量改状态 --</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
@@ -147,6 +155,13 @@
 </div></div>
 
 <div class="toast" id="toast"></div>
+{% if is_finance %}
+<div class="modal" id="invoiceJobModal" role="dialog" aria-modal="true" aria-labelledby="invoiceJobResultTitle"><div class="modal-content">
+<div class="modal-header"><h2 id="invoiceJobResultTitle">任务结果</h2><button class="modal-close" type="button" onclick="document.getElementById('invoiceJobModal').classList.remove('show')" aria-label="关闭">&times;</button></div>
+<p id="invoiceJobResultMessage"></p>
+<pre id="invoiceJobResultDetails" class="invoice-job-result"></pre>
+</div></div>
+{% endif %}
 <!-- 进度条 -->
 <div id="progressBar" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:14px;padding:28px 36px;box-shadow:0 12px 40px rgba(0,0,0,0.2);z-index:10000;text-align:center;min-width:320px">
 <div style="font-size:14px;color:#333;margin-bottom:14px" id="progressText">处理中...</div>
@@ -157,6 +172,7 @@
 </div>
 
 <script src="/static/workspace.js"></script>
+<script src="/static/money.js"></script>
 <script src="/static/invoices.js"></script>
 </body>
 </html>

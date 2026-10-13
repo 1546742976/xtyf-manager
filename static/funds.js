@@ -74,7 +74,7 @@ function reload(){
       return '<tr>'+
         '<td>'+r.id+'</td>'+
         '<td><span class="'+(r.record_type==='进'?'badge-in':'badge-out')+'">'+(r.record_type==='进'?'进账':'支出')+'</span></td>'+
-        '<td>¥'+r.amount.toFixed(2)+'</td>'+
+        '<td>¥'+Money.format(r.amount)+'</td>'+
         '<td>'+escText(r.category||'-')+'</td>'+
         '<td title="'+escText(r.source_dest||'')+'">'+escText(r.source_dest||'-')+'</td>'+
         '<td>'+escText(r.applicant||'-')+'</td>'+
@@ -93,7 +93,7 @@ async function handleAdd(e){
   e.preventDefault();
   var d = {
     record_type: document.getElementById('aT').value,
-    amount: parseFloat(document.getElementById('aAmt').value),
+    amount: document.getElementById('aAmt').value,
     category: document.getElementById('aCat').value,
     source_dest: document.getElementById('aSD').value.trim(),
     record_date: document.getElementById('aDt').value,
@@ -129,7 +129,7 @@ async function edR(id){
 async function saveE(){
   var d = {
     record_type: document.getElementById('eT').value,
-    amount: parseFloat(document.getElementById('eAmt').value),
+    amount: document.getElementById('eAmt').value,
     category: document.getElementById('eCat').value,
     source_dest: document.getElementById('eSD').value.trim(),
     record_date: document.getElementById('eDt').value,
@@ -178,26 +178,25 @@ async function loadPending(){
 }
 
 function loadStats(){
-  Promise.all([fetch('/funds/api/stats'),fetch(API+'?sort_by=id&sort_order=DESC')]).then(function(arr){
-    return Promise.all([arr[0].json(),arr[1].json()]);
-  }).then(function(arr){
-    var d = arr[0].data, cnt = (arr[1].data||[]).length;
-    document.getElementById('sIn').textContent = '¥'+d.total_in.toFixed(2);
-    document.getElementById('sOut').textContent = '¥'+d.total_out.toFixed(2);
+  fetch('/funds/api/stats').then(function(response){return response.json()}).then(function(result){
+    if(result.code!==0)throw new Error(result.msg||'统计加载失败');
+    var d = result.data, cnt = d.record_count;
+    document.getElementById('sIn').textContent = '¥'+Money.format(d.total_in);
+    document.getElementById('sOut').textContent = '¥'+Money.format(d.total_out);
     var bal = d.balance;
-    document.getElementById('sBal').textContent = (bal>=0?'¥':'¥-')+Math.abs(bal).toFixed(2);
-    document.getElementById('sBal').style.color = bal>=0?'#1890ff':'#ff4d4f';
+    document.getElementById('sBal').textContent = '¥'+Money.format(bal);
+    document.getElementById('sBal').style.color = Money.compare(bal,'0.00')>=0?'#1890ff':'#ff4d4f';
     document.getElementById('sCnt').textContent = cnt;
 
     var h = '<table class="table table-sm small mb-0">';
     h += '<tr class="table-success"><td colspan="2"><b>进账来源 Top 5</b></td></tr>';
-    d.source_stats.slice(0,5).forEach(function(s){ h += '<tr><td>'+escText(s.source)+'</td><td style="text-align:right">¥'+s.total.toFixed(2)+' ('+s.cnt+')</td></tr>'; });
+    d.source_stats.slice(0,5).forEach(function(s){ h += '<tr><td>'+escText(s.source||'未指定')+'</td><td style="text-align:right">¥'+Money.format(s.total)+' ('+s.cnt+')</td></tr>'; });
     if(!d.source_stats.length) h += '<tr><td colspan="2" class="text-muted">暂无数据</td></tr>';
     h += '<tr class="table-danger"><td colspan="2"><b>成员支出 Top 5</b></td></tr>';
-    d.applicant_stats.slice(0,5).forEach(function(s){ h += '<tr><td>'+escText(s.applicant)+'</td><td style="text-align:right">¥'+s.total.toFixed(2)+' ('+s.cnt+')</td></tr>'; });
+    d.applicant_stats.slice(0,5).forEach(function(s){ h += '<tr><td>'+escText(s.applicant||'未指定')+'</td><td style="text-align:right">¥'+Money.format(s.total)+' ('+s.cnt+')</td></tr>'; });
     if(!d.applicant_stats.length) h += '<tr><td colspan="2" class="text-muted">暂无数据</td></tr>';
     h += '<tr><td colspan="2"><b>支出类别 Top 5</b></td></tr>';
-    d.category_stats.slice(0,5).forEach(function(s){ h += '<tr><td>'+escText(s.category||'其他')+'</td><td style="text-align:right">¥'+s.total.toFixed(2)+'</td></tr>'; });
+    d.category_stats.slice(0,5).forEach(function(s){ h += '<tr><td>'+escText(s.category||'其他')+'</td><td style="text-align:right">¥'+Money.format(s.total)+'</td></tr>'; });
     if(!d.category_stats.length) h += '<tr><td colspan="2" class="text-muted">暂无数据</td></tr>';
     h += '</table>';
     document.getElementById('sumC').innerHTML = h;

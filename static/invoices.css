@@ -131,6 +131,14 @@ tr.row-dup{background:#fff3e0}
 .toast.error{background:#d93025}
 .toast.info{background:#1a73e8}
 .empty{text-align:center;padding:50px 20px;color:#aaa;font-size:13px}
+.invoice-jobs{margin:0 0 18px;padding:16px;background:#fff;border:1px solid #e0e0e0;border-radius:8px}
+.invoice-jobs-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.invoice-jobs h2{margin:0;font-size:16px}.invoice-jobs p{margin:8px 0;color:#666;font-size:12px}
+.invoice-job-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid #eee;padding:10px 0;font-size:12px}
+.invoice-job-row .invoice-job-info{flex:1;min-width:180px;overflow-wrap:anywhere}
+.invoice-job-row small{display:block;color:#666;margin-top:4px}
+.invoice-job-row[data-status="error"],.invoice-job-row[data-status="interrupted"]{color:#b3261e}
+.invoice-job-result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:55vh;overflow:auto;font:inherit;font-size:13px;line-height:1.7}
 .inline-select{padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:11px;background:#fff;cursor:pointer;outline:none;color:#333}
 .inline-select:focus{border-color:#1a73e8}
 .btn-sm{padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;font-size:10px;white-space:nowrap}

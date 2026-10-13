@@ -15,7 +15,7 @@
       - 数据级：成员在列表/统计/预览接口中按 submitter_id==本人 ID 过滤
   [5] 上传入库时服务端强制 submitter=登录人、status=未报销（防伪造）
   [6] 元数据键统一用正斜杠（兼容从 Windows 迁移的老数据，启动时自动归一化）
-  [7] 后台任务(SSE 实时进度)依赖进程内内存 _jobs —— 因此 gunicorn 必须固定 1 worker
+  [7] 后台任务与审计保存至 data.db，跨进程文件锁串行执行，SSE 从数据库读取进度
   [8] 新增 /api/export_zip：一键打包全部发票下载（排除 .uploads、往届发票.zip）
 
 前端：templates/invoices.html 由 Jinja2 渲染，通过 tojson 注入
@@ -28,7 +28,6 @@ import json
 import logging
 import csv
 import io
-import math
 import shutil
 import hashlib
 import uuid
@@ -37,13 +36,17 @@ import threading
 import tempfile
 import zipfile
 from datetime import datetime
+from decimal import Decimal
 from functools import wraps
 from flask import (Blueprint, Response, g, has_request_context, jsonify, redirect, request, render_template,
                    send_file, send_from_directory, stream_with_context)
 from urllib.parse import quote
 
 from common import ROLE_NAMES, current_user, get_db
-from modules.security import has_permission, audit_background_start, audit_background_finish
+from modules.security import has_permission
+from modules import invoice_jobs
+from modules.invoice_storage import InvoiceFileLock
+from modules.money import MAX_CENTS, to_cents, format_cents, decimal_amount, money_fields, money_json
 
 BASE_DIR = os.environ.get(
     'INVOICES_DIR',
@@ -163,100 +166,96 @@ def _user_can_view(rel_path):
     return False
 
 # ========== 后台任务管理 ==========
-_jobs = {}  # {job_id: {status, progress, message, result, ...}}
-_jobs_lock = threading.Lock()
-_invoice_lock = threading.RLock()  # Full read/modify/write operations, single worker.
+_invoice_lock = InvoiceFileLock(os.path.join(BASE_DIR, '.invoice.lock'))
+_worker_guard = threading.Lock()
+_worker_thread = None
+_worker_pid = None
+_worker_wakeup = threading.Event()
 
 
-# ===================== 工具 =====================
+def _reset_worker_after_fork():
+    global _worker_guard, _worker_thread, _worker_pid, _worker_wakeup
+    _worker_guard = threading.Lock()
+    _worker_thread = None
+    _worker_pid = None
+    _worker_wakeup = threading.Event()
 
-# ========== 后台任务 ==========
 
-def _create_job(job_type):
-    jid = uuid.uuid4().hex[:12]
-    audit_id = audit_background_start(job_type, jid)
-    with _jobs_lock:
-        _jobs[jid] = {'type': job_type, 'status': 'running', 'progress': 0, 'message': '初始化...', 'result': None,
-                      'audit_id': audit_id}
-    return jid
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_worker_after_fork)
+
+
+def start_invoice_worker():
+    """One dispatcher per process; the shared file lock elects the executor."""
+    global _worker_thread, _worker_pid
+    with _worker_guard:
+        if _worker_pid == os.getpid() and _worker_thread and _worker_thread.is_alive():
+            return
+        _worker_pid = os.getpid()
+        _worker_thread = threading.Thread(target=_invoice_worker, name='invoice-queue', daemon=True)
+        _worker_thread.start()
+
+
+def _invoice_worker():
+    handlers = {'scan_dups': _do_scan_dups, 'organize': _do_organize,
+                'refresh': _do_refresh, 'delete_dups': _do_delete_dups}
+    while True:
+        claimed = None
+        try:
+            if _invoice_lock.acquire(blocking=False):
+                try:
+                    claimed = invoice_jobs.recover_and_claim()
+                    if claimed:
+                        try:
+                            result = handlers[claimed['type']](claimed['id'])
+                        except Exception as exc:
+                            logging.exception('Invoice job failed: %s', claimed['id'])
+                            invoice_jobs.finish_job(claimed['id'], error=exc)
+                        else:
+                            invoice_jobs.finish_job(claimed['id'], result=result)
+                finally:
+                    _invoice_lock.release()
+        except Exception:
+            logging.exception('Invoice queue dispatch failed; will retry')
+        # Yield between jobs so pending browser writes can acquire the file lock.
+        _worker_wakeup.wait(0.2 if claimed else 2)
+        _worker_wakeup.clear()
 
 
 def _update_job(jid, progress, message):
-    with _jobs_lock:
-        if jid in _jobs:
-            _jobs[jid]['progress'] = progress
-            _jobs[jid]['message'] = message
-
-
-def _finish_job(jid, result):
-    with _jobs_lock:
-        if jid in _jobs:
-            outcome = 'partial' if isinstance(result, dict) and (result.get('failed') or result.get('errors')) else 'success'
-            try:
-                audit_background_finish(_jobs[jid]['audit_id'], outcome, result)
-            except Exception:
-                logging.exception('Could not finalize invoice job audit %s', jid)
-            _jobs[jid]['status'] = 'done'
-            _jobs[jid]['progress'] = 100
-            _jobs[jid]['message'] = '完成'
-            _jobs[jid]['result'] = result
-            _jobs[jid]['finished_at'] = time.time()
-
-
-def _fail_job(jid, error):
-    with _jobs_lock:
-        if jid in _jobs:
-            try:
-                audit_background_finish(_jobs[jid]['audit_id'], 'failure', {'error': str(error)})
-            except Exception:
-                logging.exception('Could not finalize invoice job audit %s', jid)
-            _jobs[jid]['status'] = 'error'
-            _jobs[jid]['message'] = str(error)
-            _jobs[jid]['finished_at'] = time.time()
-
-
-def _cleanup_jobs(max_age=1800):
-    """清理完成超过 max_age 秒的任务, 防止内存无限增长"""
-    now = time.time()
-    with _jobs_lock:
-        for jid in [j for j, v in _jobs.items() if v.get('finished_at') and now - v['finished_at'] > max_age]:
-            _jobs.pop(jid, None)
+    invoice_jobs.update_job(jid, progress, message)
 
 
 def _job_sse(jid):
-    """生成 SSE 事件流"""
+    """Read persisted progress without blocking invoice writes or other workers."""
     def generate():
-        last_progress = -1
+        previous = None
+        heartbeat = time.monotonic()
         while True:
-            with _jobs_lock:
-                job = dict(_jobs.get(jid, {'status': 'error', 'message': '任务不存在或服务已重启，请重新发起'}))
-            status = job.get('status', 'running')
-            progress = job.get('progress', 0)
-            message = job.get('message', '')
-            if progress != last_progress or status in ('done', 'error'):
-                payload = {'progress': progress, 'message': message, 'status': status}
-                if status in ('done', 'error'):
-                    payload['result'] = job.get('result')
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                last_progress = progress
-            if status in ('done', 'error'):
-                _cleanup_jobs()
+            # Revalidate the session and permission while a long-lived stream is open.
+            if not _is_finance():
+                yield 'data: ' + json.dumps({'status': 'error', 'message': '登录或财务授权已失效'}, ensure_ascii=False) + '\n\n'
                 break
-            time.sleep(0.3)
+            job = invoice_jobs.get_job(jid)
+            if job is None:
+                yield 'data: ' + json.dumps({'status': 'error', 'message': '任务不存在'}, ensure_ascii=False) + '\n\n'
+                break
+            payload = {key: job[key] for key in ('id', 'type', 'status', 'progress', 'message')}
+            if job['status'] in invoice_jobs.TERMINAL:
+                payload['result'] = job['result']
+            encoded = json.dumps(payload, ensure_ascii=False)
+            if encoded != previous:
+                yield f'data: {encoded}\n\n'
+                previous = encoded
+                heartbeat = time.monotonic()
+            elif time.monotonic() - heartbeat >= 15:
+                yield ': keep-alive\n\n'
+                heartbeat = time.monotonic()
+            if job['status'] in invoice_jobs.TERMINAL:
+                break
+            time.sleep(1)
     return Response(stream_with_context(generate()), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
-
-
-def _run_job_thread(jid, func, *args, **kwargs):
-    """在后台线程运行 func(jid, *args, **kwargs)"""
-    def _run():
-        try:
-            with _invoice_lock:
-                result = func(jid, *args, **kwargs)
-            _finish_job(jid, result)
-        except Exception as e:
-            _fail_job(jid, e)
-    threading.Thread(target=_run, daemon=True).start()
+                    headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
 
 
 def _normalize_month(s):
@@ -281,12 +280,12 @@ def _file_hash(filepath):
 
 
 # ---- JSON 读写（.invoice_meta.json 元数据 / .invoice_cache.json 金额缓存）----
-def load_json(path, default=None):
+def load_json(path, default=None, *, decimal_numbers=False):
     if default is None: default = {}
     if os.path.exists(path):
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                return json.load(f, parse_float=Decimal) if decimal_numbers else json.load(f)
         except (ValueError, OSError) as exc:
             raise RuntimeError(f'无法读取发票元数据文件：{os.path.basename(path)}') from exc
     return default
@@ -307,8 +306,40 @@ def save_json(path, data):
 
 load_meta = lambda: load_json(META_FILE)
 save_meta = lambda d: save_json(META_FILE, d)
-load_cache = lambda: load_json(CACHE_FILE)
-save_cache = lambda d: save_json(CACHE_FILE, d)
+def load_cache():
+    cache = load_json(CACHE_FILE, decimal_numbers=True)
+    for key, entry in cache.items():
+        if not isinstance(entry, dict):
+            raise RuntimeError(f'发票金额缓存格式错误：{key}')
+        if 'amount_cents' in entry:
+            cents = entry['amount_cents']
+            if type(cents) is not int or not 0 <= cents <= MAX_CENTS:
+                raise RuntimeError(f'发票缓存分值无效：{key}')
+            entry['amount'] = Decimal(format_cents(cents))
+        elif entry.get('amount') is not None:
+            try:
+                entry['legacy_amount'] = str(entry['amount'])
+                entry['amount'] = decimal_amount(entry['amount'])
+            except ValueError as exc:
+                raise RuntimeError(f'发票历史金额无效：{key}') from exc
+    return cache
+
+
+def save_cache(cache):
+    encoded = {}
+    for key, value in cache.items():
+        entry = dict(value)
+        amount = entry.pop('amount', None)
+        if amount is not None:
+            entry['amount_cents'] = to_cents(amount)
+        encoded[key] = entry
+    save_json(CACHE_FILE, encoded)
+
+
+def _migrate_cache_amounts():
+    raw = load_json(CACHE_FILE, decimal_numbers=True)
+    if any(isinstance(entry, dict) and entry.get('amount') is not None for entry in raw.values()):
+        save_cache(load_cache())
 
 
 def ensure_dir(path):
@@ -380,10 +411,9 @@ def _visible_duplicates(items):
 
 def _valid_amount(value):
     try:
-        amount = float(value)
-    except (TypeError, ValueError, OverflowError):
+        return decimal_amount(value)
+    except ValueError:
         return None
-    return amount if math.isfinite(amount) and amount >= 0 else None
 
 
 def _migrate_cache_key(old_rel, new_rel):
@@ -467,7 +497,7 @@ def extract_amount_from_pdf(filepath):
     ]:
         m = re.search(pat, text)
         if m:
-            try: return float(m.group(1).replace(',', ''))
+            try: return decimal_amount(m.group(1).replace(',', ''))
             except ValueError: continue
     return None
 
@@ -492,7 +522,7 @@ def extract_invoice_info(filepath):
                 r'价税合计.*?[¥￥]\s*([\d,]+\.?\d*)']:
         m = re.search(pat, text)
         if m:
-            try: result['amount'] = float(m.group(1).replace(',', '')); break
+            try: result['amount'] = decimal_amount(m.group(1).replace(',', '')); break
             except ValueError: continue
 
     # 开票日期: 容忍 "2026年 07月03日" / "2026-07-03" / "2026/07/03" 等空格与分隔符变体
@@ -530,13 +560,13 @@ def parse_invoice_filename(filename):
     m = re.match(r'^(\d+-)?(.+?)-([\d,.]+)元-(.+?)(?:-(\d{10,30}))?-(\d{4}\.\d{2}\.\d{2})-发票$', name)
     if m:
         return {'seq': m.group(1).rstrip('-') if m.group(1) else '',
-                'category': m.group(2), 'amount': float(m.group(3).replace(',', '')),
+                'category': m.group(2), 'amount': decimal_amount(m.group(3).replace(',', '')),
                 'vendor': m.group(4), 'date': m.group(6).replace('.', '-'), 'from_filename': True}
     m2 = re.search(r'([\d,.]+)元', name)
     if m2:
-        return {'seq': '', 'category': '', 'amount': float(m2.group(1).replace(',', '')),
+        return {'seq': '', 'category': '', 'amount': decimal_amount(m2.group(1).replace(',', '')),
                 'vendor': name, 'date': '', 'from_filename': True}
-    return {'seq': '', 'category': '', 'amount': 0.0, 'vendor': name, 'date': '', 'from_filename': False}
+    return {'seq': '', 'category': '', 'amount': Decimal('0.00'), 'vendor': name, 'date': '', 'from_filename': False}
 
 
 # ---- 金额取值优先级：文件名 → 金额缓存 → 实时解析 PDF ----
@@ -546,7 +576,7 @@ def resolve_amount(inv, use_cache=True):
     key = inv['id'].replace('\\', '/')
     if inv.get('from_filename') and inv['amount'] > 0:
         return inv['amount'], '文件名'
-    if key in cache and cache[key].get('amount'):
+    if key in cache and cache[key].get('amount') is not None:
         return cache[key]['amount'], 'PDF(缓存)'
     filepath = os.path.join(BASE_DIR, inv.get('rel_path', ''))
     if os.path.isfile(filepath):
@@ -556,7 +586,7 @@ def resolve_amount(inv, use_cache=True):
                           'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             save_cache(cache)
             return pdf_amount, 'PDF'
-    return inv.get('amount', 0.0), '未知'
+    return inv.get('amount', Decimal('0.00')), '未知'
 
 
 # ===================== 文件夹管理 =====================
@@ -655,17 +685,20 @@ def _safe_name(s):
 
 
 # ---- 生成标准文件名（供整理/入库复用）----
-def _generate_standard_name(filepath):
+def _generate_standard_name(filepath, confirmed_amount=None):
     """根据PDF内容和文件名生成标准化名称: {category}-{amount}元-{vendor}-{inv_num}-{date}-发票.pdf"""
     info = extract_invoice_info(filepath)
     fn_info = parse_invoice_filename(os.path.basename(filepath))
 
     # 金额：优先文件名，其次PDF内容
-    amount = 0.0
+    amount = Decimal('0.00')
     if fn_info and fn_info.get('from_filename') and fn_info.get('amount'):
         amount = fn_info['amount']
     if not amount and info.get('amount'):
         amount = info['amount']
+
+    if confirmed_amount is not None:
+        amount = confirmed_amount
 
     # 日期
     date_str = ''
@@ -695,7 +728,7 @@ def _generate_standard_name(filepath):
     # 组装
     parts = []
     if category: parts.append(category)
-    if amount > 0: parts.append(f'{amount}元')
+    if amount > 0 or confirmed_amount is not None: parts.append(f'{amount:.2f}元')
     if vendor: parts.append(vendor)
     if inv_num_safe: parts.append(inv_num_safe)
     if date_str: parts.append(date_str)
@@ -821,11 +854,11 @@ def scan_invoices(use_cache=True):
                 if not os.path.isdir(status_dir): continue
                 for f in os.listdir(status_dir):
                     if not f.lower().endswith('.pdf'): continue
-                    _add_invoice(invoices, meta, month, status, os.path.join(status_dir, f))
+                    _add_invoice(invoices, meta, month, status, os.path.join(status_dir, f), use_cache)
             for f in os.listdir(entry_path):
                 fp = os.path.join(entry_path, f)
                 if os.path.isfile(fp) and f.lower().endswith('.pdf'):
-                    _add_invoice(invoices, meta, month, '未报销', fp)
+                    _add_invoice(invoices, meta, month, '未报销', fp, use_cache)
         else:
             for root, dirs, files in os.walk(entry_path):
                 dirs[:] = [d for d in dirs if not is_skipped(d)]
@@ -840,7 +873,7 @@ def scan_invoices(use_cache=True):
                         found_status = '已报销' if folder_hint else '未报销'
                     m = re.match(r'^(\d{4}\.\d{1,2})', entry)
                     month = _normalize_month(m.group(1)) if m else entry
-                    _add_invoice(invoices, meta, month, found_status, os.path.join(root, f))
+                    _add_invoice(invoices, meta, month, found_status, os.path.join(root, f), use_cache)
 
     seen = set()
     unique = []
@@ -861,7 +894,7 @@ def scan_invoices(use_cache=True):
 
 
 # ---- 单文件 → 发票字典（合并元数据字段，ID 使用正斜杠相对路径）----
-def _add_invoice(invoices, meta, month, status, filepath):
+def _add_invoice(invoices, meta, month, status, filepath, use_cache=True):
     filename = os.path.basename(filepath)
     rel_path = os.path.relpath(filepath, BASE_DIR).replace('\\', '/')
     inv_id = rel_path
@@ -885,7 +918,14 @@ def _add_invoice(invoices, meta, month, status, filepath):
         'tags': inv_meta.get('tags', []),
         'invoice_number': inv_meta.get('invoice_number', ''),
     }
-    inv['amount'], inv['source'] = resolve_amount(inv, use_cache=True)
+    confirmed = inv_meta.get('confirmed_amount_cents')
+    if confirmed is not None:
+        if type(confirmed) is not int or not 0 <= confirmed <= MAX_CENTS:
+            raise RuntimeError(f'发票确认金额分值无效：{inv_id}')
+        inv['amount'], inv['source'] = Decimal(format_cents(confirmed)), '人工确认'
+    else:
+        inv['amount'], inv['source'] = resolve_amount(inv, use_cache=use_cache)
+    inv['amount_cents'] = str(to_cents(inv['amount']))
     invoices.append(inv)
 
 
@@ -893,42 +933,25 @@ def _add_invoice(invoices, meta, month, status, filepath):
 
 # ---- 统计聚合：总数/总额/状态/提交人/类别/月份 ----
 def get_stats(invoices):
-    total = len(invoices)
-    total_amount = sum(i['amount'] for i in invoices)
-
-    status_stats = {}
-    for s in STATUS_NAMES:
-        subset = [i for i in invoices if i['status'] == s]
-        status_stats[s] = {'count': len(subset), 'amount': round(sum(i['amount'] for i in subset), 2)}
-
-    submitter_stats = {}
-    for i in invoices:
-        s = (f"{i['submitter']} (#{i['submitter_id']})" if i.get('submitter_id')
-             else (i['submitter'] + '（待确认）' if i['submitter'] else '未指定'))
-        if s not in submitter_stats: submitter_stats[s] = {'count': 0, 'amount': 0.0}
-        submitter_stats[s]['count'] += 1
-        submitter_stats[s]['amount'] += i['amount']
-
-    category_stats = {}
-    for i in invoices:
-        c = i['category'] or '未分类'
-        if c not in category_stats: category_stats[c] = {'count': 0, 'amount': 0.0}
-        category_stats[c]['count'] += 1
-        category_stats[c]['amount'] += i['amount']
-
-    month_stats = {}
-    for i in invoices:
-        m = i['month']
-        if m not in month_stats: month_stats[m] = {'count': 0, 'amount': 0.0}
-        month_stats[m]['count'] += 1
-        month_stats[m]['amount'] += i['amount']
-
-    return {
-        'total_count': total, 'total_amount': round(total_amount, 2),
-        'status_stats': status_stats, 'submitter_stats': submitter_stats,
-        'category_stats': category_stats,
-        'month_stats': dict(sorted(month_stats.items(), reverse=True)),
-    }
+    total_cents = 0
+    groups = {'status_stats': {status: {'count': 0, 'cents': 0} for status in STATUS_NAMES},
+              'submitter_stats': {}, 'category_stats': {}, 'month_stats': {}}
+    for invoice in invoices:
+        cents = to_cents(invoice['amount'])
+        total_cents += cents
+        submitter = (f"{invoice['submitter']} (#{invoice['submitter_id']})" if invoice.get('submitter_id')
+                     else (invoice['submitter'] + '（待确认）' if invoice['submitter'] else '未指定'))
+        labels = {'status_stats': invoice['status'], 'submitter_stats': submitter,
+                  'category_stats': invoice['category'] or '未分类', 'month_stats': invoice['month']}
+        for group, label in labels.items():
+            bucket = groups[group].setdefault(label, {'count': 0, 'cents': 0})
+            bucket['count'] += 1
+            bucket['cents'] += cents
+    for group in groups.values():
+        for bucket in group.values():
+            bucket.update(money_fields(bucket.pop('cents')))
+    groups['month_stats'] = dict(sorted(groups['month_stats'].items(), reverse=True))
+    return {'total_count': len(invoices), **money_fields(total_cents, 'total_amount'), **groups}
 
 
 # ===================== 路由 =====================
@@ -982,10 +1005,8 @@ def api_invoices():
     min_amt = request.args.get('min_amount', '')
     max_amt = request.args.get('max_amount', '')
     try:
-        low = float(min_amt) if min_amt else None
-        high = float(max_amt) if max_amt else None
-        if (low is not None and not math.isfinite(low)) or (high is not None and not math.isfinite(high)):
-            raise ValueError()
+        low = decimal_amount(min_amt) if min_amt else None
+        high = decimal_amount(max_amt) if max_amt else None
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 50))
         if page < 1 or per_page < 1 or per_page > 100:
@@ -1165,36 +1186,37 @@ def api_check_duplicate():
 
 @bp.route('/api/job/start', methods=['POST'])
 @finance_required
-# ---- 后台任务入口：整理 / 刷新金额 / 删除重复（配合 SSE 实时进度）----
 def api_job_start():
-    data = request.get_json(force=True)
-    job_type = data.get('type', '')
-    if job_type == 'scan_dups':
-        jid = _create_job('scan_dups')
-        _run_job_thread(jid, _do_scan_dups)
-        return jsonify({'job_id': jid})
-    elif job_type == 'organize':
-        jid = _create_job('organize')
-        _run_job_thread(jid, _do_organize)
-        return jsonify({'job_id': jid})
-    elif job_type == 'refresh':
-        jid = _create_job('refresh')
-        _run_job_thread(jid, _do_refresh)
-        return jsonify({'job_id': jid})
-    elif job_type == 'delete_dups':
-        jid = _create_job('delete_dups')
-        _run_job_thread(jid, _do_delete_dups)
-        return jsonify({'job_id': jid})
-    return jsonify({'error': '未知任务类型'}), 400
+    data = request.get_json(silent=True)
+    if (not isinstance(data, dict) or not isinstance(data.get('type'), str)
+            or data['type'] not in invoice_jobs.JOB_TYPES):
+        return jsonify(error='未知任务类型'), 400
+    job, created = invoice_jobs.enqueue(data['type'], current_user())
+    start_invoice_worker()
+    _worker_wakeup.set()
+    return jsonify(job_id=job['id'], status=job['status'], created=created), 202
+
+
+@bp.route('/api/jobs')
+@finance_required
+def api_jobs():
+    return jsonify(jobs=invoice_jobs.list_jobs())
+
+
+@bp.route('/api/job/<job_id>')
+@finance_required
+def api_job_detail(job_id):
+    job = invoice_jobs.get_job(job_id)
+    if job is None:
+        return jsonify(error='任务不存在'), 404
+    return jsonify(job)
 
 
 @bp.route('/api/job/stream/<job_id>')
 @finance_required
-# ---- SSE 进度流：/api/job/stream/<job_id>（依赖进程内 _jobs，须单 worker）----
 def api_job_stream(job_id):
-    with _jobs_lock:
-        if job_id not in _jobs:
-            return jsonify(error='任务不存在或服务已重启'), 404
+    if invoice_jobs.get_job(job_id) is None:
+        return jsonify(error='任务不存在'), 404
     return _job_sse(job_id)
 
 
@@ -1525,7 +1547,7 @@ def api_upload_cleanup():
 @bp.route('/api/upload/confirm', methods=['POST'])
 # ---- 入库确认：成员提交人/状态被服务端强制为 本人 / 未报销 ----
 def api_upload_confirm():
-    data = request.get_json(force=True)
+    data = money_json()
     tmp_rel = data.get('tmp_path', '')
     tmp_path = _own_temp_path(tmp_rel)
     if not tmp_path:
@@ -1545,7 +1567,7 @@ def api_upload_confirm():
     notes = data.get('notes', '').strip()
     amount = _valid_amount(data.get('amount', 0))
     if amount is None:
-        return jsonify({'success': False, 'error': '金额必须是非负有限数值'}), 400
+        return jsonify({'success': False, 'error': '金额必须是范围内的非负数，按分四舍五入'}), 400
     vendor = data.get('vendor', '')
     original_name = data.get('original_name', '')
     invoice_number = data.get('invoice_number', '')
@@ -1573,7 +1595,7 @@ def api_upload_confirm():
     ensure_dir(target_dir)
 
     # 使用标准化命名
-    new_name = _generate_standard_name(tmp_path)
+    new_name = _generate_standard_name(tmp_path, confirmed_amount=amount)
     new_path = os.path.join(target_dir, new_name)
     counter = 1
     while os.path.exists(new_path):
@@ -1592,6 +1614,7 @@ def api_upload_confirm():
         'rel_path': rel_path, 'month': month, 'filename': os.path.basename(new_path),
         'status': status, 'submitter': submitter, 'submitter_id': submitter_id, 'notes': notes,
         'category_override': category, 'reimbursed_date': '',
+        'confirmed_amount_cents': to_cents(amount),
         'invoice_number': invoice_number, 'tags': [],
         'uploaded': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -1604,14 +1627,15 @@ def api_upload_confirm():
                            'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         save_cache(cache)
 
-    return jsonify({'success': True, 'rel_path': rel_path, 'message': f'已入库: {os.path.basename(new_path)}'})
+    return jsonify({'success': True, 'rel_path': rel_path, 'message': f'已入库: {os.path.basename(new_path)}',
+                    **money_fields(to_cents(amount))})
 
 
 @bp.route('/api/upload/confirm/batch', methods=['POST'])
 # ---- 批量入库确认（同样强制提交人/状态规则）----
 def api_upload_confirm_batch():
     """批量确认上传"""
-    data = request.get_json(force=True)
+    data = money_json()
     items = data.get('items', [])
     if not isinstance(items, list) or len(items) > 200:
         return jsonify({'success': False, 'error': '批次格式无效或超过 200 张'}), 400
@@ -1664,7 +1688,7 @@ def api_upload_confirm_batch():
         target_dir = os.path.join(BASE_DIR, month, status)
         ensure_dir(target_dir)
 
-        new_name = _generate_standard_name(tmp_path)
+        new_name = _generate_standard_name(tmp_path, confirmed_amount=amount)
         new_path = os.path.join(target_dir, new_name)
         counter = 1
         while os.path.exists(new_path):
@@ -1680,6 +1704,7 @@ def api_upload_confirm_batch():
                 'rel_path': rel_path, 'month': month, 'filename': os.path.basename(new_path),
                 'status': status, 'submitter': submitter, 'submitter_id': submitter_id, 'notes': notes,
                 'category_override': category, 'reimbursed_date': '',
+                'confirmed_amount_cents': to_cents(amount),
                 'invoice_number': invoice_number, 'tags': [],
                 'uploaded': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -1689,7 +1714,8 @@ def api_upload_confirm_batch():
                 cache = load_cache()
                 cache[rel_path] = {'amount': amount, 'vendor': vendor, 'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 save_cache(cache)
-            results.append({'file': original_name, 'status': 'ok', 'path': rel_path})
+            results.append({'file': original_name, 'status': 'ok', 'path': rel_path,
+                            **money_fields(to_cents(amount))})
         except Exception as e:
             results.append({'file': original_name, 'status': 'error', 'reason': str(e)})
 
@@ -1781,7 +1807,7 @@ def api_refresh():
 # ---- 打开文件：返回浏览器预览 URL（成员需为提交人本人）----
 def api_open_file():
     rel_path = request.args.get('rel_path', '')
-    fp = _safe_join(rel_path) if rel_path and _is_safe_rel(rel_path) else None
+    fp = _safe_join(rel_path) if rel_path.lower().endswith('.pdf') and _is_safe_rel(rel_path) else None
     if fp and os.path.isfile(fp):
         if not _user_can_view(rel_path):
             return jsonify({'success': False, 'error': '无权限'}), 403
@@ -1841,10 +1867,14 @@ def api_export_download():
 
 # ---- 打包发票 zip：排除 .uploads / __pycache__ / 往届发票.zip ----
 def build_invoices_zip(out_path):
+    with _invoice_lock:
+        return _build_invoices_zip(out_path)
+
+
+def _build_invoices_zip(out_path):
     skipped_dirs = {'.uploads', '__pycache__', '_待清理'}
-    skipped_files = {'往届发票.zip'}
-    if os.path.exists(out_path):
-        os.remove(out_path)
+    skipped_files = {'往届发票.zip', '.invoice.lock'}
+    target_path = os.path.realpath(out_path) if isinstance(out_path, (str, os.PathLike)) else None
     count = 0
     with zipfile.ZipFile(out_path, 'w', zipfile.ZIP_DEFLATED) as z:
         for root, dirs, files in os.walk(BASE_DIR):
@@ -1853,6 +1883,8 @@ def build_invoices_zip(out_path):
                 if name in skipped_files:
                     continue
                 path = os.path.join(root, name)
+                if target_path and os.path.realpath(path) == target_path:
+                    continue
                 z.write(path, os.path.relpath(path, BASE_DIR))
                 count += 1
     return count
@@ -1862,11 +1894,19 @@ def build_invoices_zip(out_path):
 @finance_required
 # ---- 导出压缩包：生成到 /tmp 并作为附件下载（管理）----
 def api_export_zip():
-    out = os.path.join(tempfile.gettempdir(), 'invoices_export.zip')
-    build_invoices_zip(out)
-    stamp = datetime.now().strftime('%Y%m%d')
-    return send_file(out, mimetype='application/zip', as_attachment=True,
-                     download_name=f'invoices_{stamp}.zip')
+    # Each response owns its file, so a later export cannot overwrite a download.
+    out = tempfile.TemporaryFile()
+    try:
+        build_invoices_zip(out)
+        out.seek(0)
+        stamp = datetime.now().strftime('%Y%m%d')
+        response = send_file(out, mimetype='application/zip', as_attachment=True,
+                             download_name=f'invoices_{stamp}.zip')
+        response.call_on_close(out.close)
+        return response
+    except BaseException:
+        out.close()
+        raise
 
 
 # ===================== 前端 HTML =====================
@@ -1892,7 +1932,9 @@ def _invoices_guard():
         if '/api/' in request.path:
             return jsonify({'success': False, 'error': '未登录'}), 401
         return redirect('/login')
-    if request.endpoint != 'invoices.api_job_stream':
+    start_invoice_worker()
+    if request.endpoint not in {'invoices.index', 'invoices.api_job_stream', 'invoices.api_job_start',
+                                'invoices.api_job_detail', 'invoices.api_jobs'}:
         _invoice_lock.acquire()
         g.invoice_lock_held = True
     return None
@@ -1908,7 +1950,7 @@ def _release_invoice_lock(exc):
 @bp.route('/file/<path:rel>')
 # ---- 文件下发：/invoices/file/<path>（成员仅能取自己的发票）----
 def invoice_file(rel):
-    if not _is_safe_rel(rel):
+    if not _is_safe_rel(rel) or not rel.lower().endswith('.pdf'):
         return '文件不存在', 404
     fp = _safe_join(rel)
     if not fp or not os.path.isfile(fp):
@@ -1942,8 +1984,10 @@ def _normalize_windows_keys():
         save_cache(norm)
 
 
-# ---- 模块导入即执行：键归一化 → 目录检查 → 过期临时文件清理 ----
-_normalize_windows_keys()
-build_folder_structure()
-ensure_dir(UPLOAD_DIR)
-cleanup_uploads()
+# ---- 启动文件维护也必须与其他进程共享同一把锁 ----
+with _invoice_lock:
+    _normalize_windows_keys()
+    _migrate_cache_amounts()
+    build_folder_structure()
+    ensure_dir(UPLOAD_DIR)
+    cleanup_uploads()

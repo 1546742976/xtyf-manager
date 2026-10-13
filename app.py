@@ -31,7 +31,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
                     manager_required, now_str)
 from modules.funds import funds_bp, can_review
-from modules.invoices import bp as invoices_bp, migrate_invoice_owners
+from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
+from modules.invoice_jobs import migrate as migrate_invoice_jobs
 from modules.discussions import discussions_bp
 from modules.task_api import bp as task_api_bp
 from modules.task_attachments import bp as task_attachments_bp
@@ -179,6 +180,7 @@ def init_db():
         migrate_tasks(db)
         migrate_security(db)
         migrate_invoice_owners(db)
+        migrate_invoice_jobs(db)
     finally:
         db.close()
 
@@ -478,4 +480,5 @@ init_db()
 
 # ---- 本地调试入口（线上由 systemd 调用 gunicorn，不会走到这里）----
 if __name__ == "__main__":
+    start_invoice_worker()
     app.run(host="0.0.0.0", port=PORT)
