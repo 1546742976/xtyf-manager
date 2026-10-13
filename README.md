@@ -1,83 +1,76 @@
 # 巡天御风管理系统
 
-基于 Flask + SQLite 的 RoboMaster 战队管理平台，整合任务进度、成员、资金台账和发票归档。
+面向 RoboMaster 战队的内部管理工作台，基于 **Flask + SQLite + 原生 HTML/CSS/JavaScript**，包含任务协作、成员与组别管理、资金台账、发票归档及 GitHub 协作入口。
 
-## 项目结构
+> **代码状态与线上状态不同**：本文说明仓库 `main` 分支已经实现的功能，不代表生产服务器已部署同一提交。生产版本应由维护者核对部署记录；本仓库不会自动升级线上数据库。
 
-```text
-app.py                Flask 入口、任务与成员 API
-common.py             SQLite 连接、用户会话和权限
-modules/              资金与发票 Blueprint
-templates/            看板、管理、登录、资金、发票页面
-static/               看板 JavaScript 与通用 CSS
-deploy/               树莓派部署、备份与 systemd 模板
-docs/usage/           成员与管理员操作手册
-docs/technical/       架构、运维与开发文档
-tests/                Flask API 回归测试
-```
+## 快速开始
 
-原 `技术文档/源代码注释版/` 中的代码现已提升到仓库根目录，不再维护两个源码目录。发票页面已从 `modules/invoices.py` 拆到 `templates/invoices.html`，继续由 Python 读取并注入登录角色信息。
+需要 Python 3.13（CI 验证版本；其他 Python 版本以实际兼容性为准）。
 
-## 本地启动
+    python -m venv .venv
+    # Linux/macOS
+    source .venv/bin/activate
+    # Windows PowerShell: .venv\Scripts\Activate.ps1
+    python -m pip install -r requirements.txt
+    python app.py
 
-```bash
-python -m venv .venv
-# Linux/macOS: source .venv/bin/activate
-# Windows: .venv\\Scripts\\activate
-python -m pip install -r requirements.txt
-# 建议先将 PROGRESS_INITIAL_ADMIN_PASSWORD 设置为独立强密码
-python app.py
-```
+访问 **http://127.0.0.1:8520**（可通过 `PORT` 修改本地端口）。首次创建空库时会创建 `admin` 账户：使用 `PROGRESS_INITIAL_ADMIN_PASSWORD` 指定独立初始密码，或者查看初始化日志中的一次性随机密码。已有数据库和账户不会因此重置。
 
-访问 http://127.0.0.1:8520。首次建库时用户名为 `admin`，未指定 `PROGRESS_INITIAL_ADMIN_PASSWORD` 时自动生成随机初始密码并在初始化日志中打印一次。已有数据库、账号不会被重置。
+**不要将真实 `data.db`、`data/`、`secret.key`、发票或成员密码提交至 Git。**
+
+## 已实现功能（以 main 源码为准）
+
+| 工作区 | 主要能力 | 页面 |
+| --- | --- | --- |
+| 工作台 / 任务中心 | 任务统计、按人/状态/树展示、筛选搜索、CSV 导出 | `/`、`/tasks` |
+| 任务管理 | 一个总负责人和多个参与者；任务树、前置依赖、版本冲突、字段修订与撤销、受控截图上传、逻辑删除 | `/manage` |
+| 成员管理 | 新建/导入、资料编辑、角色、停用与恢复、随机初始密码、两套组别字典 | `/members` |
+| 账户设置 | 修改自己的用户名、专业组、造车组别和密码；真实姓名由管理员维护 | `/account` |
+| 资金台账 | 收支、统计、CSV、受授权的审核人审批 | `/funds/` |
+| 发票中心 | PDF 上传/确认、归属控制、查重、报销状态、归档、统计与导出 | `/invoices/` |
+| GitHub 协作 | 仅展示仓库 Discussion/Issue 外部链接，不同步业务数据 | `/discussions` |
+
+**组别定义**：专业组（如视觉、电控、机械、硬件、宣传、运营）表示人员技能；造车组别（如步兵、哨兵、重装、飞镖，以及自定义细分）表示实际任务归属。成员可同时属于多个专业组和多个造车组别；**每个任务只选一个造车组别**，不自动继承负责人专业组。
+
+## 项目布局
+
+    app.py               Flask 应用、登录、页面及基础成员接口
+    common.py            SQLite 请求连接、会话和权限
+    modules/             任务、字典、资料、资金、发票与附件模块
+    templates/           服务器端页面模板
+    static/              各工作区样式和原生 JavaScript
+    deploy/              树莓派部署、备份、systemd 模板及演练
+    tests/               unittest 回归测试
+    docs/usage/          面向成员和管理员的操作手册
+    docs/technical/      架构、开发、配置、运维与恢复
 
 ## 验证
 
-```bash
-python -m compileall -q app.py common.py modules tests
-python -m unittest discover -s tests -v
-for file in static/*.js; do node --check "$file"; done
-```
+与 `.github/workflows/ci.yml` 对齐：
 
-线上仍使用 `gunicorn --workers 1 --threads 8 app:app`，运行目录为 `/opt/rm-progress`。部署前务必备份 `data.db`、`data/`、`secret.key`。不要把真实账号、数据库和发票提交到仓库。
+    python -m compileall -q app.py common.py modules tests
+    python -m unittest discover -s tests -v
+    # 安装 Node.js 后（Linux/macOS shell）
+    for file in static/*.js; do node --check "$file"; done
 
-## 协作任务升级（实现完成，待部署）
+CI 在 PR 以及推送到 `main` 时运行；文档修改**不等于**功能或浏览器端 E2E 已验证。
 
-协作任务模块已完成实现和浏览器流程验证，仍待最终源码审查与生产部署。它保留现有 Flask、SQLite、入口与单 worker 部署方式，并在旧任务数据上自动执行**版本化、事务化且可重复运行**的迁移：
+## 部署与数据安全
 
-- **专业组与造车组别分离**：成员可多选专业组（视觉/电控/机械/硬件/宣传/运营）并同时参加多个造车组别（步兵/哨兵/重装/飞镖及自定义）；每个任务只归属一个造车组别（沿用 projects/project_id 存储），不再从负责人继承专业组。旧专业组组合名（如 视觉;电控）在 v2 迁移时拆分，v3 根据历史任务分工一次性恢复成员参与过的造车组别，不重新推断、不覆盖以后修改。
-- 一个总负责人和多个参与者。负责人或参与者可编辑除父任务外的任务设置；只有管理员可维护父任务关系。
-- 独立的任务树与依赖关系。树用于层级展示；依赖只给出开始日期建议和风险提示，不会自动改日期。
-- 带版本号的并发保护、逐字段修订记录和管理员按变更撤销。若之后有人改过同一字段，撤销会被拒绝，避免覆盖新内容。
-- 单次最多上传 5 张、每张不超过 10 MiB 的 PNG/JPEG/WebP 工作截图；文件受登录和任务权限保护，不会放到公开静态目录。
-- GitHub Issue/Discussion 仅作为外部链接入口。是否公开仓库及具体链接由部署配置决定。
+现有部署脚本适用于树莓派 systemd + Gunicorn，`deploy/deploy.sh` 从源码目录同步至运行目录，默认 **1 worker / 8 threads**。发票 SSE 后台任务目前保存在进程内，不能擅自增加 worker。
 
-上线前不应把这些能力视为生产可用；当前线上行为仍以已部署页面为准。
+`deploy/backup.sh` 可以分别备份进度库、资金库，并在周日打包发票，但**不包含任务截图和密钥组成的同一恢复点**。生产升级之前应暂停写入，对所有数据库、附件、发票和密钥制作一致性备份并先演练恢复。详见[发布检查与数据恢复](docs/technical/发布检查与数据恢复.md)。
 
-## 升级前的备份与恢复
+现行服务使用 HTTP；HTTP 不提供传输加密，限制访问网络、权限和敏感数据传播是部署方必须处理的风险。这里不新增 HTTPS 开发任务。
 
-当前 `deploy/backup.sh` 的 cron **不会备份** `data/task_attachments/`，也不会形成包含密钥、资金、发票与截图的单一恢复点，因此不能单独作为协作升级后的完整恢复方案。升级生产环境前，必须暂停写入（推荐停止服务），将进度数据库及其 `-wal`/`-shm`、`data/funds/`、`data/invoices/`、`data/task_attachments/` 和 `secret.key` 作为一个恢复点完整保存；或者在暂停写入期间用 SQLite 在线备份 API 备份每个数据库并复制同一时点的全部文件。恢复到隔离目录后先执行 `PRAGMA integrity_check` 和内容核对，再切换服务。仓库内的演练只使用合成数据库、合成附件和临时密钥，绝不读取真实数据库、发票或密钥。
+## 文档导航
 
-## 重构规划与功能状态
+从 **[文档中心](docs/README.md)** 开始。
 
-详细功能清单、P0/P1 缺陷、UI 规范、接口权限矩阵和部署验收表见 [功能审计与重构设计](docs/technical/重构规划与功能审计.md)。
+- [成员使用手册](docs/usage/成员使用手册.md) · [管理员操作手册](docs/usage/管理员操作手册.md)
+- [系统架构](docs/technical/系统架构与技术说明.md) · [源码导读](docs/technical/source-guide.md) · [开发指南](docs/technical/开发与优化指南.md)
+- [配置与权限参考](docs/technical/配置与权限参考.md) · [服务器运维](docs/technical/服务器运维手册.md) · [发布检查与数据恢复](docs/technical/发布检查与数据恢复.md)
+- [当前待办](TODO.md) · [设计规范](DESIGN.md)
 
-本次引入 `static/ui.css`，并将管理、资金和发票页面的 JS 拆成 `static/manage.js`、`static/funds.js`、`static/invoices.js`，新增 `static/account.js` 和 `templates/account.html` 统一账户入口；页面由独立 CSS/JS 组织，便于持续维护。
-
-资金审批仅允许配置在 `FUNDS_REVIEWERS` 环境变量内的管理员/项管操作（默认 `chy`）。修改已审核记录会使其重新待审。新增 `/invoices/api/export/download` 提供直接下载 CSV，原 JSON 导出接口保持兼容。
-
-新成员与批量导入改为随机独立初始密码（可显式设置至少 8 位的密码）；操作成功时初始密码仅在界面响应中显示，请安全传达。
-
-## 第三轮安全与可靠性修复
-
-发票临时上传现在按成员隔离，确认、清理和元数据修改均强化了后端权限和格式校验；登录增加失败限流，密码重置和成员状态变动可注销旧会话。完整变更、向后兼容说明和部署注意见 [第三轮修复说明](docs/technical/第三轮安全与可靠性修复.md)。
-
-## 仍待完善
-
-- CSRF 防护、关键业务审计日志、HTTP 部署环境的访问边界和网络隔离措施（不规划 HTTPS 功能）。
-- 资金审核目前仍依赖固定用户名 `chy`；建议改为独立审核权限。
-- 发票 SSE 后台任务存进程内，暂时必须单 worker。
-- 新建/批量导入/重置已默认随机初始密码；仍需安全分发与首次登录强制改密。
-- 财务和发票页面的全面 UI 组件统一、实际移动浏览器适配需继续完成。
-
-[成员手册](docs/usage/成员使用手册.md) · [管理员手册](docs/usage/管理员操作手册.md) · [架构说明](docs/technical/系统架构与技术说明.md) · [开发指南](docs/technical/开发与优化指南.md) · [源码导读](docs/technical/source-guide.md)。
+详细实现与数据迁移行为以当前代码和测试为准，历史重构记录不再作为现行功能说明。

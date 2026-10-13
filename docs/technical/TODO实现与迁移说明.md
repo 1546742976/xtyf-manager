@@ -1,80 +1,35 @@
-# TODO 实现与迁移说明
+# 原始 TODO 的实现与迁移说明
 
-## GitHub 协作入口
+代码基准：2026-10-13 `main`。**功能已在仓库中实现**不等于已生产部署，是否部署需由维护者核对。
 
-工作台的“GitHub 协作”页面只生成并展示仓库 Discussions 和新建 Issue 的外链。仓库由 `GITHUB_REPOSITORY` 配置，格式必须是 `owner/repository`；默认值是 `SHM-white/xtyf-manager`。配置为空或格式无效时，页面会显示配置指引，不生成链接。
+## 六项原始需求
 
-页面不调用 GitHub API，也不保存讨论副本，更不会传输工作台中的任务、成员、图片或其他元数据。私有仓库需要用户使用已获授权的 GitHub 账号登录，并已获得仓库或组织访问权。
+| 原始需求 | 当前代码 |
+| --- | --- |
+| 任务树与前置任务 | 已实现，树和依赖分别防环；建议开始日期仅提示 |
+| 工作截图 | 已实现受保护的 PNG/JPEG/WebP 附件，单次最多 5 张、单张最多 10 MiB |
+| 一主责、多参与成员 | 已实现 `owner_id` + `task_participants` |
+| 同时处于多个专业组 | 已实现 `groups` + `member_groups`，默认视觉/电控/机械/硬件/宣传/运营 |
+| 任务按造车组别归档 | 已实现 `projects` + `tasks.project_id`；成员可同时参与多个造车组别 |
+| GitHub Issue/Discussion | 已实现 **外部链接入口**，无自动双向同步、无需将业务数据传给 GitHub |
 
-Issue 模板位于 `.github/ISSUE_TEMPLATE/`，Discussion 想法模板位于 `.github/DISCUSSION_TEMPLATE/`。模板要求使用脱敏示例，禁止提交密码、令牌、个人联系方式、未公开文件或内部工作数据。仓库仍为私有仓库，Issues 和 Discussions 已启用；这些模板会在包含它们的提交进入默认分支后生效。
+## 迁移概览
 
-## 协作任务实现状态
+`modules/task_migrations.py` 通过 `schema_migrations` 记录升级版本并用 SQLite 事务执行：
 
-任务协作功能已经实现，并完成浏览器流程验证；仍待最终源码审查和生产部署。本节描述待部署版本的运行行为，不能据此推断线上实例已经升级。
+- v1：创建任务扩展关系（树、依赖、参与者、修订、截图等），从旧成员/任务字段迁移目录引用。
+- v2：把历史中使用分号拼接的专业组拆分为多组关联，**仅一次**预置六个专业组。
+- v3：新增 `member_projects`，**仅一次**根据历史任务的负责人/参与者与 `project_id` 推断成员参与的造车组别；默认预置步兵/哨兵/重装/飞镖，并保留旧细分项目。
 
-### 迁移与数据模型
+`task_groups` 仍为历史数据/API 兼容存在，不再决定任务造车组别归属。`members.group_name` 与 `tasks.project` 等旧字段不是新关联的权威来源。
 
-应用初始化会调用版本化迁移。迁移以一个 SQLite 事务创建或补齐以下结构，并在 `schema_migrations` 中记录版本；成功后重复运行不会重复回填关系，也不会重新加入后来被人工移除的成员组关系。
+成员、专业组、造车组别的 `deleted_at` 表示软删除，管理员可恢复；**任务逻辑删除目前没有恢复入口**。
 
-| 结构 | 用途 |
-|---|---|
-| `groups`、`projects` | 规范化的专业组与项目目录；一个任务只关联一个项目。 |
-| `member_groups`、`task_groups` | 成员和任务的多组关系。 |
-| `task_participants` | 一个任务的多个参与者；`owner_id` 仍是单一总负责人。 |
-| `task_dependencies` | 前置依赖，独立于任务树。 |
-| `tasks.parent_id` | 任务树父节点。 |
-| `tasks.version`、`task_revisions` | 乐观并发版本和逐字段 before/after 修订记录。 |
-| `tasks.deleted_at` | 逻辑删除标记。 |
-| `task_attachments` | 私有截图的元数据，实体文件不在静态目录。 |
+## 验证与发布约束
 
-旧 `members.group_name`、`tasks.group_name` 和 `tasks.project` 保持兼容。迁移只去除首尾空格，不会按逗号、分号或其他字符拆分和猜测旧名称。历史关联允许保留停用成员；新的负责人、参与者、组别和项目分配只接受有效的活动目录项。
+    python -m unittest discover -s tests -v
+    python deploy/rehearse_collaboration_recovery.py
 
-### 任务 API、权限与并发
+合成数据演练验证迁移可重复运行和隔离恢复，不读取生产数据库。升级生产时务必停写，对 `data.db`、资金、发票、任务截图和 `secret.key` 制作**同一恢复点**；单独执行当前 `deploy/backup.sh` 不充分。详见[发布检查与数据恢复](发布检查与数据恢复.md)。
 
-- `POST /api/task` 创建任务；`POST /api/task/<id>` 更新任务；请求与响应携带 `version`，陈旧版本返回冲突而不会覆盖新数据。
-- `admin` 与 `manager` 可创建、编辑和逻辑删除任务。任务负责人或参与者可编辑自己参与的任务的全部普通设置，包括日期；**只有 `admin`** 可设置或修改 `parent_id`。
-- 父任务树与前置依赖图分别验证无环。前置依赖仅返回未完成风险和建议开始日期，永不自动改写开始/截止日期。
-- `POST /api/task/<id>/delete` 是逻辑删除：存在未删除子任务或仍被其他任务依赖时返回冲突；成功删除后保留任务日志、字段修订和附件元数据。当前没有用户可用的恢复端点。
-- `GET /api/task/<id>/revisions` 返回修订；管理员通过 `POST /api/task/<id>/revisions/<revision_id>/revert` 按修订撤销。若该修订涉及的字段已经在之后被触碰，撤销返回冲突；撤销不会擦除备注或截图。
-
-### 截图附件
-
-附件 API 位于 `/api/task/<id>/attachments`。读取、上传、下载和删除都经过登录与任务权限检查，文件不走公开 `static/` 路由。
-
-- 每次请求最多上传 5 张，每张不超过 10 MiB，只接受经内容校验的 PNG、JPEG 或 WebP。
-- 管理角色、负责人和参与者可上传；上传者本人或管理角色可删除。
-- 上传先暂存并写入数据库元数据；任一步失败会回滚数据库并清理暂存文件。删除同样协调文件与元数据，避免孤立文件或孤立记录。
-
-### 页面和 CSV 兼容
-
-任务工作台提供组别/项目/参与者筛选、祖先上下文任务树、前置依赖警告、修订历史与截图留痕。GitHub 页面仅显示 Discussions/Issue 外部链接，不调用 GitHub API，也不会把任务、成员、截图或附件发送到 GitHub。
-
-成员导入和导出 CSV 的**列**使用逗号分隔；单个“组别”字段内的多个组名使用分号分隔。任务与成员导出会保留既有列，并为以 `=`, `+`, `-` 或 `@` 开头的单元格添加保护前缀，避免表格软件执行公式。
-
-## 升级、备份与恢复
-
-现有 `deploy/backup.sh` 每日对进度/资金库使用 SQLite 备份，并按周打包发票。它**不包含** `data/task_attachments/`，也不把 `secret.key` 放入同一恢复点，因此不能单独作为协作版本的完整备份方案。在升级或恢复协作数据前，使用以下人工一致性流程：
-
-1. 暂停所有写入，推荐执行 `systemctl stop rm-progress.service`。不能在应用写入时混合复制数据库和文件。
-2. 在同一恢复点保存 `data.db` 与其 `data.db-wal` / `data.db-shm`、`data/funds/`、`data/invoices/`、`data/task_attachments/` 和 `secret.key`。服务停止后可以完整复制；也可在写入暂停期间对每个 SQLite 库运行在线备份，再复制同一时点的文件。
-3. 先恢复到隔离目录。对恢复的每个数据库运行 `PRAGMA integrity_check`，并核对成员、任务、日志、关系、附件元数据及附件文件的计数和摘要。
-4. 只有所有数据库、附件、资金、发票和密钥来自同一恢复点且核对通过后，才允许恢复服务或切换数据目录。
-
-### 隔离演练
-
-仓库提供不接触真实数据库、真实附件、发票或 `secret.key` 的演练：
-
-```powershell
-uv run deploy/rehearse_collaboration_recovery.py
-```
-
-该命令在临时目录创建包含一名活动成员、一名停用成员、任务、日志、合成附件和临时密钥的旧结构；它迁移两次，验证旧内容摘要与移除关系不被重新写回，验证中途失败回滚 DDL/列/关系，使用 `sqlite3.Connection.backup()` 备份，修改源数据库和附件后把两者恢复到独立目录，并运行 `PRAGMA integrity_check`。命令完成后删除临时夹，并把无敏感信息的结果写入 `.omo/evidence/todo-collaboration/recovery/rehearsal-report.json`。
-
-
----
-
-## 修正：两套组别（v3）
-
-最初 TODO 第 4 条对应**专业组**（groups/member_groups），第 5 条对应**造车组别**（历史 projects/tasks.project_id）。早期实现错误地同时把任务绑定到负责人专业组，现在已取消任务专业组的默认关联，并从任务管理/筛选 UI 移除。task_groups 保留历史 API 和修订兼容信息，但不作为任务的造车组别。
-
-新增 member_projects 多对多表，以支持“同一视觉组成员同时参与步兵与哨兵”。造车组别默认预置步兵、哨兵、重装、飞镖，现有细分组别保留；成员与任务均通过稳定 project_id 关联，重命名不修改归属。v3 事务迁移只执行一次：根据历史任务已有 project_id 将负责人和参与者归入对应造车组别，不会在再次启动时覆盖人工修改。成员和任务的 CSV 导出明确区分两种组别。
+[原始需求与当前待办](../../TODO.md) · [系统架构](系统架构与技术说明.md)
