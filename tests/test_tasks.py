@@ -2,6 +2,8 @@
 import os
 import tempfile
 import unittest
+import atexit
+from unittest.mock import patch
 
 _TEMP = tempfile.TemporaryDirectory()
 os.environ["PROGRESS_DB"] = os.path.join(_TEMP.name, "data.db")
@@ -12,6 +14,12 @@ os.environ["PROGRESS_SECRET_PATH"] = os.path.join(_TEMP.name, "secret.key")
 os.environ["PROGRESS_INITIAL_ADMIN_PASSWORD"] = "ci-test-password-only"
 
 import app as app_module  # noqa: E402
+# Queue recovery tests claim jobs explicitly against their own patched DB paths.
+# A daemon started by an unrelated page request must not consume those fixtures
+# or mutate another test's invoice directory while DB_PATH is temporarily patched.
+_WORKER_PATCH = patch('modules.invoices.start_invoice_worker')
+_WORKER_PATCH.start()
+atexit.register(_WORKER_PATCH.stop)
 from flask.testing import FlaskClient
 from werkzeug.datastructures import Headers
 

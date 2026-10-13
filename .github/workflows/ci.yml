@@ -15,8 +15,12 @@ concurrency:
 
 jobs:
   python:
-    name: Python unit + API regression
-    runs-on: ubuntu-latest
+    name: Python unit + API regression (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +39,7 @@ jobs:
         run: coverage run --branch --source=app,common,modules -m unittest discover -s tests -v
       - name: Coverage report
         if: always()
+        shell: bash
         run: |
           if [ -f .coverage ]; then
             coverage report -m
@@ -47,7 +52,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: python-coverage
+          name: python-coverage-${{ matrix.os }}
           path: coverage.xml
           if-no-files-found: ignore
 

@@ -148,7 +148,8 @@ var dropZone=document.getElementById('dropZone');
 dropZone.addEventListener('dragover',function(e){e.preventDefault();dropZone.classList.add('drag-over')});
 dropZone.addEventListener('dragleave',function(){dropZone.classList.remove('drag-over')});
 dropZone.addEventListener('drop',function(e){e.preventDefault();dropZone.classList.remove('drag-over');handleFiles(e.dataTransfer.files)});
-document.getElementById('fileInput').addEventListener('change',function(){handleFiles(this.files);this.value=''});
+// Replace the template's legacy onchange handler instead of uploading twice.
+document.getElementById('fileInput').onchange=function(){handleFiles(this.files);this.value=''};
 
 async function handleFiles(files){
 if(!files||!files.length)return;

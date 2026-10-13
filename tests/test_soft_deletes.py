@@ -143,13 +143,14 @@ class TestSoftDeletes(unittest.TestCase):
         from modules.task_migrations import migrate
         from common import DB_PATH
         import sqlite3
+        from contextlib import closing
         group = self.admin.post("/api/groups", json={
             "name": "幂等归档_" + self.suffix
         }).get_json()["id"]
         self.assertEqual(self.admin.post(f"/api/groups/{group}/delete", json={
             "confirm_name": "幂等归档_" + self.suffix
         }).status_code, 200)
-        with sqlite3.connect(DB_PATH) as db:
+        with closing(sqlite3.connect(DB_PATH)) as db, db:
             migrate(db)
             migrate(db)
             archived = db.execute("SELECT deleted_at FROM groups WHERE id=?", (group,)).fetchone()[0]
@@ -158,7 +159,8 @@ class TestSoftDeletes(unittest.TestCase):
     def test_page_has_delete_and_restore_controls(self):
         html = self.admin.get("/members").get_data(as_text=True)
         self.assertIn("m-show-deleted", html)
-        script = self.admin.get("/static/manage-members.js").get_data(as_text=True)
+        with self.admin.get("/static/manage-members.js") as response:
+            script = response.get_data(as_text=True)
         for field in ("data-member-delete", "data-member-restore",
                       "data-delete-member-group", "data-restore-member-group",
                       "data-delete-member-project", "data-restore-member-project"):

@@ -5,14 +5,14 @@ const taskFilters = { q: "", project: "", status: "" };
 function renderCreateChoices() {
   const owner = document.getElementById("create-owner");
   const project = document.getElementById("create-project");
-  if (owner) owner.innerHTML = options(state.members, null, "未指定");
-  if (project) project.innerHTML = options(state.projects, null, "未选择");
+  refreshDraftSelect(owner, state.members, "未指定");
+  refreshDraftSelect(project, state.projects, "未选择");
   const participants = document.getElementById("create-participants");
   const dependencies = document.getElementById("create-dependencies");
   const parent = document.getElementById("create-parent");
-  if (participants) participants.innerHTML = choiceGrid("participant_ids", state.members, [], (member) => member.name);
-  if (dependencies) dependencies.innerHTML = choiceGrid("predecessor_ids", state.tasks, [], taskLabel);
-  if (parent) parent.innerHTML = options(state.tasks, null, "无父任务");
+  refreshDraftChoices(participants, "participant_ids", state.members, (member) => member.name);
+  refreshDraftChoices(dependencies, "predecessor_ids", state.tasks, taskLabel);
+  refreshDraftSelect(parent, state.tasks, "无父任务");
 }
 
 function fillTaskFilters() {
@@ -90,6 +90,7 @@ function bindTaskManagement() {
   document.getElementById("create-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
+    if (!form.reportValidity()) return;
     const payload = taskPayload(form);
     if (!payload.owner_id && payload.participant_ids.length) {
       form.elements.owner_id.setCustomValidity("选择参与成员后必须指定负责人");
@@ -106,7 +107,7 @@ function bindTaskManagement() {
       refresh();
     } else form.querySelector(".form-message").textContent = result?.error || "创建失败";
   });
-  document.getElementById("create-owner")?.addEventListener("change", (event) => event.target.setCustomValidity(""));
+  document.getElementById("create-owner")?.addEventListener("change", (event) => event.target._draftValidate?.());
   document.getElementById("task-table")?.addEventListener("click", async (event) => {
     const edit = event.target.closest("[data-edit-task]");
     const remove = event.target.closest("[data-delete-task]");

@@ -6,6 +6,8 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+import contextlib
+import hashlib
 from uuid import uuid4
 from unittest.mock import patch
 
@@ -147,10 +149,12 @@ class TestReviewFixes(unittest.TestCase):
         found = self.member.get('/invoices/api/invoices', query_string={'search': vendor}).get_json()['data']
         self.assertEqual({row['id'] for row in found}, {single, batch})
         download = self.admin.get('/invoices/api/export/download')
+        self.assertEqual(download.status_code, 200, download.get_data(as_text=True))
         rows = list(csv.DictReader(io.StringIO(download.get_data(as_text=True).lstrip('\ufeff'))))
         download.close()
         selected = [row for row in rows if row['文件路径'] in (single, batch)]
-        self.assertEqual(len(selected), 2)
+        self.assertEqual(len(selected), 2, repr({'wanted': [single, batch],
+                                              'exported_paths': [row['文件路径'] for row in rows]}))
         self.assertTrue(all((row['开票日期'], row['供应商']) == (date, vendor) for row in selected))
 
     def test_explicit_blank_date_vendor_override_filename_but_missing_fields_fall_back(self):
@@ -212,3 +216,73 @@ class TestReviewFixes(unittest.TestCase):
         other = app_module.app.test_client()
         other.post('/login', json={'username': name, 'password': 'review-password'})
         self.assertEqual(other.get('/invoices/api/open_file', query_string={'rel_path': rel}).status_code, 403)
+
+    def test_seed_uses_current_schema_is_idempotent_and_requires_first_password_change(self):
+        from deploy import seed_data
+        from common import DB_PATH, get_db
+        name = 'seed_' + uuid4().hex[:8]
+        with patch.multiple(seed_data, DB_PATH=DB_PATH,
+                            MEMBERS=[(name, name, '视觉;电控', 'member')],
+                            TASKS=[(name, name, '哨兵', '视觉', '未开始', 80, '中', '')]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            seed_data.main()
+            with app_module.app.app_context():
+                db = get_db()
+                before = dict(db.execute('SELECT * FROM members WHERE username=?', (name,)).fetchone())
+            seed_data.main()
+        with app_module.app.app_context():
+            db = get_db()
+            after = dict(db.execute('SELECT * FROM members WHERE username=?', (name,)).fetchone())
+            self.assertEqual(before, after)
+            self.assertEqual(after['must_change_password'], 1)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM member_groups WHERE member_id=?', (after['id'],)).fetchone()[0], 2)
+            task = db.execute('SELECT id,version,project_id FROM tasks WHERE title=?', (name,)).fetchone()
+            self.assertEqual(task['version'], 1)
+            self.assertIsNotNone(task['project_id'])
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM tasks WHERE title=?', (name,)).fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT kind FROM task_revisions WHERE task_id=?', (task['id'],)).fetchone()[0], 'create')
+            self.assertTrue(db.execute('SELECT 1 FROM member_projects WHERE member_id=? AND project_id=?',
+                                       (after['id'], task['project_id'])).fetchone())
+
+    def test_seed_refuses_archived_catalog_and_missing_admin_without_writes(self):
+        from deploy import seed_data
+        from common import DB_PATH
+        name = 'seed_' + uuid4().hex[:8]
+        project = self.admin.post('/api/projects', json={'name': name}).get_json()['id']
+        self.admin.post(f'/api/projects/{project}/delete', json={'confirm_name': name})
+        with patch.multiple(seed_data, DB_PATH=DB_PATH, MEMBERS=[(name, name, '视觉', 'member')],
+                            TASKS=[(name, name, name, '视觉', '未开始', 0, '中', '')]):
+            with self.assertRaisesRegex(RuntimeError, '已删除'):
+                seed_data.main()
+        with contextlib.closing(sqlite3.connect(DB_PATH)) as db:
+            self.assertIsNone(db.execute('SELECT id FROM members WHERE username=?', (name,)).fetchone())
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, 'no-admin.db')
+            with contextlib.closing(sqlite3.connect(path)) as db:
+                db.execute('CREATE TABLE members(id INTEGER,name TEXT,role TEXT,is_active INTEGER,deleted_at TEXT,must_change_password INTEGER)')
+                db.commit()
+            with patch.object(seed_data, 'DB_PATH', path), self.assertRaisesRegex(RuntimeError, '管理员'):
+                seed_data.main()
+
+    def test_legacy_diagnostic_is_read_only_and_reports_only_evidence(self):
+        from deploy.audit_review_data import audit
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / 'data/invoices'
+            directory.mkdir(parents=True)
+            path = Path(root) / 'data.db'
+            with contextlib.closing(sqlite3.connect(path)) as db:
+                db.executescript("CREATE TABLE members(id INTEGER,group_name TEXT);"
+                                 "CREATE TABLE member_groups(member_id INTEGER,group_id INTEGER);"
+                                 "CREATE TABLE tasks(id INTEGER,project TEXT,project_id INTEGER);"
+                                 "INSERT INTO members VALUES(1,'视觉');INSERT INTO tasks VALUES(2,'哨兵',NULL);")
+            meta = directory / '.invoice_meta.json'
+            meta.write_text('{"missing.pdf":{"category_override":[],"confirmed_amount_cents":"1"}}', encoding='utf-8')
+            files = (path, meta)
+            before = [hashlib.sha256(item.read_bytes()).hexdigest() for item in files]
+            report = audit(root, db_path=path, invoice_dir=directory)
+            self.assertTrue(report['read_only'])
+            self.assertEqual({issue['kind'] for issue in report['issues']}, {
+                'missing_member_groups', 'missing_task_project', 'orphan_invoice_metadata',
+                'invalid_invoice_fields', 'invalid_confirmed_amount'})
+            self.assertEqual(before, [hashlib.sha256(item.read_bytes()).hexdigest() for item in files])

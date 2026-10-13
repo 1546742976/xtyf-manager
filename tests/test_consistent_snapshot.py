@@ -5,6 +5,7 @@ import stat
 import tempfile
 import unittest
 import zipfile
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -53,7 +54,7 @@ class TestConsistentSnapshot(unittest.TestCase):
         restored = Path(self.temp.name) / "restored"
         restore_snapshot(self.archive, restored)
         for path in ("data.db", "data/funds/funds.db"):
-            with sqlite3.connect(restored / path) as db:
+            with closing(sqlite3.connect(restored / path)) as db, db:
                 self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
                 self.assertEqual(db.execute("SELECT name,cents FROM entries").fetchone(),
                                  ("fixture", 30))
@@ -75,7 +76,7 @@ class TestConsistentSnapshot(unittest.TestCase):
         restore_snapshot(self.archive, restored)
         self.assertFalse((restored / "data.db-wal").exists())
         self.assertFalse((restored / "data/funds/funds.db-wal").exists())
-        with sqlite3.connect(restored / "data.db") as db:
+        with closing(sqlite3.connect(restored / "data.db")) as db, db:
             self.assertEqual(db.execute("SELECT cents FROM entries").fetchone()[0], 30)
 
     def test_snapshot_refuses_active_service_missing_ack_and_existing_output(self):

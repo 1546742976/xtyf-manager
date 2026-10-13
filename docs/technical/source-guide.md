@@ -22,6 +22,8 @@
 | `static/task-*.js`、`manage-*.js`、`account.js` | 任务、成员及账户交互 |
 | `static/funds.js`、`invoices.js`、`*.css` | 财务交互和样式 |
 | `deploy/` | systemd、部署、数据库备份、发票导出、合成数据恢复演练 |
+| `deploy/audit_review_data.py` | 只读历史数据诊断；不导入应用、不自动修复 |
+| `modules/funds_revisions.py` / `invoice_validation.py` | 独立资金审核版本迁移、发票字段校验 |
 | `tests/` | Flask/API/UI 资源与权限回归用例 |
 
 修改 API 时，先阅读相应业务模块和 `tests/`；不要只按旧版 `app.py` 或旧版前端单文件结构推断。详细说明：[系统架构](系统架构与技术说明.md) · [开发指南](开发与优化指南.md)。
