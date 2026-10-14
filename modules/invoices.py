@@ -911,7 +911,7 @@ def scan_invoices(use_cache=True):
         if key not in seen:
             seen.add(key)
             unique.append(inv)
-    unique.sort(key=lambda x: (x['month'], x.get('date', '')), reverse=True)
+    unique.sort(key=lambda x: x['id'])
     if has_request_context():
         names = {row['id']: row['name'] for row in get_db().execute('SELECT id,name FROM members')}
         for invoice in unique:
@@ -956,6 +956,75 @@ def _add_invoice(invoices, meta, month, status, filepath, use_cache=True):
         inv['amount'], inv['source'] = resolve_amount(inv, use_cache=use_cache)
     inv['amount_cents'] = str(to_cents(inv['amount']))
     invoices.append(inv)
+
+
+
+# 由服务端对完整结果集排序，再分页，不能仅对当前页做浏览器排序。
+# 日期/月份采用实际日历值；金额使用整数分，避免字符串字典序与浮点误差。
+INVOICE_SORT_FIELDS = frozenset({
+    'date', 'month', 'amount', 'status', 'submitter',
+    'category', 'vendor', 'invoice_number', 'filename',
+})
+_INVOICE_DATE_RE = re.compile(
+    r'^\s*(\d{4})\s*[-./年]\s*(\d{1,2})\s*[-./月]\s*(\d{1,2})\s*日?\s*$'
+)
+_INVOICE_MONTH_RE = re.compile(r'^\s*(\d{4})\s*[./-]\s*(\d{1,2})\s*$')
+
+
+def _invoice_date_value(value):
+    if not isinstance(value, str):
+        return None
+    match = _INVOICE_DATE_RE.fullmatch(value)
+    if not match:
+        return None
+    try:
+        return datetime(*(int(part) for part in match.groups())).toordinal()
+    except ValueError:
+        return None
+
+
+def _invoice_month_value(value):
+    if not isinstance(value, str):
+        return None
+    match = _INVOICE_MONTH_RE.fullmatch(value)
+    if not match:
+        return None
+    year, month = (int(part) for part in match.groups())
+    return year * 12 + month if 1 <= year <= 9999 and 1 <= month <= 12 else None
+
+
+def _invoice_sort_value(invoice, field):
+    value = invoice.get(field)
+    if value is None or value == '':
+        return None
+    if field == 'date':
+        return _invoice_date_value(value)
+    if field == 'month':
+        return _invoice_month_value(value)
+    if field == 'amount':
+        return to_cents(value)
+    if field == 'status':
+        return STATUS_NAMES.index(value) if value in STATUS_NAMES else None
+    text = str(value).strip()
+    if not text:
+        return None
+    # 自然排序：供应商2在供应商10之前，发票号中的数字按数值比较。
+    return tuple((1, int(part)) if part.isascii() and part.isdigit()
+                 else (0, part.casefold())
+                 for part in re.split(r'([0-9]+)', text) if part)
+
+
+def sort_invoices(invoices, sort_by='date', sort_order='desc'):
+    """字段白名单；稳定的 ID 次序；无效/缺失字段始终放在末尾。"""
+    if sort_by not in INVOICE_SORT_FIELDS or sort_order not in ('asc', 'desc'):
+        raise ValueError('无效的发票排序参数')
+    ordered = sorted(invoices, key=lambda invoice: str(invoice.get('id', '')))
+    decorated = [(invoice, _invoice_sort_value(invoice, sort_by)) for invoice in ordered]
+    available = [pair for pair in decorated if pair[1] is not None]
+    available.sort(key=lambda pair: pair[1], reverse=(sort_order == 'desc'))
+    return [invoice for invoice, _ in available] + [
+        invoice for invoice, value in decorated if value is None
+    ]
 
 
 # ===================== 统计 =====================
@@ -1019,8 +1088,16 @@ def api_invoices():
 
     date_from = request.args.get('date_from', '')
     date_to = request.args.get('date_to', '')
-    if date_from: result = [i for i in result if i['date'] >= date_from]
-    if date_to: result = [i for i in result if i['date'] <= date_to]
+    from_day = _invoice_date_value(date_from) if date_from else None
+    to_day = _invoice_date_value(date_to) if date_to else None
+    if (date_from and from_day is None) or (date_to and to_day is None):
+        return jsonify(error='日期筛选参数无效'), 400
+    if from_day is not None:
+        result = [i for i in result if (day := _invoice_date_value(i.get('date'))) is not None
+                  and day >= from_day]
+    if to_day is not None:
+        result = [i for i in result if (day := _invoice_date_value(i.get('date'))) is not None
+                  and day <= to_day]
 
     search = request.args.get('search', '').lower()
     if search:
@@ -1047,6 +1124,12 @@ def api_invoices():
 
     inv_id = request.args.get('id', '')
     if inv_id: result = [i for i in result if i['id'] == inv_id]
+    sort_by = request.args.get('sort_by', 'date')
+    sort_order = request.args.get('sort_order', 'desc').lower()
+    try:
+        result = sort_invoices(result, sort_by, sort_order)
+    except ValueError:
+        return jsonify(error='排序参数无效'), 400
     total = len(result)
     start = (page - 1) * per_page
     end = start + per_page

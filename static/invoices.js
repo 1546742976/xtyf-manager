@@ -1,5 +1,5 @@
 
-var App={currentPage:1,totalPages:1,selected:{},stats:null,searchTimer:null,_dupCache:null};
+var App={currentPage:1,totalPages:1,selected:{},stats:null,searchTimer:null,_dupCache:null,sortBy:'date',sortOrder:'desc'};
 function showToast(msg,type){var t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+(type||'info');clearTimeout(App._toastTimer);App._toastTimer=setTimeout(function(){t.classList.remove('show')},3500)}
 
 async function loadStats(){
@@ -26,6 +26,34 @@ try { await loadInvoiceOwners(); } catch (error) { showToast(error.message, 'err
 }
 function setOptions(id,arr){var sel=document.getElementById(id);if(!sel)return;var cur=sel.value,first=sel.options[0];sel.innerHTML='';sel.appendChild(first);arr.forEach(function(v){var o=document.createElement('option');o.value=v;o.textContent=v;if(v===cur)o.selected=true;sel.appendChild(o)})}
 
+
+var INVOICE_SORT_DEFAULT_DESC={date:true,month:true,amount:true};
+function syncInvoiceSortControls(){
+var selector=document.getElementById('invoiceSortBy'),direction=document.getElementById('invoiceSortDirection');
+if(selector)selector.value=App.sortBy;
+if(direction){direction.textContent=App.sortOrder==='desc'?'降序 ↓':'升序 ↑';direction.title=App.sortOrder==='desc'?'当前降序，点击切换升序':'当前升序，点击切换降序'}
+document.querySelectorAll('th[data-sort]').forEach(function(th){
+var active=th.getAttribute('data-sort')===App.sortBy;
+th.setAttribute('aria-sort',active?(App.sortOrder==='desc'?'descending':'ascending'):'none');
+var indicator=th.querySelector('.sort-indicator');
+if(indicator)indicator.textContent=active?(App.sortOrder==='desc'?' ↓':' ↑'):'';
+});
+}
+function setInvoiceSort(field){
+if(App.sortBy===field)App.sortOrder=App.sortOrder==='desc'?'asc':'desc';
+else {App.sortBy=field;App.sortOrder=INVOICE_SORT_DEFAULT_DESC[field]?'desc':'asc'}
+syncInvoiceSortControls();loadInvoices(1);
+}
+function selectInvoiceSort(field){
+if(!field||field===App.sortBy)return;
+App.sortBy=field;App.sortOrder=INVOICE_SORT_DEFAULT_DESC[field]?'desc':'asc';
+syncInvoiceSortControls();loadInvoices(1);
+}
+function toggleInvoiceSortOrder(){
+App.sortOrder=App.sortOrder==='desc'?'asc':'desc';
+syncInvoiceSortControls();loadInvoices(1);
+}
+
 let invoiceRequestSerial=0;
 async function loadInvoices(page,highlightDups){
 page=page||1;App.currentPage=page;
@@ -39,6 +67,7 @@ if(df.value)p.set('date_from',df.value);
 if(dt.value)p.set('date_to',dt.value);
 var kw=document.getElementById('searchInput').value.trim();
 if(kw)p.set('search',kw);
+p.set('sort_by',App.sortBy);p.set('sort_order',App.sortOrder);
 p.set('page',page);p.set('per_page','50');
 let data;
 try {
@@ -475,6 +504,7 @@ showToast('PDF金额刷新完成','success');
 
 window.IS_FINANCE=window.IS_FINANCE||false;window.ME_NAME=window.ME_NAME||'';
 if(!window.IS_FINANCE){document.body.classList.add('member');document.querySelectorAll('#detailModal input,#detailModal select,#detailModal textarea').forEach(function(el){el.disabled=true});}
+syncInvoiceSortControls();
 loadStats().then(function(){loadInvoices()});
 if(window.IS_FINANCE)InvoiceJobs.load();
 window.addEventListener('beforeunload',function(){InvoiceJobs.active.forEach(function(entry){entry.source.close()})});
