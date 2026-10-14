@@ -6,12 +6,14 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import time
+import threading
 import urllib.request
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime
 
 APP = Path('/opt/rm-progress')
@@ -34,6 +36,64 @@ def setting(key):
 def sha(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+@contextmanager
+def protect_recovery():
+    """A second Ctrl+C must not abandon a half-switched installation."""
+    handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
+
+
+def install_dependencies(python, requirements, log_path):
+    """Install while the old service is online, with live output and a total deadline."""
+    args = [str(python), '-m', 'pip', 'install', '--disable-pip-version-check',
+            '--progress-bar', 'off', '--timeout', '30', '--retries', '2',
+            '-r', str(requirements), 'gunicorn']
+    print('Preparing dependencies while the current service remains online.', flush=True)
+    print('Dependency log: ' + str(log_path), flush=True)
+    with log_path.open('w') as log:
+        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True, errors='replace', bufsize=1, start_new_session=True)
+        def relay():
+            for line in process.stdout:
+                log.write(line)
+                log.flush()
+                print(line, end='', flush=True)
+        reader = threading.Thread(target=relay, daemon=True)
+        reader.start()
+        deadline = time.monotonic() + 900
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError('Dependency installation exceeded 15 minutes; old service remains online')
+                try:
+                    code = process.wait(timeout=min(15, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    print('Dependency installation still running; old service remains online...', flush=True)
+            if code:
+                raise subprocess.CalledProcessError(code, args)
+        except BaseException:
+            with protect_recovery():
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+            raise
+        finally:
+            reader.join(timeout=5)
+            process.stdout.close()
 
 
 def check_release():
@@ -109,8 +169,26 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(RELEASE / name, target)
     own(stage)
+    # Unchanged dependencies are reused without downloading or mutating the old venv.
+    # For an in-tree venv the symlink targets its location AFTER the directory switch.
+    if (APP / 'requirements.txt').read_bytes() == (stage / 'requirements.txt').read_bytes():
+        current_environment = (APP / 'venv').resolve()
+        if current_environment.is_relative_to(APP):
+            environment = previous / current_environment.relative_to(APP)
+        else:
+            environment = current_environment
+        migration_python = APP / 'venv/bin/python'
+        print('Dependencies unchanged: reusing the current virtual environment; no pip download.', flush=True)
+    else:
+        environment = APP.with_name('rm-progress-venv-' + stamp)
+        print('Dependencies changed: preparing a separate environment before stopping service.', flush=True)
+        run(['python3', '-m', 'venv', environment])
+        install_dependencies(environment / 'bin/python', stage / 'requirements.txt', backup / 'dependencies.log')
+        own(environment)
+        migration_python = environment / 'bin/python'
+    (stage / 'venv').symlink_to(environment, target_is_directory=True)
     # Compile before the maintenance window; this does not import the app.
-    run([APP / 'venv/bin/python', '-m', 'compileall', '-q', stage / 'app.py', stage / 'common.py', stage / 'modules'], user=account.pw_uid, group=account.pw_gid)
+    run([migration_python, '-m', 'compileall', '-q', stage / 'app.py', stage / 'common.py', stage / 'modules'], user=account.pw_uid, group=account.pw_gid)
     stopped = moved = installed = False
     try:
         print('Stopping service and creating offline recovery point...', flush=True)
@@ -147,24 +225,12 @@ def main():
                 else:
                     shutil.copy2(item, target)
         print('Backup verified: ' + str(backup), flush=True)
-        # A stable, independent venv path keeps console-script shebangs valid after switching.
-        environment = APP.with_name('rm-progress-venv-' + stamp)
-        run(['python3', '-m', 'venv', environment])
-        if (APP / 'requirements.txt').read_bytes() == (stage / 'requirements.txt').read_bytes():
-            frozen = output([APP / 'venv/bin/python', '-m', 'pip', 'freeze'])
-            (backup / 'requirements-frozen.txt').write_text(frozen + '\n')
-            requirements = backup / 'requirements-frozen.txt'
-        else:
-            requirements = stage / 'requirements.txt'
-        with (backup / 'dependencies.log').open('w') as log:
-            run([environment / 'bin/python', '-m', 'pip', 'install', '--disable-pip-version-check', '--timeout', '30', '--retries', '2', '-r', requirements, 'gunicorn'], stdout=log, stderr=subprocess.STDOUT)
-        own(environment)
-        (stage / 'venv').symlink_to(environment, target_is_directory=True)
         own(stage)
         migration_env = dict(runtime)
         migration_env.update({key: str(stage / relative) for key, relative in paths.items()})
         migration_env['PYTHONPATH'] = str(stage)
-        run([environment / 'bin/python', '-c', 'import app'], cwd=stage, env=migration_env, user=account.pw_uid, group=account.pw_gid)
+        print('Migrating the isolated data copy...', flush=True)
+        run([migration_python, '-c', 'import app'], cwd=stage, env=migration_env, user=account.pw_uid, group=account.pw_gid)
         counts = {}
         for relative, tables in [('data.db', ('members', 'tasks', 'logs')), ('data/funds/funds.db', ('records',))]:
             with closing(sqlite3.connect(stage / relative)) as new, closing(sqlite3.connect(backup / 'restored' / relative)) as old:
@@ -189,10 +255,12 @@ def main():
         if (APP / 'backups').exists():
             (stage / 'backups').symlink_to(previous / 'backups', target_is_directory=True)
         (backup / 'recovery.json').write_text(json.dumps({'previous': str(previous), 'app': str(APP), 'commit': manifest['commit'], 'counts': counts}, indent=2))
-        APP.rename(previous)
-        moved = True
-        stage.rename(APP)
-        installed = True
+        print('Migration verified; switching installation and starting service...', flush=True)
+        with protect_recovery():
+            APP.rename(previous)
+            moved = True
+            stage.rename(APP)
+            installed = True
         run(['systemctl', 'start', SERVICE])
         healthy()
         (backup / 'result.json').write_text(json.dumps({'status': 'success', 'commit': manifest['commit'], 'counts': counts, 'login_http': 200}, indent=2))
@@ -203,19 +271,23 @@ def main():
         print('LOGIN_HTTP 200; records: ' + json.dumps(counts))
     except BaseException:
         if stopped:
-            run(['systemctl', 'stop', SERVICE])
-            if installed:
-                APP.rename(failed)
-            if moved:
-                previous.rename(APP)
-            run(['systemctl', 'start', SERVICE])
-            healthy()
-            print('Old service restored; failed release and recovery files retained.', flush=True)
+            with protect_recovery():
+                print('Restoring old service; please wait. Further Ctrl+C is ignored during recovery.', flush=True)
+                run(['systemctl', 'stop', SERVICE])
+                if installed:
+                    APP.rename(failed)
+                if moved:
+                    previous.rename(APP)
+                run(['systemctl', 'start', SERVICE])
+                healthy()
+                print('Old service restored; failed release and recovery files retained.', flush=True)
         raise
 
 
 if __name__ == '__main__':
     try:
         main()
+    except KeyboardInterrupt:
+        raise SystemExit('Update cancelled. No further deployment steps will run.')
     except Exception as exc:
         raise SystemExit('Update failed: ' + str(exc))
