@@ -21,14 +21,11 @@ function filteredMembers() {
 
 function renderMemberChoices() {
   const host = document.getElementById("member-create-groups");
-  if (host) host.innerHTML = catalogChoices("group_ids", state.groups);
+  refreshDraftChoices(host, "group_ids", state.groups);
   const projects = document.getElementById("member-create-projects");
-  if (projects) projects.innerHTML = catalogChoices("project_ids", state.projects);
+  refreshDraftChoices(projects, "project_ids", state.projects);
   const imports = document.getElementById("member-import-projects");
-  if (imports) {
-    const selected = checkedValues(imports.closest("form"), "project_ids");
-    imports.innerHTML = catalogChoices("project_ids", state.projects, selected);
-  }
+  refreshDraftChoices(imports, "project_ids", state.projects);
   memberFilters.group = activeCatalogFilter(state.groups, memberFilters.group);
   memberFilters.project = activeCatalogFilter(state.projects, memberFilters.project);
   const filter = document.getElementById("m-filter-group");
@@ -208,6 +205,7 @@ function bindMemberForms() {
     event.preventDefault();
     const form = event.currentTarget;
     const payload = Object.fromEntries(new FormData(form));
+    if (!form.reportValidity()) return;
     payload.group_ids = checkedValues(form, "group_ids");
     payload.project_ids = checkedValues(form, "project_ids");
     const result = await api("/api/member", payload);
@@ -220,6 +218,7 @@ function bindMemberForms() {
   document.getElementById("import-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
+    if (!form.reportValidity()) return;
     const result = await api("/api/members/import", { text: new FormData(form).get("text"), project_ids: checkedValues(form, "project_ids") });
     if (result?.ok) {
       alert(`导入完成，共 ${result.created.length} 人。请逐人私下交付凭据，首次登录必须改密：\n${result.created.join("\n")}`);

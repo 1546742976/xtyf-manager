@@ -71,7 +71,7 @@ class TestWorkflows(unittest.TestCase):
             'username': 'chy', 'password': 'ci-review-password',
         })
         self.assertTrue(reviewer_login.get_json()['ok'])
-        approved = reviewer.post(f'/funds/api/records/{rid}/review')
+        approved = reviewer.post(f'/funds/api/records/{rid}/review', json={'version': created.get_json()['version']})
         self.assertEqual(approved.get_json()['code'], 0)
         edited = self.admin.put(f'/funds/api/records/{rid}', json={'amount': 35})
         self.assertEqual(edited.get_json()['code'], 0)

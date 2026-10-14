@@ -20,14 +20,14 @@
     <section class="ws-dashboard-card">
       <h2>快捷操作</h2><p class="ws-subtitle">常用功能集中在这里</p>
       <div class="ws-quick-grid">
-        <a href="{{ url_for('tasks') }}" class="ws-quick-link"><strong>↗</strong>任务中心</a>
+        <a href="{{ url_for('tasks') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-tasks"/></svg>任务中心</a>
         {% if me.role in ('admin', 'manager') %}
-        <a href="{{ url_for('manage') }}#create-form" class="ws-quick-link"><strong>＋</strong>创建任务</a>
-        <a href="{{ url_for('members') }}" class="ws-quick-link"><strong>◎</strong>成员管理</a>
-        <a href="/funds/" class="ws-quick-link"><strong>¥</strong>资金台账</a>
+        <a href="{{ url_for('manage') }}#create-form" class="ws-quick-link"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>创建任务</a>
+        <a href="{{ url_for('members') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-users"/></svg>成员管理</a>
+        <a href="/funds/" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-money"/></svg>资金台账</a>
         {% endif %}
-        <a href="/invoices/" class="ws-quick-link"><strong>↥</strong>提交发票</a>
-        <a href="{{ url_for('account') }}" class="ws-quick-link"><strong>⚙</strong>账户设置</a>
+        <a href="/invoices/" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-invoice"/></svg>提交发票</a>
+        <a href="{{ url_for('account') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-settings"/></svg>账户设置</a>
       </div>
     </section>
     <section class="ws-dashboard-card">

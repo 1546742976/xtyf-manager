@@ -127,6 +127,62 @@ function choiceGrid(name, items, selected = [], labeler = (item) => item.name, d
   return `<div class="choice-grid">${items.map((item) => `<label class="choice-item${item.is_active === 0 ? " is-inactive" : ""}"><input type="checkbox" name="${esc(name)}" value="${Number(item.id)}" ${values.has(Number(item.id)) ? "checked" : ""} ${disabled || (item.is_active === 0 && !values.has(Number(item.id))) ? "disabled" : ""}><span>${esc(labeler(item))}${item.is_active === 0 ? "（已删除）" : ""}</span></label>`).join("") || '<span class="muted">暂无可选项</span>'}</div>`;
 }
 
+const DRAFT_INVALID_MESSAGE = "已选项已删除或停用，请重新选择后提交。";
+function updateDraftMessage(host, invalid) {
+  host.dataset.draftInvalid = invalid ? "1" : "0";
+  const form = host.closest("form");
+  const message = form?.querySelector(".form-message");
+  if (!message) return;
+  if (form.querySelector('[data-draft-invalid="1"]')) message.textContent = DRAFT_INVALID_MESSAGE;
+  else if (message.textContent === DRAFT_INVALID_MESSAGE) message.textContent = "";
+}
+function bindDraftValidation(host, validate) {
+  host._draftValidate = validate;
+  if (!host.dataset.draftBound) {
+    host.dataset.draftBound = "1";
+    host.addEventListener("change", () => host._draftValidate());
+    host.closest("form")?.addEventListener("reset", () => setTimeout(() => {
+      if (host.tagName === "SELECT") host.value = "";
+      else host.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
+      host._draftValidate();
+    }, 0));
+  }
+  validate();
+}
+function refreshDraftSelect(host, items, emptyLabel) {
+  if (!host) return;
+  const selected = host.value;
+  const active = items.filter((item) => item.is_active !== 0);
+  const allowed = new Set(active.map((item) => String(item.id)));
+  host.innerHTML = options(active, selected, emptyLabel);
+  if (selected && !allowed.has(selected)) {
+    const prior = items.find((item) => String(item.id) === selected);
+    host.insertAdjacentHTML("beforeend", `<option value="${esc(selected)}" selected>${esc(prior?.name || `#${selected}`)}（已失效，请重新选择）</option>`);
+  }
+  host.value = selected;
+  bindDraftValidation(host, () => {
+    const invalid = !!host.value && !allowed.has(host.value);
+    host.setCustomValidity(invalid ? DRAFT_INVALID_MESSAGE : "");
+    updateDraftMessage(host, invalid);
+  });
+}
+function refreshDraftChoices(host, name, items, labeler = (item) => item.name) {
+  if (!host) return;
+  const selected = checkedValues(host, name);
+  const active = items.filter((item) => item.is_active !== 0);
+  const allowed = new Set(active.map((item) => Number(item.id)));
+  const missing = selected.filter((id) => !allowed.has(id)).map((id) => ({
+    id, name: `${items.find((item) => Number(item.id) === id)?.name || `#${id}`}（已失效，请取消选择）`, is_active: 0,
+  }));
+  host.innerHTML = choiceGrid(name, [...active, ...missing], selected,
+    (item) => item.is_active === 0 ? item.name : labeler(item));
+  bindDraftValidation(host, () => {
+    const invalid = checkedValues(host, name).some((id) => !allowed.has(id));
+    host.querySelector("input")?.setCustomValidity(invalid ? DRAFT_INVALID_MESSAGE : "");
+    updateDraftMessage(host, invalid);
+  });
+}
+
 let refreshing = false;
 function showSync(ok, message) {
   const element = document.getElementById("sync-status");

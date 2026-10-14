@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 import uuid
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,7 +21,7 @@ class TestInvoiceJobRecovery(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.db_path = Path(self.temp.name) / "fixture-data.db"
         self.lock_path = Path(self.temp.name) / ".invoice.lock"
-        with sqlite3.connect(self.db_path) as db:
+        with closing(sqlite3.connect(self.db_path)) as db, db:
             db.executescript("""
                 CREATE TABLE members (
                     id INTEGER PRIMARY KEY,
@@ -49,7 +50,7 @@ class TestInvoiceJobRecovery(unittest.TestCase):
 
     def _insert_job(self, kind="refresh", *, attempts=0, status="queued"):
         jid = uuid.uuid4().hex
-        with sqlite3.connect(self.db_path) as db:
+        with closing(sqlite3.connect(self.db_path)) as db, db:
             audit_id = db.execute(
                 "INSERT INTO security_audit(details) VALUES('{}')"
             ).lastrowid
@@ -63,12 +64,12 @@ class TestInvoiceJobRecovery(unittest.TestCase):
         return jid, audit_id
 
     def _db_row(self, jid):
-        with sqlite3.connect(self.db_path) as db:
+        with closing(sqlite3.connect(self.db_path)) as db, db:
             db.row_factory = sqlite3.Row
             return dict(db.execute("SELECT * FROM invoice_jobs WHERE id=?", (jid,)).fetchone())
 
     def _audit(self, audit_id):
-        with sqlite3.connect(self.db_path) as db:
+        with closing(sqlite3.connect(self.db_path)) as db, db:
             return db.execute("SELECT outcome FROM security_audit WHERE id=?",
                               (audit_id,)).fetchone()[0]
 
@@ -114,7 +115,7 @@ class TestInvoiceJobRecovery(unittest.TestCase):
 
     def test_revoke_permission_before_claim_blocks_execution(self):
         jid, audit_id = self._insert_job("refresh")
-        with sqlite3.connect(self.db_path) as db:
+        with closing(sqlite3.connect(self.db_path)) as db, db:
             db.execute("DELETE FROM member_permissions WHERE member_id=1")
         with InvoiceFileLock(self.lock_path):
             self.assertIsNone(invoice_jobs.recover_and_claim())

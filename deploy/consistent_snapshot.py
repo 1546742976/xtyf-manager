@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import zipfile
 from datetime import datetime, timezone
+from contextlib import closing
 from pathlib import Path, PurePosixPath
 
 DATABASES = ("data.db", "data/funds/funds.db")
@@ -101,8 +102,8 @@ def _collect(root: Path) -> list[str]:
 
 def _backup_sqlite(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True) as reader:
-        with sqlite3.connect(destination) as writer:
+    with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as reader:
+        with closing(sqlite3.connect(destination)) as writer, writer:
             reader.backup(writer)
     if not _sqlite_ok(destination):
         raise SnapshotError(f"SQLite 备份完整性检查失败：{source}")
@@ -110,7 +111,7 @@ def _backup_sqlite(source: Path, destination: Path) -> None:
 
 def _sqlite_ok(path: Path) -> bool:
     try:
-        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as db:
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
             return db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     except sqlite3.Error:
         return False
