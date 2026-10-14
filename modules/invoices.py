@@ -1226,6 +1226,8 @@ def api_invoice_update():
             updated[field] = data[field]
     if corrected_date is not None:
         updated['date'] = corrected_date
+        # Keep both metadata representations in sync after an explicit correction.
+        updated['confirmed_date'] = corrected_date
     updated['month'] = new_month
     updated['status'] = new_status
     updated['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')

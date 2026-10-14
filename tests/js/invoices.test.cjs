@@ -48,7 +48,7 @@ test("invoice detail month and date remain editable and are sent to update API",
   assert.match(script, /date:document\.getElementById\('detDate'\)\.value/);
 });
 
-test("invoice row passes an unencoded but HTML/JS-escaped path to openFile", async () => {
+test("invoice row passes a safely escaped raw path to delegated openFile handler", async () => {
   const { context, element } = invoicePage({
     id: '2026.10/未报销/发票 50% #测试.pdf',
     rel_path: '2026.10/未报销/发票 50% #测试.pdf',
@@ -58,7 +58,7 @@ test("invoice row passes an unencoded but HTML/JS-escaped path to openFile", asy
   });
   await vm.runInContext("loadInvoices(1)", context);
   const html = element("invoiceTableBody").innerHTML;
-  assert.match(html, /openFile\('2026\.10\/未报销\/发票 50% #测试\.pdf'\)/);
+  assert.match(html, /data-invoice-file="2026\.10\/未报销\/发票 50% #测试\.pdf"/);
   assert.doesNotMatch(html, /%252F|%2F/);
   assert.equal(vm.runInContext("encodeURIComponent('2026.10/未报销/发票 50% #测试.pdf')", context),
     "2026.10%2F%E6%9C%AA%E6%8A%A5%E9%94%80%2F%E5%8F%91%E7%A5%A8%2050%25%20%23%E6%B5%8B%E8%AF%95.pdf");
