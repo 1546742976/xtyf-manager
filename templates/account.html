@@ -6,7 +6,8 @@
     <p>维护个人登录名、专业组和造车组别，安全更新密码；姓名由管理员统一维护。</p></div>
 </div>
 <div class="ux-account-grid">
-  {% if me.must_change_password %}<p class="panel error" role="alert">当前使用的是初始或重置密码。请先设置一个与当前密码不同的新密码，之后才能进入工作区。</p>{% endif %}
+  {% if me.must_change_password %}<p class="panel error account-password-warning" role="alert">当前使用的是初始或重置密码。请先设置一个与当前密码不同的新密码，之后才能进入工作区。</p>{% endif %}
+  <div class="ux-account-sidebar">
   <section class="panel ux-account-profile" aria-label="账户资料">
     <div class="ux-account-avatar" aria-hidden="true">{{ me.name[:1] }}</div>
     <h2>个人信息</h2>
@@ -20,6 +21,23 @@
     </dl>
     <p class="ux-note">成员 ID 是数据库中的固定身份标识，不会随用户名修改而改变。需要修改真实姓名或权限角色请联系管理员。</p>
   </section>
+    <section class="panel appearance-panel" aria-labelledby="appearance-title">
+      <h2 id="appearance-title">外观</h2>
+      <p class="appearance-description">选择适合你的工作界面，主题会随账户同步到其他设备。</p>
+      <fieldset class="theme-options" {% if me.must_change_password %}disabled{% endif %}>
+        <legend class="sr-only">页面主题</legend>
+        {% for theme, label in [('light', '银白'), ('dark', '黑色')] %}
+        <label class="theme-option">
+          <input type="radio" name="workspace-theme" value="{{ theme }}" {% if me.ui_theme == theme %}checked{% endif %}>
+          <span class="theme-swatch theme-swatch-{{ theme }}" aria-hidden="true"><i></i><span><b></b><b></b><b></b></span></span>
+          <span class="theme-option-label">{{ label }}</span>
+        </label>
+        {% endfor %}
+      </fieldset>
+      <p id="theme-result" class="ux-account-result" role="status" aria-live="polite">{% if me.must_change_password %}修改初始密码后即可设置外观。{% endif %}</p>
+      <button id="theme-retry" class="btn hidden" type="button">重试保存主题</button>
+    </section>
+  </div>
   <div class="ux-account-settings">
     {% if not me.must_change_password %}<section class="panel">
       <h2>修改个人资料</h2>

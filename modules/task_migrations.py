@@ -167,6 +167,9 @@ def migrate(db: sqlite3.Connection) -> None:
         if db.execute("SELECT 1 FROM schema_migrations WHERE version=4").fetchone() is None:
             _add_column(db, "tasks", "schedule_stage TEXT")
             db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (4, ?)", (now_str(),))
+        if db.execute("SELECT 1 FROM schema_migrations WHERE version=5").fetchone() is None:
+            _add_column(db, "members", "ui_theme TEXT NOT NULL DEFAULT 'light' CHECK (ui_theme IN ('light','dark'))")
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, ?)", (now_str(),))
         db.commit()
     except sqlite3.Error:
         db.rollback()

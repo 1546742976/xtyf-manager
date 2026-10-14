@@ -564,9 +564,28 @@ def get_chart():
         else:
             return jsonify({'code': 1, 'msg': 'Unknown chart type'})
 
-        plt.tight_layout()
+        # Transparent plot surfaces inherit the page background in either theme.
+        dark = current_user().get('ui_theme') == 'dark'
+        text_color = '#f5f5f7' if dark else '#1d1d1f'
+        muted_color = '#a1a1a6' if dark else '#68686d'
+        border_color = '#73737a' if dark else '#b9b9c1'
+        fig.patch.set_alpha(0)
+        ax.patch.set_alpha(0)
+        ax.tick_params(colors=muted_color)
+        for spine in ax.spines.values():
+            spine.set_color(border_color)
+        for label in (ax.title, ax.xaxis.label, ax.yaxis.label, *ax.texts):
+            label.set_color(text_color)
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.get_frame().set_facecolor('#0b0b0c' if dark else '#f5f5f7')
+            legend.get_frame().set_edgecolor(border_color)
+            for label in legend.get_texts():
+                label.set_color(text_color)
+
+        fig.tight_layout()
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", dpi=120, bbox_inches="tight")
+        fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", transparent=True)
         buf.seek(0)
         plt.close(fig)
         return jsonify({"code": 0, "data": f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"})

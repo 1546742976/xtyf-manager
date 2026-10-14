@@ -2,13 +2,14 @@
 
 ## 1. Product and users
 
-This is an internal operations workstation for team members, project managers, and administrators. Use an Apple-inspired light visual language: neutral surfaces, typography-led hierarchy, generous spacing, soft corners, and blue accents. The primary tasks are scanning work, finding ownership, updating a task without losing concurrent changes, and maintaining team catalogs.
+This is an internal operations workstation for team members, project managers, and administrators. Use the selected silver Apple palette with a sidebar and project timeline, plus an account-synchronized black theme. The primary tasks are scanning work, finding ownership, updating a task without losing concurrent changes, and maintaining team catalogs.
 
 ## 2. Foundations
 
 - Typeface: `-apple-system`, `BlinkMacSystemFont`, `SF Pro Text`, `Segoe UI`, `PingFang SC`, `Microsoft YaHei`, sans-serif. Use locally available system fonts without a network font dependency. Body 14px/1.6; supporting text 12–13px; section title 18px; page title 28–36px.
 - The final color tokens live in `static/apple.css`, loaded after legacy styles on base, funds, and invoice templates. Both `--ux-*` and collaboration tokens map to this theme. Background `#f5f5f7`, surface white, text `#1d1d1f`, secondary text `#68686d`, primary `#0071e3`. Sidebar and top bar use translucent neutral surfaces with solid-color fallbacks.
-- Spacing follows a 4px base. Normal control gaps are 12px; panel padding is 20–28px; page gutters are 16px mobile and 40px desktop. Cards use 22px corners, controls 12px, and sign-in cards 28px.
+- The black theme uses background `#0b0b0c`, surface `#1c1c1e`, text `#f5f5f7`, secondary text `#a1a1a6`, and accent `#0a84ff`. Status surfaces, control boundaries and focus states have separate dark values. Bright blue primary buttons use dark text for contrast in this theme.
+- Spacing follows a 4px base. Normal control gaps are 12px; panel padding is 20–28px; page gutters are 16px mobile and 40px desktop. Cards use 16px corners and controls 10px.
 - Depth uses one quiet shadow (`--shadow`) plus borders. Dialogs use a stronger shadow and blurred scrim. Avoid decorative gradients and hover movement.
 
 ## 3. Layout and responsiveness
@@ -17,6 +18,7 @@ This is an internal operations workstation for team members, project managers, a
 - Tablet (768): sidebar drawer, one or two board columns, controls wrap without horizontal page overflow.
 - Mobile (375): one content column, full-width primary controls, tables retain their local horizontal scroller, dialogs use the viewport with a 12px inset.
 - Main controls and mobile actions are at least 44px; desktop table actions may use 36px controls and remain keyboard reachable.
+- Selecting one vehicle group defaults to its specialty timeline: mechanical → electrical → vision, then unclassified. Each task has its own row. Coordinates use the complete group's valid dates and stay stable under row filtering. Same-day tasks have a marker; incomplete/invalid dates have text instead of invented bars. Under 768px, use vertical stage lists with full dates. Management retains its table.
 
 ## 4. Content and state
 
@@ -30,6 +32,9 @@ This is an internal operations workstation for team members, project managers, a
 
 - `.btn`: default, primary, danger, ghost, small, disabled, focus-visible.
 - `.panel` / `.lane` / `.task`: white cards on neutral inset lanes with restrained elevation; task has hover, keyboard focus, overdue, warning, and context states.
+- Task card backgrounds follow the current theme. Blocked task cards and specialty timeline rows have a complete red frame, alongside their written status. Invoice secondary actions use the theme surface and readable text; accent and warning actions retain semantic colors.
+- Member creation groups name/username, password/role, specialty/vehicle choices, then submit. Desktop identity fields use two aligned columns; each choice section spans the form. Single-member and batch-import forms have separate headings and stack under 1150px.
+- Task creation places description and submit together beside prerequisites, with both columns aligned at the bottom; narrow screens stack these sections. Finance plots use transparent PNG surfaces over the page background, with theme-aware labels, axes and legends.
 - `.badge`: semantic status/priority/count treatment.
 - `.toolbar` / `.seg`: labelled filter groups and view switching; selected segment exposes `aria-pressed`.
 - `.choice-grid`: labelled checkbox collections for people, groups, and dependencies with selected, focus, disabled, and historical/inactive states.
@@ -45,6 +50,8 @@ This is an internal operations workstation for team members, project managers, a
 - Tree expansion is explicit and preserved across polling in memory.
 - Upload is a deliberate submit action with one request, disabled controls while pending, and no retry loop.
 - `prefers-reduced-motion` disables transitions.
+- Account → Appearance is the only theme control. Selection applies immediately and persists through `/api/account/preferences`; failure restores the original theme and offers retry. Server-rendered `data-theme` avoids a light flash. Other devices receive the choice on their next page load. Anonymous login uses silver; initial-password accounts must change their password before saving preferences.
+- Account appearance sits below the personal information card in the left column. GitHub discussion and issue entry cards stretch to the same desktop row height. The person board omits administrator lanes; unassigned tasks occupy the first full-width row below filters, use horizontal cards and disappear when there are no matching unassigned tasks.
 
 ## 7. Accessibility constraints
 

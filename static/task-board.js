@@ -72,7 +72,7 @@ function taskCard(task, extraClass = "") {
   const participants = taskParticipants(task).map((id) => memberById(id)?.name || `成员 #${id}`);
   const warnings = task.dependency_warnings || [];
   const meta = [taskProjectName(task), participants.join("、")].filter(Boolean);
-  return `<article class="task ${isOverdue(task) ? "overdue" : ""} ${warnings.length ? "has-warning" : ""} ${extraClass}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
+  return `<article class="task ${task.status === "阻塞" ? "is-blocked" : ""} ${isOverdue(task) ? "overdue" : ""} ${warnings.length ? "has-warning" : ""} ${extraClass}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
     <div class="task-head"><h3>${esc(task.title)}</h3>${badge(task.status, STATUS_CLASS[task.status] || "gray")}</div>
     <div class="task-meta">${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}${meta.map((value) => `<span>${esc(value)}</span>`).join("")}</div>
     ${warnings.length ? `<p class="task-warning">依赖提醒：${esc(warnings.join("；"))}</p>` : ""}
@@ -81,7 +81,7 @@ function taskCard(task, extraClass = "") {
   </article>`;
 }
 function participantLanes(tasks) {
-  const active = state.members.map((member) => ({
+  const active = state.members.filter((member) => member.role !== "admin").map((member) => ({
     key: `m-${member.id}`,
     title: member.name,
     sub: (member.group_names || [member.group_name]).filter(Boolean).join("、"),
@@ -96,6 +96,7 @@ function participantLanes(tasks) {
   );
   historical.forEach((id) => {
     const member = memberById(id);
+    if (member?.role === "admin") return;
     active.push({
       key: `m-${id}`,
       title: member?.name || `成员 #${id}`,
@@ -105,7 +106,7 @@ function participantLanes(tasks) {
   });
   const unassigned = tasks.filter((task) => !taskParticipants(task).length);
   if (unassigned.length)
-    active.push({
+    active.unshift({
       key: "unassigned",
       title: "未分配",
       sub: "",
@@ -129,7 +130,7 @@ function renderLanes(tasks) {
     visible
       .map(
         (lane) =>
-          `<section class="lane"><header class="lane-head"><h2>${esc(lane.title)}</h2>${lane.sub ? `<span class="lane-sub">${esc(lane.sub)}</span>` : ""}<span class="lane-count">${new Set(lane.tasks.map((task) => task.id)).size}</span></header><div class="lane-body">${lane.tasks.map((task) => taskCard(task)).join("") || '<p class="empty">暂无任务</p>'}</div></section>`,
+          `<section class="lane ${lane.key === "unassigned" ? "unassigned-lane" : ""}"><header class="lane-head"><h2>${esc(lane.title)}</h2>${lane.sub ? `<span class="lane-sub">${esc(lane.sub)}</span>` : ""}<span class="lane-count">${new Set(lane.tasks.map((task) => task.id)).size}</span></header><div class="lane-body">${lane.tasks.map((task) => taskCard(task)).join("") || '<p class="empty">暂无任务</p>'}</div></section>`,
       )
       .join("") || '<p class="empty">没有符合条件的任务</p>'
   );
@@ -158,7 +159,9 @@ function renderBoard() {
   });
   const tasks = filteredTasks();
   target.classList.toggle("tree-board", state.view === "tree");
-  target.innerHTML = state.view === "tree" ? renderTree(tasks) : renderLanes(tasks);
+  target.classList.toggle("timeline-board", state.view === "specialty");
+  target.innerHTML = state.view === "tree" ? renderTree(tasks)
+    : state.view === "specialty" ? renderSpecialtyTimeline(tasks) : renderLanes(tasks);
   document.getElementById("match-count").textContent = `${new Set(tasks.map((task) => task.id)).size} 个匹配任务`;
 }
 function bindBoard() {

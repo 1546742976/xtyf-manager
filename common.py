@@ -44,7 +44,7 @@ def current_user():
     if not uid:
         return None
     row = get_db().execute(
-        "SELECT id, name, username, role, group_name, session_version, must_change_password "
+        "SELECT id, name, username, role, group_name, session_version, must_change_password, ui_theme "
         "FROM members WHERE id = ? AND is_active = 1 AND deleted_at IS NULL",
         (uid,),
     ).fetchone()

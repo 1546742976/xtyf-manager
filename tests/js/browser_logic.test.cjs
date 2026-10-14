@@ -6,6 +6,43 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const ROOT = path.resolve(__dirname, "../..");
+
+test("timeline preserves parallel dates, shared endpoints, same-day markers and strict dates", () => {
+  const page = browser(["app.js", "task-board.js", "task-timeline.js"]);
+  const tasks = [{id:1,start_date:"2026-10-14",due_date:"2026-10-22"},
+    {id:2,start_date:"2026-10-14",due_date:"2026-10-22"},
+    {id:3,start_date:"2026-10-22",due_date:"2026-10-26"},
+    {id:4,start_date:"2026-10-26",due_date:"2026-10-26"}];
+  const range = page.value("timelineRange")(tasks), position = page.value("timelinePosition");
+  assert.equal(position(tasks[0],range).left, position(tasks[1],range).left);
+  assert.ok(Math.abs(position(tasks[0],range).left + position(tasks[0],range).width - position(tasks[2],range).left) < 1e-10);
+  assert.equal(position(tasks[3],range).sameDay,true);
+  assert.equal(position(tasks[3],range).width,0);
+  const parse = page.value("timelineDay");
+  for (const value of ["2026-02-30","2026-13-01","2026-2-03","0000-01-01","<svg>",null]) assert.equal(parse(value),null);
+  assert.equal(parse("2024-02-29") + 1, parse("2024-03-01"));
+  assert.equal(parse("2026-03-08") + 1, parse("2026-03-09"));
+  assert.equal(page.value("timelinePosition")({start_date:"2026-10-22",due_date:"2026-10-14"},range),null);
+});
+
+test("timeline axis ignores row filters and other vehicle groups; missing dates and names are escaped", () => {
+  const page = browser(["app.js", "task-board.js", "task-timeline.js"]), state = page.value("state");
+  state.projects = [{id:10,name:"哨兵"}];
+  state.filters.project = "10";
+  state.tasks = [{id:1,project_id:10,title:"<svg>",owner_stage:"机械",start_date:"2026-10-14",due_date:"2026-10-22",status:"未开始"},
+    {id:2,project_id:10,title:"电控",owner_stage:"电控",start_date:"2026-10-22",due_date:"2026-10-26"},
+    {id:3,project_id:10,title:"待补日期",owner_stage:null,start_date:"",due_date:"2026-10-29"},
+    {id:4,project_id:11,title:"其他车组",start_date:"2030-01-01",due_date:"2030-01-02"}];
+  const render = page.value("renderSpecialtyTimeline");
+  const full = render(state.tasks.filter(task=>task.project_id===10));
+  const filtered = render([state.tasks[0]]);
+  assert.match(full,/2026-10-14 — 2026-10-26/);
+  assert.match(filtered,/2026-10-14 — 2026-10-26/);
+  assert.match(full,/&lt;svg&gt;/); assert.doesNotMatch(full,/<svg>|2030-01-01/);
+  assert.match(full,/未归类/); assert.match(full,/缺少开始日期/);
+  assert.ok(full.indexOf("机械</h3>") < full.indexOf("电控</h3>"));
+  assert.ok(full.indexOf("电控</h3>") < full.indexOf("视觉</h3>"));
+});
 function browser(scripts) {
   const context = {
     console,
@@ -133,6 +170,34 @@ test("task board: search and mine filters apply to people and tasks", () => {
   assert.deepEqual(Array.from(page.value("filteredTasks")()).map(t => t.id), [1]);
   state.filters.status = "已完成";
   assert.equal(page.value("filteredTasks")().length, 0);
+});
+
+test("person board hides admin lanes and places filtered unassigned tasks first", () => {
+  const page = browser(["app.js", "task-board.js"]), state = page.value("state");
+  state.view = "person";
+  state.members = [{id:1,name:"管理员",role:"admin"},{id:2,name:"队员",role:"member"}];
+  state.allMembers = [{id:3,name:"历史管理员",role:"admin"}];
+  state.tasks = [
+    {id:1,title:"管理员任务",owner_id:1,status:"未开始",priority:"中"},
+    {id:2,title:"队员任务",owner_id:2,status:"进行中",priority:"中"},
+    {id:3,title:"待认领 A",owner_id:null,status:"未开始",priority:"中"},
+    {id:4,title:"待认领 B",owner_id:null,status:"未开始",priority:"中"},
+    {id:5,title:"历史管理员任务",owner_id:3,status:"未开始",priority:"中"},
+  ];
+  const lanes = page.value("participantLanes")(state.tasks);
+  assert.deepEqual(Array.from(lanes,lane=>lane.key), ["unassigned","m-2"]);
+  assert.deepEqual(Array.from(lanes[0].tasks,task=>task.id), [3,4]);
+  const html = page.value("renderLanes")(page.value("filteredTasks")());
+  assert.ok(html.indexOf('unassigned-lane') < html.indexOf('队员</h2>'));
+  assert.doesNotMatch(html, /管理员<\/h2>/);
+  state.filters.status = "进行中";
+  assert.doesNotMatch(page.value("renderLanes")(page.value("filteredTasks")()), /unassigned-lane|待认领/);
+  state.filters.status = "";
+  state.filters.q = "待认领 B";
+  const searchHtml = page.value("renderLanes")(page.value("filteredTasks")());
+  assert.match(searchHtml, /未分配<\/h2>/);
+  assert.match(searchHtml, /待认领 B/);
+  assert.doesNotMatch(searchHtml, /待认领 A/);
 });
 
 test("task tree: matching child retains ancestors without infinite loops", () => {

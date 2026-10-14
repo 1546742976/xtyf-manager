@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="{{ me.ui_theme }}">
 <head>
 <meta charset="UTF-8">
 {% include "_security_head.html" %}
@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/static/ui.css">
 <link rel="stylesheet" href="/static/workspace.css">
 <link rel="stylesheet" href="/static/apple.css">
-<meta name="theme-color" content="#f5f5f7">
+<meta name="theme-color" content="{{ '#0b0b0c' if me.ui_theme == 'dark' else '#f5f5f7' }}">
 </head>
 <body class="ux-invoices ws-app{% if not is_finance %} member{% endif %}">
 <script>window.IS_FINANCE={{ is_finance|tojson }};window.ME_NAME={{ me.name|tojson }};window.ME_ID={{ me.id|tojson }};</script>

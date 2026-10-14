@@ -109,7 +109,7 @@ class TestCollaborationMigration(unittest.TestCase):
         self.assertIn("新赛季步兵", vehicle_names)
         self.assertNotIn("步兵", vehicle_names)
         self.assertNotIn("飞镖", vehicle_names)
-        self.assertEqual(db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 4)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 5)
         db.close()
 
     def test_injected_failure_rolls_back_entire_migration(self):

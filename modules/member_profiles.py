@@ -175,6 +175,23 @@ def account_profile():
     return _save(actor["id"], as_admin=False)
 
 
+@bp.route("/api/account/preferences", methods=["GET", "POST"])
+@login_required
+def account_preferences():
+    actor = current_user()
+    if request.method == "GET":
+        return jsonify(ok=True, theme=actor["ui_theme"])
+    data = request.get_json(silent=True)
+    if (not isinstance(data, dict) or set(data) != {"theme"}
+            or not isinstance(data["theme"], str) or data["theme"] not in {"light", "dark"}):
+        return jsonify(ok=False, error="请选择银白或黑色主题"), 400
+    db = get_db()
+    # Preferences never change session_version or another member's settings.
+    with db:
+        db.execute("UPDATE members SET ui_theme=? WHERE id=?", (data["theme"], actor["id"]))
+    return jsonify(ok=True, theme=data["theme"])
+
+
 @bp.route("/api/member/<int:member_id>/profile", methods=["POST"])
 @login_required
 def member_profile(member_id: int):

@@ -1,6 +1,6 @@
 <!-- 资金管理页（Bootstrap）：统计卡 + 记录/添加/图表 三页签；全部脚本在页面底部 -->
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="{{ me.ui_theme }}">
 <head>
 <meta charset="UTF-8">
 {% include "_security_head.html" %}
@@ -14,7 +14,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='ui.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='apple.css') }}">
-<meta name="theme-color" content="#f5f5f7">
+<meta name="theme-color" content="{{ '#0b0b0c' if me.ui_theme == 'dark' else '#f5f5f7' }}">
 </head>
 <body class="ux-funds ws-app">
 
@@ -130,8 +130,8 @@
       </div></div>
       <div class="row">
         <div class="col-lg-8"><div class="card"><div class="card-header">统计图</div>
-          <div class="card-body text-center">
-            <img id="chartImg" src="" style="display:none;max-width:100%;">
+          <div class="card-body text-center funds-chart-surface">
+            <img id="chartImg" src="" alt="资金收支统计图" style="display:none;max-width:100%;">
             <div id="chartEmp" class="empty-state"><i class="bi bi-bar-chart" style="font-size:42px;"></i><p>点击上方按钮加载图表</p></div>
           </div></div></div>
         <div class="col-lg-4"><div class="card"><div class="card-header">统计摘要</div>

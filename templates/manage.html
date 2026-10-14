@@ -20,9 +20,11 @@
     <label>开始日期<input name="start_date" type="date"></label>
     <label>截止日期<input name="due_date" type="date"></label>
     {% if me.role == 'admin' %}<label>父任务（仅管理员）<select name="parent_id" id="create-parent"><option value="">无父任务</option></select></label>{% endif %}
-    <fieldset class="span-2"><legend>前置任务（可多选，仅提醒）</legend><div id="create-dependencies" class="choice-host"></div></fieldset>
-    <label class="span-2">说明<textarea name="detail" rows="2"></textarea></label>
-    <div class="span-2"><button class="btn primary" type="submit">创建任务</button><p class="form-message" role="alert"></p></div>
+    <fieldset class="span-2 task-create-dependencies"><legend>前置任务（可多选，仅提醒）</legend><div id="create-dependencies" class="choice-host"></div></fieldset>
+    <div class="span-2 task-create-details">
+      <label>说明<textarea name="detail" rows="2"></textarea></label>
+      <div class="task-create-actions"><button class="btn primary" type="submit">创建任务</button><p class="form-message" role="alert"></p></div>
+    </div>
   </form>
 </section>
 
