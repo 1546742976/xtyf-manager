@@ -1252,7 +1252,9 @@ def api_invoice_update():
                 dest = os.path.join(directory, f'{stem}_{counter}{ext}')
                 counter += 1
             shutil.move(source, dest)
-            new_rel = os.path.relpath(dest, BASE_DIR).replace('\\', '/')
+            # Build the public relative path from validated logical components;
+            # avoid platform-specific path rendering on Windows.
+            new_rel = '/'.join((new_month, new_status, os.path.basename(dest)))
         except OSError as exc:
             return jsonify(success=False, error=f'发票文件移动失败: {exc}'), 500
 
