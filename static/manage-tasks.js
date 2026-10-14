@@ -5,14 +5,14 @@ const taskFilters = { q: "", project: "", status: "" };
 function renderCreateChoices() {
   const owner = document.getElementById("create-owner");
   const project = document.getElementById("create-project");
-  if (owner) owner.innerHTML = options(state.members, null, "未指定");
-  if (project) project.innerHTML = options(state.projects, null, "未选择");
+  refreshDraftSelect(owner, state.members, "未指定");
+  refreshDraftSelect(project, state.projects, "未选择");
   const participants = document.getElementById("create-participants");
   const dependencies = document.getElementById("create-dependencies");
   const parent = document.getElementById("create-parent");
-  if (participants) participants.innerHTML = choiceGrid("participant_ids", state.members, [], (member) => member.name);
-  if (dependencies) dependencies.innerHTML = choiceGrid("predecessor_ids", state.tasks, [], taskLabel);
-  if (parent) parent.innerHTML = options(state.tasks, null, "无父任务");
+  refreshDraftChoices(participants, "participant_ids", state.members, (member) => member.name);
+  refreshDraftChoices(dependencies, "predecessor_ids", state.tasks, taskLabel);
+  refreshDraftSelect(parent, state.tasks, "无父任务");
 }
 
 function fillTaskFilters() {
@@ -27,7 +27,7 @@ function fillTaskFilters() {
 }
 
 function filteredManageTasks() {
-  return state.tasks.filter((task) => {
+  const tasks = state.tasks.filter((task) => {
     if (taskFilters.project && Number(task.project_id) !== Number(taskFilters.project)) return false;
     if (taskFilters.status && task.status !== taskFilters.status) return false;
     const people = taskParticipants(task)
@@ -36,20 +36,23 @@ function filteredManageTasks() {
     const haystack = `${task.title} ${task.detail || ""} ${taskProjectName(task)} ${people}`.toLowerCase();
     return !taskFilters.q || haystack.includes(taskFilters.q.toLowerCase());
   });
+  return taskFilters.project ? sortSpecialtyTasks(tasks) : tasks;
 }
 
 function renderTaskTable() {
   const body = document.querySelector("#task-table tbody");
   if (!body) return;
   const tasks = filteredManageTasks();
+  const scheduleButton = document.getElementById("schedule-project");
+  if (scheduleButton) scheduleButton.disabled = !taskFilters.project || !isManagement() || projectById(taskFilters.project)?.is_active === 0;
   document.getElementById("task-count").textContent = `共 ${tasks.length} / ${state.tasks.length} 条`;
   body.innerHTML =
     tasks
       .map((task) => {
         const additional = (task.participant_ids || []).map((id) => memberById(id)?.name || `#${id}`).join("、") || "—";
-        return `<tr><td>${Number(task.id)}</td><td class="cell-title">${esc(task.title)}</td><td>${esc(memberById(task.owner_id)?.name || "未指定")}</td><td>${esc(additional)}</td><td>${esc(taskProjectName(task) || "—")}</td><td>${priorityCell(task.priority)}</td><td>${esc(task.status)}</td><td>${badge(daysLeftText(task), daysLeftClass(task))}</td><td class="nowrap"><button class="btn ghost sm" type="button" data-edit-task="${Number(task.id)}">编辑</button><button class="btn ghost sm danger-text" type="button" data-delete-task="${Number(task.id)}">删除</button></td></tr>`;
+        return `<tr><td>${Number(task.id)}</td><td class="cell-title">${esc(task.title)}</td><td>${esc(memberById(task.owner_id)?.name || "未指定")}</td><td>${esc(specialtyTaskStage(task) || "未归类")}</td><td>${esc(additional)}</td><td>${esc(taskProjectName(task) || "—")}</td><td class="nowrap">${esc(task.start_date || "未设置")}</td><td class="nowrap">${esc(task.due_date || "未设置")}</td><td>${priorityCell(task.priority)}</td><td>${esc(task.status)}</td><td>${badge(daysLeftText(task), daysLeftClass(task))}</td><td class="nowrap"><button class="btn ghost sm" type="button" data-edit-task="${Number(task.id)}">编辑</button><button class="btn ghost sm danger-text" type="button" data-delete-task="${Number(task.id)}">删除</button></td></tr>`;
       })
-      .join("") || '<tr><td colspan="9" class="empty">没有符合条件的任务</td></tr>';
+      .join("") || '<tr><td colspan="12" class="empty">没有符合条件的任务</td></tr>';
 }
 
 function catalogPanel(kind, items) {
@@ -91,6 +94,7 @@ function bindTaskManagement() {
   document.getElementById("create-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
+    if (!form.reportValidity()) return;
     const payload = taskPayload(form);
     if (!payload.owner_id && payload.participant_ids.length) {
       form.elements.owner_id.setCustomValidity("选择参与成员后必须指定负责人");
@@ -107,7 +111,7 @@ function bindTaskManagement() {
       refresh();
     } else form.querySelector(".form-message").textContent = result?.error || "创建失败";
   });
-  document.getElementById("create-owner")?.addEventListener("change", (event) => event.target.setCustomValidity(""));
+  document.getElementById("create-owner")?.addEventListener("change", (event) => event.target._draftValidate?.());
   document.getElementById("task-table")?.addEventListener("click", async (event) => {
     const edit = event.target.closest("[data-edit-task]");
     const remove = event.target.closest("[data-delete-task]");

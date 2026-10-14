@@ -4,13 +4,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#15263f">
+  <meta name="theme-color" content="#f5f5f7">
   {% include "_security_head.html" %}
   <title>{% block title %}工作台{% endblock %} | 巡天御风管理系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='ui.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='collaboration.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='apple.css') }}">
 </head>
 <body class="{% if me %}ws-app{% endif %}">
   <a href="#main-content" class="ux-skip-link">跳至主内容</a>

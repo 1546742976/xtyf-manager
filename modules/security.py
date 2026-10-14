@@ -4,6 +4,7 @@ import os
 import secrets
 import sqlite3
 import subprocess
+from contextlib import closing
 from functools import wraps
 
 from flask import (Blueprint, current_app, g, jsonify, redirect, render_template,
@@ -166,7 +167,7 @@ def init_security(app):
         if unsafe or request.endpoint in AUDITED_READS:
             details = _audit_details(request.get_json(silent=True)) if request.is_json else {}
             g.audit_details = details
-            with sqlite3.connect(DB_PATH, timeout=15) as db:
+            with closing(sqlite3.connect(DB_PATH, timeout=15)) as db, db:
                 g.audit_id = db.execute(
                     "INSERT INTO security_audit(actor_id,actor_name,action,method,target,details,created_at) "
                     "VALUES(?,?,?,?,?,?,?)",
@@ -214,7 +215,7 @@ def init_security(app):
                     g.audit_details["result"] = summary
             # A crash or failure to finalize leaves the durable 'pending' record visible.
             try:
-                with sqlite3.connect(DB_PATH, timeout=5) as db:
+                with closing(sqlite3.connect(DB_PATH, timeout=5)) as db, db:
                     db.execute("UPDATE security_audit SET outcome=?,http_status=?,finished_at=?,details=? WHERE id=?",
                                (outcome, response.status_code, now_str(), json.dumps(g.audit_details, ensure_ascii=False)[:20000], audit_id))
             except sqlite3.Error:

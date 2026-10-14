@@ -81,7 +81,7 @@ function reload(){
         '<td>'+(r.invoice_count||0)+'</td>'+
         '<td>'+escText(r.handler||'-')+'</td>'+
         '<td>'+r.record_date+'</td>'+
-        '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">待审核</span> '+(CAN_REVIEW?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+')">审核</button>':''):'<span class="badge-ok">已审核</span>')+'</td>'+
+        '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">待审核</span> '+(CAN_REVIEW?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>')+'</td>'+
         '<td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+(r.notes||'').replace(/"/g,'&quot;')+'">'+escText(r.notes||'-')+'</td>'+
         '<td><button class="btn btn-outline-secondary btn-sm" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" onclick="delR('+r.id+')"><i class="bi bi-trash"></i></button></td>'+
         '</tr>';
@@ -157,11 +157,12 @@ async function delR(id){
   } catch(e){ fundsToast('删除失败：'+e.message,'error'); }
 }
 
-async function reviewRecord(id){
+async function reviewRecord(id,version){
   if(!CAN_REVIEW || !confirm('确认审核通过该记录？')) return;
   try{
-    var r = await fetch(API+'/'+id+'/review',{method:'POST'});
+    var r = await fetch(API+'/'+id+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:version})});
     var j = await r.json();
+    if(r.status===409){fundsToast(j.msg,'error');reload();return}
     if(j.code===0){ fundsToast('已审核通过','success'); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
     else fundsToast(j.msg||'操作失败','error');
   }catch(e){ fundsToast('操作失败','error'); }

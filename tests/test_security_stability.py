@@ -142,7 +142,7 @@ class TestSecurityAndStability(unittest.TestCase):
 
         def review():
             started.set()
-            outcome.append(reviewer.post(f"/funds/api/records/{rid}/review"))
+            outcome.append(reviewer.post(f"/funds/api/records/{rid}/review", json={"version": created["version"]}))
 
         thread = threading.Thread(target=review)
         thread.start()

@@ -18,8 +18,22 @@ node --test tests/js/*.test.cjs
 ## 自动检查
 
 .github/workflows/ci.yml 在提交任意 PR、向 main 推送及手工 workflow_dispatch 时运行。
-Python 和 JavaScript 两个独立 job 并行执行，任何 job 失败即 CI 失败。
+Python 使用 Ubuntu/Windows 双平台矩阵，JavaScript 使用独立 job，任何 job 失败即 CI 失败。
 Python 使用分支覆盖率统计，结果写入 Actions Summary，并上传 coverage.xml Artifact。
+Artifact 名称按系统区分，覆盖率门槛继续保持 65%。
+
+## 本轮缺陷回归与浏览器检查
+
+`tests/test_review_fixes.py` 覆盖审核版本、迁移、非法字段、重复脱敏、嵌套整理、确认值、特殊路径、初始化导入和只读诊断；`tests/js/invoice_security.test.cjs` 验证安全事件委托及单次编码。
+
+浏览器专项使用真实 Chromium 和独立临时 Flask 服务：
+
+```sh
+# 已安装项目依赖，并已安装 Playwright/Chromium 时运行
+node tests/browser/review_fixes.cjs
+```
+
+可用 `REVIEW_PYTHON` 指定 Python，`NODE_PATH` 指向已有 Playwright 包目录。若 CDN 无法访问，可将同版本 Bootstrap 5.3.3 的真实 `bootstrap.bundle.min.js` 路径设置为 `REVIEW_BOOTSTRAP_PATH`；此选项仅替换浏览器测试中的 CDN 响应，不改变项目依赖。测试覆盖真实登录改密、文件选择上传、确认值、XSS、预览、过期审核和草稿选择保留/失效拦截，不代表生产负载或完整浏览器 E2E。
 
 测试数据库、密钥、资金目录、发票目录和任务附件目录均设为隔离的测试临时路径；
 不使用生产数据、生产服务或 GitHub Secrets。

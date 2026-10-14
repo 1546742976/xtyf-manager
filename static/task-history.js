@@ -11,6 +11,7 @@ const FIELD_LABELS = {
   status: "状态",
   start_date: "开始日期",
   due_date: "截止日期",
+  schedule_stage: "排期阶段",
   parent_id: "父任务",
   predecessor_ids: "前置任务",
 };

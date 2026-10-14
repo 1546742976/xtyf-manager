@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from common import now_str
-from modules.task_mutations import RELATION_FIELDS, SCALAR_FIELDS, _relations, _replace_relations, _revision, _validate
+from modules.task_mutations import RELATION_FIELDS, REVISION_FIELDS as SCALAR_FIELDS, _relations, _replace_relations, _revision, _validate
 from modules.task_types import Actor, JsonObject
 
 

@@ -28,6 +28,48 @@ function browser(scripts) {
   };
 }
 
+test("specialty schedule: owner phases, stable dates and management order agree", () => {
+  const page = browser(["app.js", "task-board.js", "manage-tasks.js"]);
+  const state = page.value("state");
+  state.groups = [{id:1,name:"机械"},{id:2,name:"电控"},{id:3,name:"视觉"}];
+  state.members = [{id:1,group_ids:[1]}, {id:2,group_ids:[2]}, {id:3,group_ids:[3]}, {id:4,group_ids:[1,3]}];
+  const tasks = [
+    {id:6,owner_id:3,project_id:10,start_date:"2026-10-01",due_date:"2026-10-02"},
+    {id:3,owner_id:1,project_id:10,start_date:"",due_date:""},
+    {id:2,owner_id:2,project_id:10,start_date:"2026-10-01",due_date:"2026-10-02",participant_ids:[1]},
+    {id:5,owner_id:4,project_id:10,start_date:"2026-10-01",due_date:"2026-10-02",schedule_stage:"视觉"},
+    {id:1,owner_id:1,project_id:10,start_date:"2026-10-01",due_date:"2026-10-02"},
+    {id:4,owner_id:4,project_id:10,start_date:"2026-10-01",due_date:"2026-10-02"},
+    {id:7,owner_id:1,project_id:11,start_date:"2026-10-01",due_date:"2026-10-02"},
+  ];
+  state.tasks = tasks;
+  state.filters.project = "10";
+  page.value("taskFilters").project = "10";
+  const ids = (items) => Array.from(items, x => x.id);
+  assert.deepEqual(ids(page.value("filteredTasks")()), [1,3,2,5,6,4]);
+  assert.deepEqual(ids(page.value("filteredManageTasks")()), [1,3,2,5,6,4]);
+  assert.deepEqual(ids(state.tasks), [6,3,2,5,1,4,7]); // rendering must not mutate the source
+  const lanes = page.value("specialtyLanes")(tasks.filter(x=>x.project_id===10));
+  assert.deepEqual(Array.from(lanes,x=>x.title), ["机械","电控","视觉","未归类"]);
+  assert.equal(page.value("specialtyTaskStage")({owner_id:4,schedule_stage:"电控"}), null);
+  assert.equal(page.value("specialtyTaskStage")({owner_id:1,owner_stage:null}), null);
+});
+
+test("schedule preview: escaped content, manual stage controls and unchanged rows", () => {
+  const page = browser(["app.js", "task-schedule.js"]);
+  const row = {id:1,title:'<img src=x>',owner_name:'<script>',status:'未开始',eligible:true,
+    stage_options:["机械","视觉"],stage:"视觉",note:'<svg>',
+    before:{start_date:"2026-10-14",due_date:"2026-10-16"},after:{start_date:"2026-10-22",due_date:"2026-10-24"}};
+  const html = page.value("schedulePreviewRows")([row]);
+  assert.match(html,/&lt;img src=x&gt;/);
+  assert.match(html,/&lt;script&gt;/);
+  assert.match(html,/data-phase-choice="1"/);
+  assert.match(html,/option selected>视觉/);
+  assert.match(html,/原：2026-10-14/);
+  assert.match(html,/新：2026-10-22/);
+  assert.doesNotMatch(page.value("schedulePreviewRows")([{...row,eligible:false}]), /<select/);
+});
+
 test("frontend money: integer cents, comparisons and large values remain exact", () => {
   const page = browser(["money.js"]);
   const money = page.context.Money;

@@ -48,6 +48,8 @@
 
 ## 验证
 
+2026-10-14 修复增加资金审核版本校验、发票安全事件及元数据校验/保留、草稿选择保留、Windows 连接关闭和只读历史诊断。实现及验收边界见[全项目审查修复](docs/technical/全项目审查修复.md)。资金审核旧页面必须刷新，旧脚本必须携带记录 `version`。
+
 本仓库使用 GitHub Actions 在 PR、main 分支提交及手工触发时自动执行
 Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查与分支覆盖率统计。
 覆盖率报告见 Actions Summary 和 python-coverage Artifact。

@@ -71,7 +71,7 @@ class TestInvoiceCorrectionAndPreview(unittest.TestCase):
         self.assertTrue(result['moved'])
         new = result['id']
         self.assertEqual(result['rel_path'], new)
-        self.assertTrue(new.startswith('2026.11/正在报销/'))
+        self.assertTrue(new.startswith('2026.11/正在报销/'), repr({'new': new, 'result': result, 'old': old, 'base_dir': invoices.BASE_DIR}))
         self.assertFalse(os.path.exists(os.path.join(invoices.BASE_DIR, old)))
         self.assertTrue(os.path.isfile(os.path.join(invoices.BASE_DIR, new)))
         meta = invoices.load_meta()
