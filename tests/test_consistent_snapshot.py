@@ -116,6 +116,7 @@ class TestConsistentSnapshot(unittest.TestCase):
         with patch("deploy.consistent_snapshot.service_is_active", return_value=False):
             with self.assertRaisesRegex(SnapshotError, "数据目录"):
                 create_snapshot(self.root, inside, offline_confirmed=True)
+        self.assertFalse(inside.exists())
         outside = Path(self.temp.name) / "elsewhere-data"
         move(str(self.root / "data"), str(outside))
         try:
@@ -124,6 +125,18 @@ class TestConsistentSnapshot(unittest.TestCase):
             self.skipTest("filesystem does not support symlinks")
         with self.assertRaisesRegex(SnapshotError, "符号链接"):
             self.create()
+
+    def test_symlinked_output_parent_cannot_bypass_recursive_output_check(self):
+        alias = Path(self.temp.name) / "backup-alias"
+        try:
+            alias.symlink_to(self.root / "data/funds", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("filesystem does not support directory symlinks")
+        archive = alias / "redirected.zip"
+        with patch("deploy.consistent_snapshot.service_is_active", return_value=False):
+            with self.assertRaisesRegex(SnapshotError, "数据目录"):
+                create_snapshot(self.root, archive, offline_confirmed=True)
+        self.assertFalse(archive.exists())
 
     def test_symlink_and_missing_secret_are_rejected(self):
         (self.root / "secret.key").unlink()
