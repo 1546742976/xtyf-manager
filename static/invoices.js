@@ -62,8 +62,8 @@ var sc=App.selected[inv.id]?' row-selected':'';
 if(dupPaths.length&&dupPaths.indexOf(inv.rel_path)>=0)sc+=' row-dup';
 var ah=Money.compare(inv.amount,'0.00')>0?'\xA5'+Money.format(inv.amount):'<span class="amount-col missing">\xA50.00</span>';
 var st=inv.source==='人工确认'?'<span class="badge tag-filename">人工确认</span>':inv.source==='PDF'?'<span class="badge tag-pdf">PDF</span>':inv.source==='PDF(\u7f13\u5b58)'?'<span class="badge tag-pdf">PDF\u7f13\u5b58</span>':inv.source==='文件名'?'<span class="badge tag-filename">文件名</span>':'<span class="badge tag-unknown">待识别</span>';
-var eid = jsEscape(inv.id);
-var erp = encodeURIComponent(inv.rel_path||'');
+var eid = escHtml(jsEscape(inv.id));
+var erp = escHtml(jsEscape(inv.rel_path||'')); // encode once in openFile(), not here
 var subHtml=inv.submitter?'<span class="clickable" onclick="DetailModal.open(\''+eid+'\')">'+escHtml(inv.submitter)+'</span>':'<span style="color:#ccc;cursor:pointer" onclick="DetailModal.open(\''+eid+'\')">-</span>';
 if(inv.ownership_unresolved)subHtml+=' <small>待确认</small>';else subHtml+=' <small>#'+Number(inv.submitter_id)+'</small>';
 var invNum=inv.invoice_number?('<span class="clickable" title="'+escHtml(inv.invoice_number)+'">'+escHtml(inv.invoice_number.substring(inv.invoice_number.length-8))+'</span>'):'-';
@@ -418,7 +418,7 @@ document.getElementById('detPath').value=inv.rel_path||'';
 document.getElementById('detailModal').classList.add('show')},
 close:function(){document.getElementById('detailModal').classList.remove('show');DetailModal._id=''},
 save:async function(){
-var u={status:document.getElementById('detStatus').value,submitter_id:Number(document.getElementById('detSubmitter').value),notes:document.getElementById('detNotes').value.trim(),category_override:document.getElementById('detCategory').value.trim(),reimbursed_date:document.getElementById('detReimbursedDate').value,invoice_number:document.getElementById('detInvNum').value.trim(),tags:document.getElementById('detTags').value.split(',').map(function(s){return s.trim()}).filter(Boolean)};
+var u={month:document.getElementById('detMonth').value.trim(),date:document.getElementById('detDate').value,status:document.getElementById('detStatus').value,submitter_id:Number(document.getElementById('detSubmitter').value),notes:document.getElementById('detNotes').value.trim(),category_override:document.getElementById('detCategory').value.trim(),reimbursed_date:document.getElementById('detReimbursedDate').value,invoice_number:document.getElementById('detInvNum').value.trim(),tags:document.getElementById('detTags').value.split(',').map(function(s){return s.trim()}).filter(Boolean)};
 var r=await fetch('/invoices/api/invoice/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign({id:DetailModal._id},u))});
 var d=await r.json();
 if(d.success){showToast('保存成功'+(d.moved?'，文件已移动':''),'success');DetailModal.close();App.stats=null;loadStats();loadInvoices(App.currentPage)}else{showToast(d.error||'发票保存失败','error')}},

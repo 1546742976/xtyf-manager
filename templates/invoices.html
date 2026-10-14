@@ -100,8 +100,8 @@
 <div class="modal" id="detailModal"><div class="modal-content">
 <div class="modal-header"><h2>发票详情</h2><button class="modal-close" onclick="DetailModal.close()">&times;</button></div>
 <div class="detail-grid">
-<div class="field"><label>月份</label><input id="detMonth" readonly></div>
-<div class="field"><label>开票日期</label><input id="detDate" readonly></div>
+<div class="field"><label for="detMonth">月份</label><input id="detMonth" placeholder="YYYY.M" inputmode="decimal" {{ 'readonly' if not is_finance else '' }}></div>
+<div class="field"><label for="detDate">开票日期</label><input type="date" id="detDate" {{ 'readonly' if not is_finance else '' }}></div>
 <div class="field"><label>状态</label><select id="detStatus"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select></div>
 <div class="field"><label>报销日期</label><input type="date" id="detReimbursedDate"></div>
 <div class="field"><label>提交人</label><select id="detSubmitter" aria-label="提交人"><option value="0">待确认 / 未指定</option></select></div>
