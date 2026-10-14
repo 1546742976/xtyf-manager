@@ -65,6 +65,8 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 
 ## 部署与数据安全
 
+已有服务器升级可使用无参数流程：本地运行 `python deploy/package_release.py` 打包当前 commit，手动上传并解压后，在服务器解压目录运行 `sudo python3 deploy/update_release.py`。更新脚本会停服备份、在副本上迁移、切换部署并检查启动；失败时尝试恢复旧运行目录。详见[打包与服务器更新](docs/technical/打包与服务器更新.md)。
+
 现有部署脚本适用于树莓派 systemd + Gunicorn，`deploy/deploy.sh` 从源码目录同步至运行目录，默认 **1 worker / 8 threads**。发票任务保存到主库，文件读改写使用同机跨进程锁；`deploy/gunicorn.conf.py` 在 worker 启动后接续队列。默认 worker 数量保持不变，多进程上线仍须验收。
 
 `deploy/backup.sh` 可以分别备份进度库、资金库，并在周日打包发票，但**不包含任务截图和密钥组成的同一恢复点**。生产升级之前应暂停写入，对所有数据库、附件、发票和密钥制作一致性备份并先演练恢复。详见[发布检查与数据恢复](docs/technical/发布检查与数据恢复.md)。
