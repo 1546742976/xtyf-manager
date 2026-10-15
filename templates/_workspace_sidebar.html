@@ -42,10 +42,18 @@
     </div>
   </nav>
   <div class="ws-sidebar-bottom">
+    <div class="ws-user-row">
     <a class="ws-user-card" href="{{ url_for('account') }}">
       <span class="ws-avatar">{{ me.name[:1] }}</span>
       <span class="ws-user-info"><strong>{{ me.name }}</strong><small>{{ role_names[me.role] }}</small></span>
     </a>
+    <button type="button" class="ws-theme-toggle" data-theme-toggle aria-label="{{ '切换为银白主题' if me.ui_theme == 'dark' else '切换为黑色主题' }}" title="{{ '切换为银白主题' if me.ui_theme == 'dark' else '切换为黑色主题' }}" {% if me.must_change_password %}disabled{% endif %}>
+      <svg class="ws-theme-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.5 13.2A8.5 8.5 0 0 1 10.8 3.5 8.5 8.5 0 1 0 20.5 13.2Z"/></svg>
+      <svg class="ws-theme-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></svg>
+    </button>
+    </div>
+    <p id="sidebar-theme-result" class="ws-theme-result sr-only" role="status" aria-live="polite"></p>
+    <button id="sidebar-theme-retry" class="btn sm hidden" type="button">重试保存主题</button>
     <form action="{{ url_for('logout') }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="ws-signout"><svg aria-hidden="true"><use href="#ws-exit"/></svg>退出登录</button></form>
   </div>
 </aside>

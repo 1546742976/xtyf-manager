@@ -4,7 +4,7 @@
 {% block content %}
 <div class="ux-page-head">
   <div><p class="ux-eyebrow">TEAM / MANAGEMENT</p><h1>任务管理</h1><p>创建任务、分配负责人、维护优先级与截止日期。</p></div>
-  <div class="ux-page-actions"><a class="btn" href="{{ url_for('tasks') }}">任务中心</a><a class="btn" href="{{ url_for('members') }}">成员管理</a><a class="btn" href="{{ url_for('export_csv') }}">导出任务 CSV</a></div>
+  <div class="ux-page-actions"><a class="btn" href="{{ url_for('tasks') }}">任务中心</a><a class="btn" href="{{ url_for('members') }}">成员管理</a><a class="btn" data-download-name="tasks.csv" href="{{ url_for('export_csv') }}">导出任务 CSV</a></div>
 </div>
 <section class="panel">
   <h2>新建任务</h2>

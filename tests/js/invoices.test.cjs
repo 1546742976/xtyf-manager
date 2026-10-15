@@ -30,6 +30,7 @@ function invoicePage(invoice) {
     }) }),
   };
   context.window = context;
+  context.BusinessUI = {fetch: context.fetch};
   vm.createContext(context);
   // Skip app startup (which triggers unrelated stats queries); keep all
   // actual rendering, escaping and openFile functions under test.

@@ -7,10 +7,9 @@ async function accountApi(path, data) {
     init.headers = { "Content-Type": "application/json" };
     init.body = JSON.stringify(data);
   }
-  const response = await fetch(path, init);
+  const response = await BusinessUI.fetch(path, init);
   if (response.status === 401) {
-    location.href = "/login";
-    return null;
+    throw new Error("登录已失效，请重新登录后再提交；当前输入已保留。");
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || !payload.ok) throw new Error(payload.error || "请求失败");
@@ -59,7 +58,7 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("account-project-names").textContent = names(projects, profile.project_ids);
   }
 
-  if (profileForm) Promise.all([
+  function loadProfile() { return Promise.all([
     accountApi("/api/account/profile"),
     accountApi("/api/groups"),
     accountApi("/api/projects"),
@@ -70,14 +69,24 @@ document.addEventListener("DOMContentLoaded", () => {
     projects = projectData.projects || [];
     showProfile();
     profileForm.querySelector('[type="submit"]').disabled = false;
+    document.getElementById('profile-retry')?.remove();
   }).catch((error) => {
     profileResult.classList.add("error");
     profileResult.textContent = error.message || "个人资料加载失败";
+    if (!document.getElementById('profile-retry')) {
+      const retry = document.createElement('button');
+      retry.id = 'profile-retry'; retry.type = 'button'; retry.className = 'btn'; retry.textContent = '重新加载资料';
+      retry.addEventListener('click', async () => { retry.disabled=true; try { await loadProfile(); } finally { retry.disabled=false; } });
+      profileResult.after(retry);
+    }
   });
+  }
+  if(profileForm)loadProfile();
 
   profileForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = profileForm.querySelector('[type="submit"]');
+    if (button.disabled) return;
     button.disabled = true;
     profileResult.textContent = "正在保存…";
     profileResult.classList.remove("error");
@@ -110,6 +119,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     const button = form.querySelector('[type="submit"]');
+    if (button.disabled) return;
     button.disabled = true;
     result.textContent = "正在保存…";
     result.classList.remove("error");

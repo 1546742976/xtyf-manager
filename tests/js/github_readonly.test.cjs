@@ -52,6 +52,7 @@ test("GitHub collaboration board fetches read-only data and opens GitHub for par
       }) });
     },
   };
+  context.BusinessUI = {fetch: context.fetch};
   vm.createContext(context);
   vm.runInContext(script, context, { filename: "discussions.js" });
   const flush = async () => { await new Promise(setImmediate); };

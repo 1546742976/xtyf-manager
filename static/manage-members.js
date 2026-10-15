@@ -326,7 +326,11 @@ function bindMemberTable() {
   table?.addEventListener("change", async (event) => {
     if (!event.target.matches(".role-select")) return;
     const result = await api(`/api/member/${event.target.dataset.roleId}/role`, { role: event.target.value });
-    if (!result?.ok) alert(result?.error || "角色修改失败");
+    if (!result?.ok) {
+      const original = allMembers.find(item=>Number(item.id)===Number(event.target.dataset.roleId));
+      if(original)event.target.value=original.role;
+      alert(result?.error || "角色修改失败");
+    }
     loadMembers();
   });
   table?.addEventListener("click", async (event) => {

@@ -15,12 +15,11 @@
 
   async function request(url) {
     try {
-      const res = await fetch(url, { credentials: "same-origin" });
+      const res = await BusinessUI.fetch(url, { credentials: "same-origin" });
       const payload = await res.json().catch(() => ({ ok: false, error: "响应格式不正确" }));
-      if (res.status === 401) { location.assign("/login"); return null; }
       return payload;
-    } catch (_) {
-      return { ok: false, error: "网络请求失败，请稍后重试" };
+    } catch (error) {
+      return { ok: false, error: error.message || "网络请求失败，请稍后重试" };
     }
   }
   function meta(item) {
@@ -48,7 +47,7 @@
     const data = await request(`/discussions/api/items?kind=${state.kind}&page=${state.page}`);
     if (generation !== state.generation) return;
     if (!data?.ok) {
-      listBox.innerHTML = `<p class="form-message" role="alert">${safe(data?.error || "加载失败")}</p>`;
+      listBox.innerHTML = `<p class="form-message" role="alert">${safe(data?.error || "加载失败")}</p><button type="button" data-github-retry>重新加载</button>`;
       return;
     }
     sourceNote.textContent = state.kind === "discussions" && data.source === "atom"
@@ -71,7 +70,7 @@
     const data = await request(`/discussions/api/item/${state.kind}/${number}`);
     if (generation !== state.generation) return;
     if (!data?.ok) {
-      detailBox.innerHTML = `<p class="form-message" role="alert">${safe(data?.error || "加载详情失败")}</p>`;
+      detailBox.innerHTML = `<p class="form-message" role="alert">${safe(data?.error || "加载详情失败")}</p><button type="button" data-github-retry-detail>重试详情</button>`;
       return;
     }
     const item = data.item;
@@ -87,6 +86,8 @@
     </article>`;
   }
   root.addEventListener("click", (event) => {
+    if (event.target.closest('[data-github-retry]')) { loadItems(); return; }
+    if (event.target.closest('[data-github-retry-detail]')) { loadDetail(state.number); return; }
     const tab = event.target.closest("[data-github-kind]");
     if (tab) { state.kind = tab.dataset.githubKind; state.page = 1; loadItems(); return; }
     const item = event.target.closest("[data-github-number]");

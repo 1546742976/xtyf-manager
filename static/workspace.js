@@ -21,7 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (badge && typeof window.refreshFundsBadge !== 'function') {
     const updateBadge = async () => {
       try {
-        const response = await fetch('/funds/api/pending_review', {credentials: 'same-origin'});
+        const response = await BusinessUI.fetch('/funds/api/pending_review', {credentials: 'same-origin'});
         if (!response.ok) throw new Error('pending review unavailable');
         const data = await response.json();
         badge.textContent = data.count > 0 ? String(data.count) : '0';

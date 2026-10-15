@@ -65,6 +65,27 @@ async function login(page, base, username, password, firstLogin=true) {
     const blocked=(await api(page,'/api/task',{title:'阻塞且今天截止',owner_id:member.id,project_id:project,status:'阻塞',start_date:date(-2),due_date:date(0)})).body;
     const overdue=(await api(page,'/api/task',{title:'已逾期任务',owner_id:member.id,status:'进行中',due_date:date(-1)})).body;
     assert.equal(blocked.ok,true);assert.equal(overdue.ok,true);
+    // The sidebar shortcut works away from account settings and rolls back failed saves.
+    await page.goto(base+'/manage');
+    const shortcut=page.locator('[data-theme-toggle]');
+    await page.route('**/api/account/preferences',route=>route.fulfill({status:503,json:{ok:false,error:'模拟保存失败'}}));
+    await shortcut.click();
+    await page.locator('#sidebar-theme-result').filter({hasText:'已恢复原主题'}).waitFor();
+    assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
+    await page.unroute('**/api/account/preferences');
+    await page.locator('#sidebar-theme-retry').click();
+    await page.waitForFunction(()=>document.querySelector('#sidebar-theme-result').textContent.includes('外观已保存'));
+    await page.reload();assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
+    await page.screenshot({path:path.join(output,'sidebar-dark.png'),fullPage:true});
+    await page.setViewportSize({width:390,height:844});
+    await page.locator('[data-ws-menu]').click();
+    await shortcut.scrollIntoViewIfNeeded();
+    const toggleBox=await shortcut.boundingBox();assert.ok(toggleBox.width>=44 && toggleBox.height>=44);
+    await shortcut.click();
+    await page.waitForFunction(()=>document.querySelector('#sidebar-theme-result').textContent.includes('外观已保存'));
+    assert.equal(await page.locator('html').getAttribute('data-theme'),'light');
+    await page.screenshot({path:path.join(output,'sidebar-mobile-light.png'),fullPage:true});
+    await page.setViewportSize({width:1280,height:900});
     for(const theme of ['dark','light']) {
       await page.goto(base+'/account');
       const [saved]=await Promise.all([
@@ -72,6 +93,7 @@ async function login(page, base, username, password, firstLogin=true) {
         page.locator(`input[name=workspace-theme][value=${theme}]`).check(),
       ]);
       assert.equal(saved.status(),200);
+      assert.equal(await shortcut.getAttribute('aria-label'),theme==='dark'?'切换为银白主题':'切换为黑色主题');
       await page.reload();assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
       await page.goto(base+'/tasks');await page.locator(`.task[data-task-id="${blocked.id}"]`).waitFor();
       assert.match(await page.locator(`.task[data-task-id="${blocked.id}"]`).getAttribute('class'),/is-blocked.*is-due-soon/);

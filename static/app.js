@@ -23,7 +23,14 @@ const STATUS_CLASS = {
 };
 const PRIORITY_CLASS = { 高: "red", 中: "orange", 低: "gray" };
 
-async function api(url, data) {
+function api(url, data) {
+  if (data === undefined) return apiRequest(url, data);
+  const active = document.activeElement;
+  const host = active?.closest("form,tr");
+  const controls = host ? host.querySelectorAll("button,select") : active?.matches("button,select") ? [active] : [];
+  return BusinessUI.action("api:"+url, controls, () => apiRequest(url, data));
+}
+async function apiRequest(url, data) {
   const init = {
     credentials: "same-origin",
     method: data === undefined ? "GET" : "POST",
@@ -36,16 +43,15 @@ async function api(url, data) {
     }
   }
   try {
-    const response = await fetch(url, init);
+    const response = await BusinessUI.fetch(url, init);
     if (response.status === 401) {
-      location.href = "/login";
-      return null;
+      return {ok:false, error:"登录已失效，请重新登录后再提交；当前输入已保留。", httpStatus:401};
     }
     const payload = await response.json().catch(() => ({ ok: false, error: `请求失败（${response.status}）` }));
     payload.httpStatus = response.status;
     return payload;
-  } catch (_) {
-    return { ok: false, error: "网络连接失败，请重试", httpStatus: 0 };
+  } catch (error) {
+    return { ok: false, error: error.message || "网络连接失败，请重试", httpStatus: 0 };
   }
 }
 function esc(value) {

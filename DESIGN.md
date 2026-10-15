@@ -50,7 +50,7 @@ This is an internal operations workstation for team members, project managers, a
 - Tree expansion is explicit and preserved across polling in memory.
 - Upload is a deliberate submit action with one request, disabled controls while pending, and no retry loop.
 - `prefers-reduced-motion` disables transitions.
-- Account → Appearance is the only theme control. Selection applies immediately and persists through `/api/account/preferences`; failure restores the original theme and offers retry. Server-rendered `data-theme` avoids a light flash. Other devices receive the choice on their next page load. Anonymous login uses silver; initial-password accounts must change their password before saving preferences.
+- Account → Appearance and the sidebar user-row shortcut share the same theme control logic. Selection applies immediately and persists through `/api/account/preferences`; failure restores the original theme and offers retry. The sidebar uses a 44px sun/moon button beside, not inside, the account link. Server-rendered `data-theme` avoids a light flash. Other devices receive the choice on their next page load. Anonymous login uses silver; initial-password accounts must change their password before saving preferences.
 - Account appearance sits below the personal information card in the left column. GitHub discussion and issue entry cards stretch to the same desktop row height. The person board omits administrator lanes; unassigned tasks occupy the first full-width row below filters, use horizontal cards and disappear when there are no matching unassigned tasks.
 
 ## 7. Accessibility constraints
@@ -60,6 +60,7 @@ This is an internal operations workstation for team members, project managers, a
 - Multiple selection uses native checkboxes in fieldsets, not an opaque custom listbox.
 - Images have descriptive alt text and open through keyboard-operable links.
 - Dynamic status uses `role="status"`; blocking failures use `role="alert"`.
+- Business requests have bounded waiting time. Disable repeat submission while pending, restore controls on failure, and retain editable inputs. A failed optimistic theme/status change restores the prior display. Uncertain writes after a connection loss require checking the saved result before retrying; never automatically replay them. Session expiry offers a separate login tab so the current draft stays open. Failed reads must not render successful empty states.
 - Avoid inline event handlers and escape all untrusted strings before HTML insertion.
 
 ## 8. Accepted debt and handoff

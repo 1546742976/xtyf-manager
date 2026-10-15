@@ -7,7 +7,7 @@
   <div class="ux-page-actions"><span id="sync-status" class="sync-status" role="status" aria-live="polite">正在同步…</span>
     <button id="refresh-now" class="btn" type="button">刷新</button>
     {% if me.role in ('admin', 'manager') %}<a class="btn primary" href="{{ url_for('manage') }}">管理任务</a>{% endif %}
-    <a class="btn" href="{{ url_for('export_csv') }}">导出任务 CSV</a></div>
+    <a class="btn" data-download-name="tasks.csv" href="{{ url_for('export_csv') }}">导出任务 CSV</a></div>
 </div>
 <section class="stats" id="stats" aria-label="任务统计"></section>
 <section class="toolbar">

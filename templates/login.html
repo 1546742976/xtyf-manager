@@ -42,19 +42,20 @@ passwordToggle.addEventListener('click', () => {
 });
 document.getElementById('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (event.target.querySelector('button[type="submit"]').disabled) return;
   const form = new FormData(event.target);
   const button = event.target.querySelector('button[type="submit"]');
   button.disabled = true;
   let res;
   try {
-    res = await fetch('/login', {
+    res = await BusinessUI.fetch('/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username: form.get('username'), password: form.get('password') }),
     });
-  } catch (_) {
+  } catch (error) {
     const el = document.getElementById('login-error');
-    el.textContent = '网络连接失败，请重试';
+    el.textContent = error.message || '网络连接失败，请重试';
     el.classList.remove('hidden');
     button.disabled = false;
     return;

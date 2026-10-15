@@ -3,7 +3,7 @@
 {% block content %}
 <div class="ux-page-head">
   <div><p class="ux-eyebrow">TEAM / MEMBERS</p><h1>成员管理</h1><p>集中维护成员专业组、造车组别和账号权限；一个人可同时参与多个造车组别。</p></div>
-  <div class="ux-page-actions"><a class="btn" href="{{ url_for('manage') }}">任务管理</a><a class="btn" href="{{ url_for('export_members_csv') }}">导出成员 CSV</a></div>
+  <div class="ux-page-actions"><a class="btn" href="{{ url_for('manage') }}">任务管理</a><a class="btn" data-download-name="members.csv" href="{{ url_for('export_members_csv') }}">导出成员 CSV</a></div>
 </div>
 
 <section class="panel">

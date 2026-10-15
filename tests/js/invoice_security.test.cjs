@@ -9,7 +9,7 @@ test('invoice row delegates raw paths safely and preview encodes exactly once', 
   const source = fs.readFileSync(path.join(__dirname, '../../static/invoices.js'), 'utf8');
   const elements = {};
   const element = id => elements[id] ||= {value: '', style: {}, checked: false, innerHTML: '',
-    listeners: {}, addEventListener(type, callback) { this.listeners[type] = callback; }};
+    listeners: {}, setAttribute() {}, addEventListener(type, callback) { this.listeners[type] = callback; }};
   const raw = `2026.10/未报销/商家'-alert(1)-'% +\"<test>.pdf`;
   const invoice = {id: raw, rel_path: raw, month: '2026.10', amount: '1.00',
     status: '未报销', source: '人工确认', submitter: 'member', submitter_id: 2,
@@ -21,6 +21,7 @@ test('invoice row delegates raw paths safely and preview encodes exactly once', 
       requested = url; return {ok: true, json: async () => url.includes('open_file')
         ? {success: false} : {data: [invoice], total: 1, per_page: 50}};
     }};
+  ctx.BusinessUI = {fetch: ctx.fetch};
   vm.createContext(ctx);
   vm.runInContext(source.slice(0, source.indexOf('// ====== 拖入')), ctx);
   ctx.renderPagination = () => {}; ctx.updateBatchBar = () => {};

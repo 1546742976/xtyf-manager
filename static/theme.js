@@ -7,15 +7,19 @@ function applyWorkspaceTheme(theme) {
   document.querySelectorAll('[name="workspace-theme"]').forEach((input) => {
     input.checked = input.value === theme;
   });
+  document.querySelectorAll('[data-theme-toggle]').forEach((button) => {
+    const label = theme === "dark" ? "切换为银白主题" : "切换为黑色主题";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  });
 }
 
 async function saveThemePreference(theme) {
-  const response = await fetch("/api/account/preferences", {
+  const response = await BusinessUI.fetch("/api/account/preferences", {
     method: "POST", credentials: "same-origin",
     headers: {"Content-Type": "application/json"}, body: JSON.stringify({theme}),
   });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401) location.assign("/login");
   if (!response.ok || !data.ok || !["light", "dark"].includes(data.theme)) {
     throw new Error(data.error || "主题保存失败，请重试");
   }
@@ -24,9 +28,12 @@ async function saveThemePreference(theme) {
 
 document.addEventListener("DOMContentLoaded", () => {
   const choices = [...document.querySelectorAll('[name="workspace-theme"]')];
-  const result = document.getElementById("theme-result");
-  const retry = document.getElementById("theme-retry");
-  if (!result || !retry || !choices.length) return;
+  const toggles = [...document.querySelectorAll('[data-theme-toggle]')];
+  const sidebarResult = document.getElementById("sidebar-theme-result");
+  const results = [document.getElementById("theme-result"), sidebarResult].filter(Boolean);
+  const retries = [document.getElementById("theme-retry"), document.getElementById("sidebar-theme-retry")].filter(Boolean);
+  const controls = [...choices, ...toggles];
+  if (!controls.length) return;
   let pendingTheme = null;
   let saving = false;
   async function save(theme) {
@@ -35,24 +42,32 @@ document.addEventListener("DOMContentLoaded", () => {
     pendingTheme = theme;
     const previous = document.documentElement.dataset.theme;
     applyWorkspaceTheme(theme);
-    choices.forEach((input) => { input.disabled = true; });
-    retry.classList.add("hidden");
-    result.classList.remove("error");
-    result.textContent = "正在保存外观…";
+    const disabledBefore = controls.map((input) => input.disabled);
+    controls.forEach((input) => { input.disabled = true; });
+    retries.forEach((retry) => retry.classList.add("hidden"));
+    if (sidebarResult) sidebarResult.classList.add("sr-only");
+    results.forEach((result) => {
+      result.classList.remove("error");
+      result.textContent = "正在保存外观…";
+    });
     try {
       applyWorkspaceTheme(await saveThemePreference(theme));
-      result.textContent = "外观已保存，其他设备下次打开或刷新页面时同步。";
+      results.forEach((result) => { result.textContent = "外观已保存，其他设备下次打开或刷新页面时同步。"; });
       pendingTheme = null;
     } catch (error) {
       applyWorkspaceTheme(previous);
-      result.classList.add("error");
-      result.textContent = `${error.message}，已恢复原主题。`;
-      retry.classList.remove("hidden");
+      results.forEach((result) => {
+        result.classList.add("error");
+        result.textContent = `${error.message}，已恢复原主题。`;
+      });
+      if (sidebarResult) sidebarResult.classList.remove("sr-only");
+      retries.forEach((retry) => retry.classList.remove("hidden"));
     } finally {
       saving = false;
-      choices.forEach((input) => { input.disabled = false; });
+      controls.forEach((input, index) => { input.disabled = disabledBefore[index]; });
     }
   }
   choices.forEach((input) => input.addEventListener("change", () => save(input.value)));
-  retry.addEventListener("click", () => { if (pendingTheme) save(pendingTheme); });
+  toggles.forEach((button) => button.addEventListener("click", () => save(document.documentElement.dataset.theme === "dark" ? "light" : "dark")));
+  retries.forEach((retry) => retry.addEventListener("click", () => { if (pendingTheme) save(pendingTheme); }));
 });

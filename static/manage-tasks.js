@@ -125,6 +125,7 @@ function bindTaskManagement() {
     }
     remove.disabled = true;
     const result = await api(`/api/task/${task.id}/delete`, { version: Number(task.version) });
+    remove.disabled = false;
     if (result?.ok) await refresh();
     else {
       remove.disabled = false;
