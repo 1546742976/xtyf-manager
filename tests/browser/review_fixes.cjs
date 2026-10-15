@@ -2,6 +2,7 @@
 // Requires Playwright + Chromium, and PYTHONPATH pointing at the app dependencies.
 const assert = require('node:assert/strict');
 const {spawn} = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 const {chromium} = require('playwright');
 const root = path.resolve(__dirname, '../..');
@@ -13,17 +14,68 @@ async function api(page, url, data, method='POST') {
     return {status:response.status,body:await response.json()};
   },{url,data,method});
 }
-async function login(page, base, username, oldPassword, newPassword) {
+async function login(page, base, username, oldPassword, newPassword, reveal=false) {
   await page.goto(base+'/login');
   await page.locator('[name=username]').fill(username);
   await page.locator('[name=password]').fill(oldPassword);
-  await page.locator('#login-form button').click();
+  if(reveal) {
+    await page.getByRole('button',{name:'显示密码',exact:true}).click();
+    await page.locator('[name=password]').press('Enter');
+  } else {
+    await page.locator('#login-form button[type=submit]').click();
+  }
   await page.waitForURL('**/account');
   await page.locator('#account-password-form [name=old]').fill(oldPassword);
   await page.locator('#account-password-form [name=new]').fill(newPassword);
   await page.locator('#account-password-form [name=confirm]').fill(newPassword);
   await page.locator('#account-password-form button').click();
   await page.waitForURL(base+'/');
+}
+
+async function checkPasswordVisibility(page, base) {
+  await page.goto(base+'/login');
+  const password=page.getByLabel('密码',{exact:true});
+  const toggle=page.locator('.login-password-toggle');
+  let submissions=0;
+  const observe=request=>{if(request.method()==='POST' && request.url()===base+'/login')submissions++;};
+  page.on('request',observe);
+  await page.locator('[name=username]').fill('visibility-check');
+  await password.fill('Long-password-for-visibility-check-1234567890');
+  const value=await password.inputValue();
+  assert.equal(await password.getAttribute('type'),'password');
+  await password.focus();await page.keyboard.press('Tab');
+  assert.equal(await toggle.evaluate(element=>element===document.activeElement),true);
+  await page.keyboard.press('Enter');
+  assert.equal(await password.getAttribute('type'),'text');
+  assert.equal(await toggle.getAttribute('aria-label'),'隐藏密码');
+  assert.equal(await toggle.locator('.password-hide-icon').isVisible(),true);
+  assert.equal(await toggle.locator('.password-show-icon').isVisible(),false);
+  await page.keyboard.press('Space');
+  assert.equal(await password.getAttribute('type'),'password');
+  assert.equal(await toggle.getAttribute('aria-label'),'显示密码');
+  assert.equal(await toggle.locator('.password-show-icon').isVisible(),true);
+  assert.equal(await toggle.locator('.password-hide-icon').isVisible(),false);
+  assert.equal(await password.inputValue(),value);
+  const output=path.join(root,'.venv','login-password-check');
+  fs.mkdirSync(output,{recursive:true});
+  for(const width of [375,1280]) {
+    await page.setViewportSize({width,height:900});
+    await toggle.click();
+    assert.equal(await password.getAttribute('type'),'text');
+    assert.equal(await password.inputValue(),value);
+    const box=await toggle.boundingBox();
+    assert.ok(box.width>=44 && box.height>=44);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    const spacing=await password.evaluate(input=>({padding:parseFloat(getComputedStyle(input).paddingRight),width:input.getBoundingClientRect().width}));
+    assert.ok(spacing.padding>=box.width+2 && spacing.width>spacing.padding);
+    await page.screenshot({path:path.join(output,`login-${width}.png`),fullPage:true});
+    await toggle.click();
+  }
+  assert.equal(submissions,0,'visibility controls must not submit the login form');
+  await toggle.click();await page.reload();
+  assert.equal(await password.getAttribute('type'),'password');
+  assert.equal(await toggle.getAttribute('aria-label'),'显示密码');
+  page.off('request',observe);
 }
 
 (async()=>{
@@ -48,7 +100,8 @@ async function login(page, base, username, oldPassword, newPassword) {
     admin.on('pageerror',error=>errors.push(error.message));
     const alerts=[];
     admin.on('dialog',async dialog=>{if(dialog.type()==='alert')alerts.push(dialog.message());await dialog.accept()});
-    await login(admin,base,'admin','browser-test-initial','browser-test-changed');
+    await checkPasswordVisibility(admin,base);
+    await login(admin,base,'admin','browser-test-initial','browser-test-changed',true);
     const member=(await api(admin,'/api/member',{name:'Browser Member',username:'browser-member',
       password:'browser-member-initial',role:'manager'})).body;
     assert.equal((await api(admin,'/api/admin/permissions/1',{permissions:['funds.review','invoices.manage']})).status,200);

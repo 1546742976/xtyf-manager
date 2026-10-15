@@ -367,8 +367,20 @@ tbody tr:hover td { background: var(--surface-inset); }
 .login-card .sub { color: var(--muted); font-size: 12px; margin: -10px 0 8px; }
 .login-card label { gap: 8px; font-size: 13px; }
 .login-card input { min-height: 48px; padding: 12px 14px; background: var(--surface-inset) !important; }
+.login-password-field { display: grid; gap: 8px; min-width: 0; }
+.login-password-control { position: relative; min-width: 0; }
+.login-password-control input { width: 100%; padding-right: 54px; }
+#login-password::-ms-reveal { display: none; }
+.login-password-toggle { -webkit-appearance: none; appearance: none; position: absolute; right: 2px; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 10px; color: var(--muted); background: transparent; cursor: pointer; }
+.login-password-toggle:hover { color: var(--text); background: var(--surface-hover); }
+.login-password-toggle svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.login-password-toggle svg[hidden] { display: none; }
 .login-card .btn { min-height: 48px; margin-top: 4px; }
 .login-footer { margin: 2px 0 0; text-align: center; font-size: 11px; color: var(--muted); }
+@media (max-width: 767px), (pointer: coarse) {
+  /* Keep mobile login fields readable, including when the password is revealed. */
+  .login-card input[name][autocomplete] { font-size: 16px; }
+}
 
 @media (max-width: 1200px) {
   .ws-dashboard-grid { grid-template-columns: 1fr; }

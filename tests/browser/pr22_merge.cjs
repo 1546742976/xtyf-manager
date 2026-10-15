@@ -19,7 +19,7 @@ async function login(page, base, username, password, firstLogin=true) {
   await page.goto(base+'/login');
   await page.locator('[name=username]').fill(username);
   await page.locator('[name=password]').fill(password);
-  await page.locator('#login-form button').click();
+  await page.locator('#login-form button[type=submit]').click();
   if (!firstLogin) { await page.waitForURL(base+'/'); return; }
   await page.waitForURL('**/account');
   await page.locator('#account-password-form [name=old]').fill(password);

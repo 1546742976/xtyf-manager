@@ -11,9 +11,16 @@
     <label>用户名
       <input name="username" autocomplete="username" required autofocus placeholder="请输入用户名">
     </label>
-    <label>密码
-      <input name="password" type="password" autocomplete="current-password" required placeholder="请输入密码">
-    </label>
+    <div class="login-password-field">
+      <label for="login-password">密码</label>
+      <div class="login-password-control">
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码">
+        <button class="login-password-toggle" type="button" aria-label="显示密码" title="显示密码" aria-controls="login-password">
+          <svg class="password-show-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg class="password-hide-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="m3 3 18 18M10.6 5.1A12 12 0 0 1 12 5c6.5 0 10 7 10 7a19 19 0 0 1-3 3.8M6.2 6.2A21 21 0 0 0 2 12s3.5 7 10 7a12 12 0 0 0 5.8-1.8M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>
+        </button>
+      </div>
+    </div>
     <button class="btn primary block" type="submit">登录</button>
     <p class="error hidden" id="login-error"></p>
     <p class="login-footer">巡天御风 · 团队工作空间</p>
@@ -22,6 +29,17 @@
 {% endblock %}
 {% block scripts %}
 <script>
+const passwordInput = document.getElementById('login-password');
+const passwordToggle = document.querySelector('.login-password-toggle');
+passwordToggle.addEventListener('click', () => {
+  const visible = passwordInput.type === 'password';
+  passwordInput.type = visible ? 'text' : 'password';
+  const label = visible ? '隐藏密码' : '显示密码';
+  passwordToggle.setAttribute('aria-label', label);
+  passwordToggle.title = label;
+  passwordToggle.querySelector('.password-show-icon').toggleAttribute('hidden', visible);
+  passwordToggle.querySelector('.password-hide-icon').toggleAttribute('hidden', !visible);
+});
 document.getElementById('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = new FormData(event.target);
