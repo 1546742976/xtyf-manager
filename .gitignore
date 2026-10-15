@@ -24,3 +24,4 @@ backups/
 *.sqlite*
 *.log
 .omo/
+dist/

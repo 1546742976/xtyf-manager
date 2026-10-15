@@ -35,7 +35,6 @@ function taskReadOnly(task) {
 }
 function taskForm(task) {
   const editable = canEdit(task),
-    admin = state.me?.role === "admin",
     members = modalMembers(task),
     others = state.tasks.filter((item) => Number(item.id) !== Number(task.id));
   if (!editable) return taskReadOnly(task);
@@ -46,8 +45,8 @@ function taskForm(task) {
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
     <div class="grid-2"><label>开始日期<input name="start_date" type="date" value="${esc(task.start_date)}"></label><label>截止日期<input name="due_date" type="date" value="${esc(task.due_date)}"></label></div>
     ${task.suggested_start_date ? `<p class="advisory">根据前置任务计划截止日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}
-    ${admin ? `<label>父任务（仅管理员）<select name="parent_id">${options(others, task.parent_id, "无父任务")}</select></label>` : ""}
-    <fieldset><legend>前置任务（可多选）</legend>${choiceGrid("predecessor_ids", others, task.predecessor_ids || [], taskLabel)}</fieldset>
+    ${`<label>主前置任务（父任务）<select name="parent_id">${options(others, task.parent_id, "无父任务")}</select></label>`}
+    <fieldset><legend>其他前置任务（支持多选）</legend>${choiceGrid("predecessor_ids", others, task.predecessor_ids || [], taskLabel)}</fieldset>
     ${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}
     <label>说明<textarea name="detail" rows="3">${esc(task.detail)}</textarea></label><label>本次更新备注<input name="note" placeholder="选填，记录本次调整原因"></label>
     <p id="task-form-message" class="form-message" role="alert"></p><div class="modal-actions">${isManagement() ? '<button type="button" class="btn danger" data-delete-task>删除任务</button>' : ""}<button class="btn primary" type="submit">保存更新</button></div>
@@ -62,6 +61,7 @@ function taskModalShell(task) {
   return `<div class="modal-head"><div><p class="ux-eyebrow">TASK #${Number(task.id)}</p><h2>${esc(task.title)}</h2></div><button class="btn ghost sm" type="button" data-close>关闭</button></div>
     <div class="modal-info">${badge(task.status, STATUS_CLASS[task.status] || "gray")}${badge(`负责人 ${lead?.name || "未指定"}`, "outline")}<span class="muted">${esc(taskProjectName(task) || "未归属造车组别")} · 版本 ${Number(task.version || 0)}</span></div>
     ${taskForm(task)}
+    ${progressSection(task)}
     <section class="modal-section"><h3>截图附件</h3>${canEdit(task) ? '<form id="attachment-form" class="attachment-form"><label>选择图片（PNG / JPEG / WebP；每张不超过 10 MiB，最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple required></label><label>说明<input name="description" maxlength="300" placeholder="截图内容或验收场景"></label><button class="btn" type="submit">上传截图</button><p class="form-message" role="alert"></p></form>' : ""}<div id="attachment-list"></div></section>
     <section class="modal-section"><h3>版本记录</h3><div id="task-revisions"><p class="empty">正在加载版本记录…</p></div></section>
     <section class="modal-section"><h3>动态与备注</h3><div id="task-logs" class="logs"><p class="empty">正在加载动态…</p></div></section>`;
@@ -73,14 +73,17 @@ function bindTaskForm(task, generation) {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(form));
     payload.participant_ids = checkedValues(form, "participant_ids");
-        payload.predecessor_ids = checkedValues(form, "predecessor_ids");
+    payload.predecessor_ids = checkedValues(form, "predecessor_ids");
+    const projectSelect = form.querySelector('[name="project_id"]');
+    if (projectSelect) payload.project_id = retainArchivedCatalogSelection(
+      projectSelect.value, task.project_id, state.projects, projectSelect.dataset.edited === "1",
+    );
     payload.version = Number(payload.version);
     if (!payload.owner_id && payload.participant_ids.length) {
       form.querySelector("[name=owner_id]").setCustomValidity("选择参与成员后必须指定负责人");
       form.querySelector("[name=owner_id]").reportValidity();
       return;
     }
-    if (state.me?.role !== "admin") delete payload.parent_id;
     const button = form.querySelector("button[type=submit]");
     button.disabled = true;
     const result = await api(`/api/task/${task.id}`, payload);
@@ -95,9 +98,11 @@ function bindTaskForm(task, generation) {
     }
   });
   form.querySelector("[name=owner_id]")?.addEventListener("change", (event) => event.target.setCustomValidity(""));
+  form.querySelector('[name="project_id"]')?.addEventListener("change", (event) => { event.target.dataset.edited = "1"; });
 }
 function bindTaskActions(task, generation) {
   document.querySelector("[data-close]").addEventListener("click", hideModal);
+  bindTaskProgress(task, generation);
   document.querySelector("[data-delete-task]")?.addEventListener("click", async (event) => {
     if (!confirm("确定删除该任务？存在子任务或依赖引用时将无法删除。")) return;
     const button = event.currentTarget,
@@ -166,9 +171,59 @@ async function openTaskModal(id) {
   const generation = ++taskModalGeneration;
   showModal(taskModalShell(task), `任务：${task.title}`);
   const modal = document.getElementById("modal");
+  modal.classList.remove("task-preview");
   modal.dataset.taskId = String(task.id);
   modal.dataset.generation = String(generation);
   bindTaskForm(task, generation);
   bindTaskActions(task, generation);
-  await Promise.all([loadAttachments(task, generation), loadRevisions(task, generation), loadLogs(task, generation)]);
+  await Promise.all([loadTaskProgress(task, generation), loadAttachments(task, generation), loadRevisions(task, generation), loadLogs(task, generation)]);
+}
+
+/** Dashboard preview deliberately contains no task mutation actions or forms. */
+function taskPreviewShell(task) {
+  const percent = Math.max(0, Math.min(100, Number(task.progress) || 0));
+  const people = taskParticipants(task)
+    .map((id) => memberById(id)?.name || `成员 #${id}`).join("、") || "未分配";
+  return `<div class="modal-head">
+    <div><p class="ux-eyebrow">TASK #${Number(task.id)} / 只读预览</p><h2>${esc(task.title)}</h2></div>
+    <button class="btn ghost sm" type="button" data-close>关闭</button>
+  </div>
+  <div class="modal-info">
+    ${badge(task.status, STATUS_CLASS[task.status] || "gray")}
+    ${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}
+    ${badge(daysLeftText(task), daysLeftClass(task))}
+  </div>
+  <div class="readonly-settings">
+    <dl>
+      <div><dt>造车组别</dt><dd>${esc(taskProjectName(task) || "未归属")}</dd></div>
+      <div><dt>负责人及参与者</dt><dd>${esc(people)}</dd></div>
+      <div><dt>开始日期</dt><dd>${esc(task.start_date || "未设置")}</dd></div>
+      <div><dt>截止日期</dt><dd>${esc(task.due_date || "未设置")}</dd></div>
+    </dl>
+    ${task.detail ? `<div class="task-detail">${esc(task.detail)}</div>` : ""}
+    ${(task.dependency_warnings || []).length ? `<p class="task-warning">${esc(task.dependency_warnings.join("；"))}</p>` : ""}
+  </div>
+  <section class="modal-section">
+    <div class="task-progress-heading"><span>当前进度</span><strong>${percent}%</strong></div>
+    <div class="progress" role="progressbar" aria-label="当前进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><div class="progress-inner blue" style="width:${percent}%"></div></div>
+  </section>
+  <section class="modal-section"><h3>进度动态与截图</h3>
+    <div id="task-progress-list" class="progress-timeline"><p class="empty">正在加载进度记录…</p></div>
+  </section>
+  <section class="modal-section"><h3>近期任务动态</h3>
+    <div id="task-logs" class="logs"><p class="empty">正在加载动态…</p></div>
+  </section>`;
+}
+
+async function openTaskPreview(id) {
+  const task = state.tasks.find((item) => Number(item.id) === Number(id));
+  if (!task) return;
+  const generation = ++taskModalGeneration;
+  showModal(taskPreviewShell(task), `任务状态：${task.title}`);
+  const modal = document.getElementById("modal");
+  modal.classList.add("task-preview");
+  modal.dataset.taskId = String(task.id);
+  modal.dataset.generation = String(generation);
+  modal.querySelector("[data-close]")?.addEventListener("click", hideModal);
+  await Promise.all([loadTaskProgress(task, generation), loadLogs(task, generation)]);
 }

@@ -72,6 +72,11 @@ function isManagement() {
 function canEdit(task) {
   return isManagement() || (!!state.me && taskParticipants(task).includes(Number(state.me.id)));
 }
+// The same 0–3 day threshold is used by both the task center and dashboard.
+function isDueSoon(task) {
+  return Number.isInteger(task.days_left) && task.days_left >= 0 && task.days_left <= 3 &&
+    !["已完成", "已取消"].includes(task.status);
+}
 function isOverdue(task) {
   return Number.isInteger(task.days_left) && task.days_left < 0 && !["已完成", "已取消"].includes(task.status);
 }
@@ -92,10 +97,27 @@ function badge(text, cls = "gray") {
 }
 function options(items, selected, emptyLabel = "") {
   const empty = emptyLabel ? `<option value="">${esc(emptyLabel)}</option>` : "";
-  return (
-    empty +
-    items.map((item) => `<option value="${Number(item.id)}" ${Number(item.id) === Number(selected) ? "selected" : ""} ${item.is_active === 0 && Number(item.id) !== Number(selected) ? "disabled" : ""}>${esc(item.name)}${item.is_active === 0 ? "（已删除）" : ""}</option>`).join("")
-  );
+  return empty + items.filter((item) => item.is_active !== 0)
+    .map((item) => `<option value="${Number(item.id)}" ${Number(item.id) === Number(selected) ? "selected" : ""}>${esc(item.name)}</option>`).join("");
+}
+
+function activeCatalogFilter(items, value) {
+  return value && !items.some((item) => item.is_active !== 0 && String(item.id) === String(value)) ? "" : value;
+}
+
+function retainArchivedCatalogSelection(value, previousId, items, changed) {
+  // Editing unrelated task fields must not silently erase archived historical ownership.
+  return !changed && !value && items.some((item) => item.is_active === 0 && Number(item.id) === Number(previousId))
+    ? String(previousId) : value;
+}
+
+function catalogChoices(name, items, selected = []) {
+  const selectedIds = new Set((selected || []).map(Number));
+  const active = items.filter((item) => item.is_active !== 0);
+  // Preserve archived memberships in submitted forms without displaying them as choices.
+  const historical = items.filter((item) => item.is_active === 0 && selectedIds.has(Number(item.id)))
+    .map((item) => `<input type="checkbox" name="${esc(name)}" value="${Number(item.id)}" checked hidden>`).join("");
+  return choiceGrid(name, active, selected) + historical;
 }
 function checkedValues(form, name) {
   return [...form.querySelectorAll(`[name="${name}"]:checked`)].map((input) => Number(input.value));

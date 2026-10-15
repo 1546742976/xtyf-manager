@@ -69,6 +69,18 @@
 <span style="color:#888;font-size:11px">至</span>
 <input type="date" id="filterDateTo" onchange="applyFilters()" title="结束日期" style="width:125px">
 <div class="sep"></div>
+<div class="sort-controls">
+<label for="invoiceSortBy" class="sort-label">排序</label>
+<select id="invoiceSortBy" aria-label="发票排序字段" onchange="selectInvoiceSort(this.value)">
+<option value="date">开票日期</option><option value="month">归档月份</option>
+<option value="amount">金额</option><option value="status">报销状态</option>
+<option value="vendor">供应商</option><option value="submitter">提交人</option>
+<option value="category">类别</option><option value="invoice_number">发票号</option>
+<option value="filename">文件名</option>
+</select>
+<button class="sort-direction" type="button" id="invoiceSortDirection" aria-label="切换发票排序方向" onclick="toggleInvoiceSortOrder()">降序 ↓</button>
+</div>
+<div class="sep"></div>
 <input type="search" class="search" aria-label="搜索发票" id="searchInput" placeholder="搜索 供应商/金额/备注/提交人/发票号..." oninput="debounceSearch()">
 <button class="text-btn finance-only" onclick="scanDuplicates()">查重</button>
 <button class="text-btn finance-only" onclick="organizeFiles()">整理文件</button>
@@ -78,8 +90,15 @@
 <table>
 <thead><tr>
 <th class="col-check" style="width:32px"><input type="checkbox" id="selectAll" onclick="toggleSelectAll()" title="全选"></th>
-<th>月份</th><th>日期</th><th>状态</th><th>提交人</th><th>类别</th>
-<th>供应商</th><th style="text-align:right">金额</th><th>发票号</th><th>操作</th>
+<th class="sortable-header" data-sort="month" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('month')">月份<span class="sort-indicator" aria-hidden="true"></span></button></th>
+<th class="sortable-header" data-sort="date" aria-sort="descending"><button type="button" class="sort-head" onclick="setInvoiceSort('date')">日期<span class="sort-indicator" aria-hidden="true"> ↓</span></button></th>
+<th class="sortable-header" data-sort="status" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('status')">状态<span class="sort-indicator" aria-hidden="true"></span></button></th>
+<th class="sortable-header" data-sort="submitter" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('submitter')">提交人<span class="sort-indicator" aria-hidden="true"></span></button></th>
+<th class="sortable-header" data-sort="category" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('category')">类别<span class="sort-indicator" aria-hidden="true"></span></button></th>
+<th class="sortable-header" data-sort="vendor" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('vendor')">供应商<span class="sort-indicator" aria-hidden="true"></span></button></th>
+<th class="sortable-header amount-header" data-sort="amount" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('amount')">金额<span class="sort-indicator" aria-hidden="true"></span></button></th>
+<th class="sortable-header" data-sort="invoice_number" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('invoice_number')">发票号<span class="sort-indicator" aria-hidden="true"></span></button></th>
+<th>操作</th>
 </tr></thead>
 <tbody id="invoiceTableBody"></tbody>
 </table>
@@ -102,8 +121,8 @@
 <div class="modal" id="detailModal"><div class="modal-content">
 <div class="modal-header"><h2>发票详情</h2><button class="modal-close" onclick="DetailModal.close()">&times;</button></div>
 <div class="detail-grid">
-<div class="field"><label>月份</label><input id="detMonth" readonly></div>
-<div class="field"><label>开票日期</label><input id="detDate" readonly></div>
+<div class="field"><label for="detMonth">月份</label><input id="detMonth" placeholder="YYYY.M" inputmode="decimal" {{ 'readonly' if not is_finance else '' }}></div>
+<div class="field"><label for="detDate">开票日期</label><input type="date" id="detDate" {{ 'readonly' if not is_finance else '' }}></div>
 <div class="field"><label>状态</label><select id="detStatus"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select></div>
 <div class="field"><label>报销日期</label><input type="date" id="detReimbursedDate"></div>
 <div class="field"><label>提交人</label><select id="detSubmitter" aria-label="提交人"><option value="0">待确认 / 未指定</option></select></div>

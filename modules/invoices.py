@@ -269,6 +269,34 @@ def _normalize_month(s):
     return s
 
 
+def _validated_invoice_month(value):
+    """Accept only real invoice folders; canonicalize e.g. 2026.01 -> 2026.1."""
+    if not isinstance(value, str):
+        raise ValueError('月份格式无效，应为 YYYY.M')
+    value = value.strip()
+    if value == '未归类':
+        return value
+    matched = MONTH_PATTERN.fullmatch(value)
+    if not matched or not 1 <= int(matched.group(1).split('.')[1]) <= 12:
+        raise ValueError('月份格式无效，应为 YYYY.M（1-12 月）')
+    return _normalize_month(value)
+
+
+def _validated_invoice_date(value):
+    """Keep manually corrected issue dates separate from filename/PDF parsing."""
+    if not isinstance(value, str):
+        raise ValueError('开票日期格式无效')
+    if not value:
+        return ''
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        raise ValueError('开票日期格式无效，应为 YYYY-MM-DD')
+    try:
+        datetime.strptime(value, '%Y-%m-%d')
+    except ValueError as exc:
+        raise ValueError('开票日期不是有效日期') from exc
+    return value
+
+
 def _file_hash(filepath):
     """计算文件 MD5 用于精确去重"""
     h = hashlib.md5()
@@ -897,7 +925,7 @@ def scan_invoices(use_cache=True):
         if key not in seen:
             seen.add(key)
             unique.append(inv)
-    unique.sort(key=lambda x: (x['month'], x.get('date', '')), reverse=True)
+    unique.sort(key=lambda x: x['id'])
     if has_request_context():
         names = {row['id']: row['name'] for row in get_db().execute('SELECT id,name FROM members')}
         for invoice in unique:
@@ -924,7 +952,7 @@ def _add_invoice(invoices, meta, month, status, filepath, use_cache=True):
         'folder': os.path.dirname(rel_path), 'rel_path': rel_path, 'filename': filename,
         'category': inv_meta.get('category_override') or info['category'],
         'amount': info['amount'], 'vendor': inv_meta.get('confirmed_vendor', info['vendor']),
-        'date': inv_meta.get('confirmed_date', info['date']),
+        'date': inv_meta.get('confirmed_date', inv_meta.get('date', info['date'])),
         'seq': info['seq'], 'status': final_status,
         'submitter': inv_meta.get('submitter', ''), 'submitter_id': inv_meta.get('submitter_id'),
         'ownership_unresolved': not bool(inv_meta.get('submitter_id')),
@@ -943,6 +971,75 @@ def _add_invoice(invoices, meta, month, status, filepath, use_cache=True):
         inv['amount'], inv['source'] = resolve_amount(inv, use_cache=use_cache)
     inv['amount_cents'] = str(to_cents(inv['amount']))
     invoices.append(inv)
+
+
+
+# 由服务端对完整结果集排序，再分页，不能仅对当前页做浏览器排序。
+# 日期/月份采用实际日历值；金额使用整数分，避免字符串字典序与浮点误差。
+INVOICE_SORT_FIELDS = frozenset({
+    'date', 'month', 'amount', 'status', 'submitter',
+    'category', 'vendor', 'invoice_number', 'filename',
+})
+_INVOICE_DATE_RE = re.compile(
+    r'^\s*(\d{4})\s*[-./年]\s*(\d{1,2})\s*[-./月]\s*(\d{1,2})\s*日?\s*$'
+)
+_INVOICE_MONTH_RE = re.compile(r'^\s*(\d{4})\s*[./-]\s*(\d{1,2})\s*$')
+
+
+def _invoice_date_value(value):
+    if not isinstance(value, str):
+        return None
+    match = _INVOICE_DATE_RE.fullmatch(value)
+    if not match:
+        return None
+    try:
+        return datetime(*(int(part) for part in match.groups())).toordinal()
+    except ValueError:
+        return None
+
+
+def _invoice_month_value(value):
+    if not isinstance(value, str):
+        return None
+    match = _INVOICE_MONTH_RE.fullmatch(value)
+    if not match:
+        return None
+    year, month = (int(part) for part in match.groups())
+    return year * 12 + month if 1 <= year <= 9999 and 1 <= month <= 12 else None
+
+
+def _invoice_sort_value(invoice, field):
+    value = invoice.get(field)
+    if value is None or value == '':
+        return None
+    if field == 'date':
+        return _invoice_date_value(value)
+    if field == 'month':
+        return _invoice_month_value(value)
+    if field == 'amount':
+        return to_cents(value)
+    if field == 'status':
+        return STATUS_NAMES.index(value) if value in STATUS_NAMES else None
+    text = str(value).strip()
+    if not text:
+        return None
+    # 自然排序：供应商2在供应商10之前，发票号中的数字按数值比较。
+    return tuple((1, int(part)) if part.isascii() and part.isdigit()
+                 else (0, part.casefold())
+                 for part in re.split(r'([0-9]+)', text) if part)
+
+
+def sort_invoices(invoices, sort_by='date', sort_order='desc'):
+    """字段白名单；稳定的 ID 次序；无效/缺失字段始终放在末尾。"""
+    if sort_by not in INVOICE_SORT_FIELDS or sort_order not in ('asc', 'desc'):
+        raise ValueError('无效的发票排序参数')
+    ordered = sorted(invoices, key=lambda invoice: str(invoice.get('id', '')))
+    decorated = [(invoice, _invoice_sort_value(invoice, sort_by)) for invoice in ordered]
+    available = [pair for pair in decorated if pair[1] is not None]
+    available.sort(key=lambda pair: pair[1], reverse=(sort_order == 'desc'))
+    return [invoice for invoice, _ in available] + [
+        invoice for invoice, value in decorated if value is None
+    ]
 
 
 # ===================== 统计 =====================
@@ -1006,8 +1103,16 @@ def api_invoices():
 
     date_from = request.args.get('date_from', '')
     date_to = request.args.get('date_to', '')
-    if date_from: result = [i for i in result if i['date'] >= date_from]
-    if date_to: result = [i for i in result if i['date'] <= date_to]
+    from_day = _invoice_date_value(date_from) if date_from else None
+    to_day = _invoice_date_value(date_to) if date_to else None
+    if (date_from and from_day is None) or (date_to and to_day is None):
+        return jsonify(error='日期筛选参数无效'), 400
+    if from_day is not None:
+        result = [i for i in result if (day := _invoice_date_value(i.get('date'))) is not None
+                  and day >= from_day]
+    if to_day is not None:
+        result = [i for i in result if (day := _invoice_date_value(i.get('date'))) is not None
+                  and day <= to_day]
 
     search = request.args.get('search', '').lower()
     if search:
@@ -1034,6 +1139,12 @@ def api_invoices():
 
     inv_id = request.args.get('id', '')
     if inv_id: result = [i for i in result if i['id'] == inv_id]
+    sort_by = request.args.get('sort_by', 'date')
+    sort_order = request.args.get('sort_order', 'desc').lower()
+    try:
+        result = sort_invoices(result, sort_by, sort_order)
+    except ValueError:
+        return jsonify(error='排序参数无效'), 400
     total = len(result)
     start = (page - 1) * per_page
     end = start + per_page
@@ -1073,43 +1184,97 @@ def api_owners():
 
 @bp.route('/api/invoice/update', methods=['POST'])
 @finance_required
-# ---- 修改发票：状态/提交人/备注/类别/报销日期/标签/发票号（管理）----
+# ---- 修改发票：支持人工校正月份/开票日期，同时保证文件路径和元数据同步 ----
 def api_invoice_update():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(success=False, error='参数格式无效'), 400
     if error := validate_fields(data):
         return jsonify(success=False, error=error), 400
     inv_id = data.get('id', '')
     if not isinstance(inv_id, str) or not _is_safe_rel(inv_id):
-        return jsonify({'success': False, 'error': '无效发票 ID'}), 400
+        return jsonify(success=False, error='无效发票 ID'), 400
     inv_id = inv_id.replace('\\', '/')
-    if not os.path.isfile(_safe_join(inv_id) or ''):
-        return jsonify({'success': False, 'error': '发票文件不存在'}), 404
-    if 'status' in data and data['status'] not in STATUS_NAMES:
-        return jsonify({'success': False, 'error': '无效报销状态'}), 400
+    source = _safe_join(inv_id)
+    if not source or not os.path.isfile(source):
+        return jsonify(success=False, error='发票文件不存在'), 404
 
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
-    if inv_id not in meta: meta[inv_id] = {}
-
-    if 'submitter_id' in data or 'submitter' in data:
-        try:
-            name, owner_id = _resolve_submitter(data, meta[inv_id])
-        except ValueError as exc:
-            return jsonify(success=False, error=str(exc)), 400
-        meta[inv_id].update(submitter=name, submitter_id=owner_id, ownership_source='manual')
-
-    old_status = meta[inv_id].get('status', '')
+    existing = meta.get(inv_id, {})
+    parts = inv_id.split('/')
+    old_month = existing.get('month') or parts[0]
+    old_status = existing.get('status')
+    if old_status not in STATUS_NAMES:
+        old_status = parts[1] if len(parts) > 2 and parts[1] in STATUS_NAMES else '未报销'
     new_status = data.get('status', old_status)
+    if new_status not in STATUS_NAMES:
+        return jsonify(success=False, error='无效报销状态'), 400
 
-    for field in ['status', 'notes', 'category_override', 'reimbursed_date', 'tags', 'invoice_number']:
-        if field in data: meta[inv_id][field] = data[field]
-    meta[inv_id]['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    save_meta(meta)
+    try:
+        new_month = _validated_invoice_month(data['month']) if 'month' in data else old_month
+        corrected_date = _validated_invoice_date(data['date']) if 'date' in data else None
+        owner = (_resolve_submitter(data, existing)
+                 if 'submitter_id' in data or 'submitter' in data else None)
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
 
-    moved = False
-    if new_status != old_status and new_status in STATUS_NAMES:
-        moved = move_invoice_file(inv_id, new_status)
+    updated = dict(existing)
+    if owner is not None:
+        updated.update(submitter=owner[0], submitter_id=owner[1], ownership_source='manual')
+    for field in ('notes', 'category_override', 'reimbursed_date', 'tags', 'invoice_number'):
+        if field in data:
+            updated[field] = data[field]
+    if corrected_date is not None:
+        updated['date'] = corrected_date
+        # Keep both metadata representations in sync after an explicit correction.
+        updated['confirmed_date'] = corrected_date
+    updated['month'] = new_month
+    updated['status'] = new_status
+    updated['updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    return jsonify({'success': True, 'moved': moved})
+    # The month is also the on-disk directory. Do not leave a saved metadata
+    # month pointing at the old directory; status changes use the same path.
+    old_dir = os.path.dirname(inv_id).replace('\\', '/')
+    target_dir_rel = f'{new_month}/{new_status}'
+    move_needed = (('month' in data or 'status' in data) and old_dir != target_dir_rel)
+    new_rel = inv_id
+    dest = source
+    if move_needed:
+        directory = _safe_join(new_month, new_status)
+        if not directory:
+            return jsonify(success=False, error='月份目录无效'), 400
+        try:
+            ensure_dir(directory)
+            dest = os.path.join(directory, os.path.basename(source))
+            stem, ext = os.path.splitext(os.path.basename(source))
+            counter = 1
+            while os.path.exists(dest):
+                dest = os.path.join(directory, f'{stem}_{counter}{ext}')
+                counter += 1
+            shutil.move(source, dest)
+            # Build the public relative path from validated logical components;
+            # avoid platform-specific path rendering on Windows.
+            new_rel = '/'.join((new_month, new_status, os.path.basename(dest)))
+        except OSError as exc:
+            return jsonify(success=False, error=f'发票文件移动失败: {exc}'), 500
+
+    updated['rel_path'] = new_rel
+    updated['filename'] = os.path.basename(dest)
+    new_meta = dict(meta)
+    new_meta.pop(inv_id, None)
+    new_meta[new_rel] = updated
+    try:
+        save_meta(new_meta)
+    except Exception:
+        if move_needed:
+            try:
+                shutil.move(dest, source)
+            except OSError:
+                logging.exception('Failed to roll back invoice move: %s', inv_id)
+        raise
+    if move_needed:
+        _migrate_cache_key(inv_id, new_rel)
+    return jsonify(success=True, moved=move_needed, id=new_rel, rel_path=new_rel)
 
 
 @bp.route('/api/invoice/batch', methods=['POST'])
@@ -1603,6 +1768,10 @@ def api_upload_confirm():
         return jsonify({'success': False, 'error': '月份格式无效'}), 400
     if status not in STATUS_NAMES:
         status = '未报销'
+    try:
+        corrected_date = _validated_invoice_date(data['date']) if 'date' in data else None
+    except ValueError as exc:
+        return jsonify(success=False, error=str(exc)), 400
 
     # 查重保护
     if not skip_duplicate_check:
@@ -1643,9 +1812,11 @@ def api_upload_confirm():
         'uploaded': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
-    for field in ('date', 'vendor'):
-        if field in data:
-            meta[rel_path]['confirmed_' + field] = data[field]
+    if corrected_date is not None:
+        meta[rel_path]['date'] = corrected_date
+        meta[rel_path]['confirmed_date'] = corrected_date
+    if 'vendor' in data:
+        meta[rel_path]['confirmed_vendor'] = data['vendor']
     save_meta(meta)
 
     if amount > 0:
@@ -1714,6 +1885,11 @@ def api_upload_confirm_batch():
             continue
         if status not in STATUS_NAMES:
             status = '未报销'
+        try:
+            corrected_date = _validated_invoice_date(item['date']) if 'date' in item else None
+        except ValueError as exc:
+            results.append({'file': original_name, 'status': 'error', 'reason': str(exc)})
+            continue
 
         target_dir = os.path.join(BASE_DIR, month, status)
         ensure_dir(target_dir)
@@ -1741,9 +1917,11 @@ def api_upload_confirm_batch():
                 'uploaded': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             }
-            for field in ('date', 'vendor'):
-                if field in item:
-                    meta[rel_path]['confirmed_' + field] = item[field]
+            if corrected_date is not None:
+                meta[rel_path]['date'] = corrected_date
+                meta[rel_path]['confirmed_date'] = corrected_date
+            if 'vendor' in item:
+                meta[rel_path]['confirmed_vendor'] = item['vendor']
             save_meta(meta)
             if amount > 0:
                 cache = load_cache()

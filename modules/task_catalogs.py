@@ -21,7 +21,7 @@ def _path_id_error(item_id: int) -> tuple[Response, int] | None:
 
 def _catalog_response(table: str) -> Response:
     rows = [dict(row) for row in get_db().execute(
-        f"SELECT id,name,CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END AS is_active FROM {table} ORDER BY name,id"
+        f"SELECT id,name,CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END AS is_active FROM {table} ORDER BY CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END, name, id"
     )]
     return jsonify(ok=True, **{table: rows})
 
@@ -65,7 +65,7 @@ def _catalog_write(table: str, item_id: int | None = None) -> Response | tuple[R
         db.rollback()
         return jsonify(ok=False, error="名称已存在"), 409
     return jsonify(ok=True, id=item_id, **{table: [dict(row) for row in db.execute(
-        f"SELECT id,name,CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END AS is_active FROM {table} ORDER BY name,id"
+        f"SELECT id,name,CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END AS is_active FROM {table} ORDER BY CASE WHEN deleted_at IS NULL THEN 0 ELSE 1 END, name, id"
     )]})
 
 

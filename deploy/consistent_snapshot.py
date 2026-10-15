@@ -127,10 +127,21 @@ def _digest(path: Path) -> dict[str, object]:
 
 def create_snapshot(root: Path, output: Path, *, offline_confirmed: bool = False) -> dict:
     """Create an atomic, non-overwriting 0600 archive from a stopped service."""
-    root, output = Path(root).resolve(), Path(output).absolute()
+    # Keep the caller's lexical path as well as its canonical location.
+    # On Windows, resolve() may canonicalize directory junctions or short names,
+    # while absolute() preserves their original spelling. Comparing only one
+    # representation can miss an archive placed inside the source data tree.
+    source_root = Path(root).absolute()
+    root, output = source_root.resolve(), Path(output).absolute()
+    output_resolved = output.resolve()
     if not offline_confirmed:
         raise SnapshotError("须先停止所有写入进程并显式指定 --offline-confirmed")
-    if any(output.is_relative_to(root / directory) for directory in DIRECTORIES):
+    if any(
+        output.is_relative_to(source_root / directory)
+        or output.is_relative_to(root / directory)
+        or output_resolved.is_relative_to((root / directory).resolve())
+        for directory in DIRECTORIES
+    ):
         raise SnapshotError("备份目标不能放在受备份的数据目录内，避免下次快照递归收录")
     if service_is_active():
         raise SnapshotError("rm-progress 服务仍在运行：必须停止服务后再生成一致性快照")

@@ -139,6 +139,32 @@ class TestSoftDeletes(unittest.TestCase):
                                   if x["id"] == obj_id)["is_active"], 1)
             self.assertEqual(self.admin.post(f"/api/{path}/{obj_id}/restore", json={}).status_code, 409)
 
+    def test_archived_catalog_entries_are_sorted_after_active_items(self):
+        for kind in ("groups", "projects"):
+            archived_name = "AAA_归档排序_" + self.suffix
+            active_name = "ZZZ_有效排序_" + self.suffix
+            archived = self.admin.post(f"/api/{kind}", json={"name": archived_name}).get_json()["id"]
+            active = self.admin.post(f"/api/{kind}", json={"name": active_name}).get_json()["id"]
+            response = self.admin.post(f"/api/{kind}/{archived}/delete", json={
+                "confirm_name": archived_name
+            })
+            self.assertEqual(response.status_code, 200, response.get_json())
+            for endpoint in (f"/api/{kind}", "/api/data"):
+                result = self.admin.get(endpoint).get_json()
+                rows = result[kind]
+                ids = [row["id"] for row in rows]
+                self.assertIn(archived, ids)
+                self.assertIn(active, ids)
+                self.assertLess(ids.index(active), ids.index(archived))
+                self.assertEqual([row["is_active"] for row in rows],
+                                 sorted((row["is_active"] for row in rows), reverse=True))
+            renamed = self.admin.post(f"/api/{kind}/{active}", json={
+                "name": active_name + "_改"
+            })
+            self.assertEqual(renamed.status_code, 200)
+            names = [row["id"] for row in renamed.get_json()[kind]]
+            self.assertLess(names.index(active), names.index(archived))
+
     def test_member_and_group_deletion_survive_repeated_migration(self):
         from modules.task_migrations import migrate
         from common import DB_PATH

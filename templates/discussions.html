@@ -2,35 +2,31 @@
 {% block title %}GitHub 协作{% endblock %}
 {% block content %}
 <div class="ux-page-head">
-  <div>
-    <p class="ux-eyebrow">WORKSPACE / GITHUB</p>
-    <h1>GitHub 协作</h1>
-    <p>在项目仓库中发起公开协作话题、反馈问题和提出功能建议。</p>
-  </div>
+  <div><p class="ux-eyebrow">WORKSPACE / GITHUB</p><h1>GitHub 协作</h1>
+    <p>在工作台同步浏览 GitHub Issues 与 Discussions；创建、评论和回复请在 GitHub 完成。</p></div>
 </div>
-
 {% if github_urls %}
-<div class="ux-account-grid github-entry-grid">
-  <section class="panel" aria-labelledby="discussion-entry-heading">
-    <h2 id="discussion-entry-heading">参与讨论</h2>
-    <p class="ux-note">讨论用于交流方案、发布公告和沉淀经验。请先查看已有主题，再补充清晰、可复现的信息。</p>
-    <p><a class="btn primary" href="{{ github_urls.discussions }}" target="_blank" rel="noopener noreferrer">打开 GitHub Discussions</a></p>
-  </section>
-  <section class="panel" aria-labelledby="issue-entry-heading">
-    <h2 id="issue-entry-heading">提交问题或建议</h2>
-    <p class="ux-note">选择“功能请求”或“缺陷报告”模板后填写。模板会提示你描述需求、复现步骤和预期结果。</p>
-    <p><a class="btn" href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">新建 GitHub Issue</a></p>
-  </section>
-</div>
-<section class="panel" aria-labelledby="github-access-heading">
-  <h2 id="github-access-heading">访问说明</h2>
-  <p class="ux-note">该仓库可能是私有仓库。请使用已获授权的 GitHub 账号登录，并确认自己已加入仓库或组织；没有访问权限时，请联系仓库管理员。</p>
-  <p class="ux-note">此页面只提供跳转链接，不会向 GitHub 发送任务、成员、图片或其他工作台元数据。请勿在讨论或 Issue 中粘贴密码、访问令牌、个人联系方式或未公开文件。</p>
+<section class="panel github-hub" id="github-hub" data-new-issue="{{ github_urls.new_issue }}" data-new-discussion="{{ github_urls.new_discussion }}">
+  <div class="github-hub-toolbar">
+    <div class="seg" role="tablist" aria-label="GitHub 协作板块">
+      <button type="button" role="tab" class="active" aria-selected="true" data-github-kind="issues">Issues · 问题与建议</button>
+      <button type="button" role="tab" aria-selected="false" data-github-kind="discussions">Discussions · 交流讨论</button>
+    </div>
+    <a class="btn primary" id="github-new" href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">去 GitHub 创建 Issue ↗</a>
+  </div>
+  <p class="ux-note github-source-note" id="github-source-note" aria-live="polite"></p>
+  <div class="github-hub-grid">
+    <div class="github-topic-list" id="github-topic-list" aria-label="主题列表" aria-live="polite"><p class="empty">正在加载…</p></div>
+    <div class="github-topic-detail" id="github-topic-detail" aria-label="主题详情"><p class="empty">从左侧选择主题查看正文与回复。</p></div>
+  </div>
+  <div class="github-pages"><button type="button" class="btn ghost sm" id="github-prev" disabled>上一页</button><span id="github-page">第 1 页</span><button type="button" class="btn ghost sm" id="github-next">下一页</button></div>
 </section>
+<p class="ux-note">只读展示板：Issues 直接读取公开 API；Discussions 可通过 GitHub 官方 Atom 订阅源读取近期公开主题，无须配置 Token。若服务器配置只读 <code>GITHUB_TOKEN</code>，可查看讨论回复。
+  创建和参与讨论需使用个人 GitHub 账号，前往 <a href="{{ github_urls.discussions }}" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> 或 <a href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">新建 Issue</a>。请勿公开敏感信息。</p>
 {% else %}
-<section class="panel" aria-labelledby="github-configuration-heading">
-  <h2 id="github-configuration-heading">尚未配置 GitHub 仓库</h2>
-  <p class="ux-note">请联系管理员配置 GITHUB_REPOSITORY（格式：owner/repository），然后重新打开此页面。</p>
-</section>
+<section class="panel"><h2>尚未配置 GitHub 仓库</h2><p class="ux-note">请联系管理员配置 GITHUB_REPOSITORY（格式：owner/repository），然后重新打开此页面。</p></section>
 {% endif %}
+{% endblock %}
+{% block scripts %}
+{% if github_urls %}<script src="{{ url_for('static', filename='discussions.js') }}"></script>{% endif %}
 {% endblock %}

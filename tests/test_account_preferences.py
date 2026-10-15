@@ -74,8 +74,13 @@ class TestAccountPreferences(unittest.TestCase):
         migrate(db)
         self.assertEqual(db.execute('SELECT ui_theme FROM members').fetchone()[0], 'light')
         db.execute("UPDATE members SET ui_theme='dark'")
+        db.execute("INSERT INTO task_progress_updates(task_id,actor_id,actor_name,progress,note,created_at) "
+                   "VALUES (1,1,'test',45,'保留上游进度记录','2026-10-15')")
         db.commit()
         migrate(db)
         self.assertEqual(db.execute('SELECT ui_theme FROM members').fetchone()[0], 'dark')
         self.assertEqual(db.execute('SELECT start_date,due_date FROM tasks').fetchone(), ('2026-10-14','2026-10-22'))
+        self.assertEqual(db.execute('SELECT progress,note FROM task_progress_updates').fetchone(),
+                         (45, '保留上游进度记录'))
+        self.assertIn('progress_update_id', {row[1] for row in db.execute('PRAGMA table_info(task_attachments)')})
         db.close()

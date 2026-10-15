@@ -16,6 +16,7 @@ function renderCreateChoices() {
 }
 
 function fillTaskFilters() {
+  taskFilters.project = activeCatalogFilter(state.projects, taskFilters.project);
   const project = document.getElementById("t-filter-project");
   const status = document.getElementById("t-filter-status");
   if (project) project.innerHTML = options(state.projects, taskFilters.project, "全部组别");
@@ -60,7 +61,7 @@ function catalogPanel(kind, items) {
     items
       .map(
         (item) =>
-          `<li><span>${esc(item.name)}</span><small>#${Number(item.id)}</small><button class="btn ghost sm" type="button" data-edit-catalog="${kind}" data-catalog-id="${Number(item.id)}" data-catalog-name="${esc(item.name)}">重命名</button></li>`,
+          `<li><span>${esc(item.name)}${item.is_active === 0 ? "（已删除）" : ""}</span><small>#${Number(item.id)}</small>${item.is_active === 0 ? "" : `<button class="btn ghost sm" type="button" data-edit-catalog="${kind}" data-catalog-id="${Number(item.id)}" data-catalog-name="${esc(item.name)}">重命名</button>`}</li>`,
       )
       .join("") || '<li class="muted">暂无条目</li>';
   return `<section class="catalog-block"><h3>${label}</h3><form class="catalog-form" data-catalog-form="${kind}"><label><span>新增${label}</span><input name="name" maxlength="80" required></label><button class="btn" type="submit">添加</button><p class="form-message" role="alert"></p></form><ul class="catalog-list">${rows}</ul></section>`;

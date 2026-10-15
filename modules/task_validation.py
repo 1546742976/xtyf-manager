@@ -112,3 +112,25 @@ def creates_cycle(
                     f"SELECT {edge_column} FROM {table} WHERE task_id = ?", (node,)
                 ).fetchall())
     return False
+
+
+def creates_combined_task_cycle(db: sqlite3.Connection, task_id: int, targets: list[int]) -> bool:
+    """Detect cycles across legacy parent links AND task predecessor edges."""
+    visited: set[int] = set()
+    frontier = list(targets)
+    while frontier:
+        node = frontier.pop()
+        if node == task_id:
+            return True
+        if node in visited:
+            continue
+        visited.add(node)
+        row = db.execute(
+            "SELECT parent_id FROM tasks WHERE id=? AND deleted_at IS NULL", (node,)
+        ).fetchone()
+        if row and row[0] is not None:
+            frontier.append(int(row[0]))
+        frontier.extend(int(item[0]) for item in db.execute(
+            "SELECT predecessor_id FROM task_dependencies WHERE task_id=?", (node,)
+        ))
+    return False

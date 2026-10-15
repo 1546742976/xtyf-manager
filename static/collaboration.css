@@ -19,3 +19,87 @@ body.modal-open{overflow:hidden}.modal{max-width:880px}.task-settings{margin-top
 @media(max-width:768px){.catalog-grid{grid-template-columns:1fr}.choice-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.attachment-form{grid-template-columns:1fr}.modal{max-width:calc(100vw - 24px)}.tree-row{margin-left:calc(min(var(--tree-depth),3) * 18px)}}
 @media(max-width:480px){.choice-grid,.readonly-settings dl{grid-template-columns:1fr}.grid-2{grid-template-columns:1fr}.attachment-card{grid-template-columns:100px minmax(0,1fr)}.attachment-card img{width:100px;height:76px}.diff-row{grid-template-columns:1fr}.diff-row>span:nth-of-type(2){display:none}.revision-head{display:grid}.toolbar-field{width:100%;justify-content:space-between}.toolbar-field select{flex:1}.seg{width:100%}.seg button{flex:1}.tree-card{display:block}.tree-card .context-label{display:block;margin:2px 0 8px}}
 @media(prefers-reduced-motion:reduce){.task,.tree-toggle,.choice-item{transition:none!important}}
+
+
+/* Progress timeline, illustrated updates and a fixed top-right dialog close. */
+.modal { position: relative; }
+.modal-head { padding-right: 72px; min-height: 32px; }
+.modal-head > [data-close] { position: absolute; top: 16px; right: 16px; z-index: 3; }
+.task-progress-heading { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-top: 10px; color: var(--muted); }
+.task-progress-heading strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.progress-last { margin-top: 8px; padding: 8px; border-radius: 8px; background: var(--collab-note); font-size: 12px; color: var(--muted); }
+.progress-last p { margin: 5px 0 7px; white-space: pre-wrap; color: var(--text); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.progress-last img { display: inline-block; width: 68px; height: 50px; object-fit: cover; border-radius: 6px; margin-right: 5px; }
+.task-progress-form { margin: 12px 0 !important; }
+.progress-edit-row { display: grid; grid-template-columns: minmax(0,1fr) 100px; gap: 12px; }
+.progress-edit-row input[type="range"] { padding: 0; width: 100%; accent-color: var(--primary); }
+.progress-edit-row input[type="number"] { min-width: 0; }
+.progress-submit { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.progress-submit .form-message { margin: 0; }
+.progress-timeline { display: grid; gap: 10px; margin-top: 10px; max-height: 420px; overflow: auto; }
+.progress-entry { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+.progress-entry-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12px; }
+.progress-entry-head time { color: var(--muted); }
+.progress-entry-note { margin: 8px 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.progress-entry-images { display: flex; flex-wrap: wrap; gap: 8px; }
+.progress-entry-images img { display: block; width: 110px; height: 80px; object-fit: cover; border-radius: 8px; }
+
+/* Directed task dependency graph: SVG edges behind focusable HTML task cards. */
+.tree-board { display: block; }
+.graph-caption { color: var(--muted); font-size: 13px; padding: 8px 0 12px; }
+.dependency-scroll { overflow: auto; border: 1px solid var(--border); border-radius: 14px; background: radial-gradient(#dfe6f0 .7px, transparent .7px) 0 0 / 18px 18px, var(--collab-soft); max-height: min(80vh, 850px); }
+.dependency-graph { position: relative; min-height: 300px; }
+.dependency-lines { position: absolute; inset: 0; width: 100%; height: 100%; color: #7590b4; pointer-events: none; overflow: visible; }
+.dependency-node { position: absolute; overflow: hidden; }
+.dependency-node > .task { height: 100%; overflow: auto; background: var(--card); }
+.dependency-node.is-context { opacity: .7; }
+.dependency-node .task-head h3 { overflow-wrap: anywhere; }
+.dependency-node .progress-last { max-height: 108px; overflow: hidden; }
+.dependency-node .task-foot { gap: 8px; }
+@media (max-width: 480px) {
+  .progress-edit-row { grid-template-columns: minmax(0,1fr) 88px; }
+  .progress-entry-head { flex-direction: column; gap: 2px; }
+}
+
+
+.github-hub { padding: 0; overflow: hidden; }
+.github-hub-toolbar { display: flex; justify-content: space-between; flex-wrap: wrap; align-items: center; gap: 12px; padding: 16px; border-bottom: 1px solid var(--border); }
+.github-hub-grid { display: grid; grid-template-columns: minmax(220px,.85fr) minmax(0,1.6fr); min-height: 470px; }
+.github-topic-list { border-right: 1px solid var(--border); max-height: 660px; overflow: auto; }
+.github-topic { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--text); padding: 14px 16px; cursor: pointer; }
+.github-topic:hover,.github-topic.active { background: var(--collab-selected); }
+.github-topic strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
+.github-topic small { display: block; margin-top: 6px; color: var(--muted); }
+.github-topic-detail { min-width: 0; padding: 20px; max-height: 660px; overflow-y: auto; }
+.github-thread h2 { font-size: 20px; margin: 0 0 7px; overflow-wrap: anywhere; }
+.github-thread h3 { font-size: 15px; margin: 24px 0 10px; }
+.github-topic-meta { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+.github-body,.github-reply p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.65; }
+.github-body { background: var(--collab-note); padding: 14px; border-radius: 10px; }
+.github-external { display: inline-block; margin-top: 10px; font-size: 12px; }
+.github-replies { display: grid; gap: 8px; }
+.github-reply { padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.github-reply strong { font-size: 13px; }
+.github-reply small { display: block; color: var(--muted); }
+.github-reply p { margin: 8px 0 0; }
+.github-source-note { margin: 0; padding: 9px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.github-source-note:empty { display: none; }
+.github-pages { display: flex; justify-content: center; align-items: center; gap: 16px; padding: 12px; border-top: 1px solid var(--border); }
+@media (max-width: 800px) {
+  .github-hub-grid { grid-template-columns: 1fr; }
+  .github-topic-list { max-height: 260px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .github-topic-detail { max-height: none; }
+}
+
+/* Both task-center cards and dashboard entries breathe red when 0–3 days remain. */
+@keyframes task-due-breathe {
+  0%,100% {box-shadow:0 0 0 0 rgba(211,52,74,.08)}
+  50% {box-shadow:0 0 0 3px rgba(211,52,74,.2),0 0 18px rgba(211,52,74,.18)}
+}
+.task.is-due-soon,.ws-task-row.is-due-soon {
+  border:1px solid #d3344a;
+  animation:task-due-breathe 2.4s ease-in-out infinite;
+}
+@media(prefers-reduced-motion:reduce){
+  .task.is-due-soon,.ws-task-row.is-due-soon{animation:none}
+}
