@@ -315,8 +315,6 @@ tbody tr:hover td { background: var(--surface-inset); }
 .ws-section-lead h2 { margin: 0 !important; }
 .ws-dashboard-card .ws-subtitle { color: var(--muted); font-size: 12px; margin-top: 6px; }
 .ws-section-lead a { font-size: 12px; white-space: nowrap; padding-top: 4px; }
-.ws-task-row { padding: 18px 8px; border-bottom-color: var(--border); color: var(--text); gap: 12px; }
-.ws-task-row:hover { background: var(--surface-inset); border-radius: 10px; }
 .ws-task-row-title strong { font-weight: 500; }
 .ws-task-row-title small, .ws-task-row .ws-task-date { color: var(--muted); font-size: 11px; }
 .ws-quick-grid { gap: 12px; margin-top: 20px; }
@@ -436,8 +434,6 @@ tbody tr:hover td { background: var(--surface-inset); }
   .ws-dashboard-grid, .ws-dashboard-aside { gap: 20px; }
   .ws-dashboard-card, .panel { padding: 20px !important; }
   .ws-section-lead { flex-wrap: wrap; gap: 8px; }
-  .ws-task-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 8px 12px; padding: 16px 0; }
-  .ws-task-row .ws-task-date { grid-column: 2 / -1; }
   .ws-quick-grid { gap: 10px; }
   .ws-quick-link { padding: 16px; min-height: 100px; }
   .toolbar-field { align-items: center; flex-wrap: wrap; }
