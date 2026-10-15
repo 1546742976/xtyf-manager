@@ -21,6 +21,7 @@
     </div>
     <div class="ws-nav-group">
       <div class="ws-nav-caption">团队协作</div>
+      <a href="/daily-projects" class="ws-nav-link{% if page == 'daily' %} is-active{% endif %}"{% if page == 'daily' %} aria-current="page"{% endif %}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h6l2 3h8v12H4zM8 13h8M8 16h5"/></svg>日常项目</a>
       <a href="{{ url_for('tasks') }}" class="ws-nav-link{% if page == 'tasks' %} is-active{% endif %}"{% if page == 'tasks' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-tasks"/></svg>任务中心</a>
       <a href="{{ url_for('discussions.index') }}" class="ws-nav-link{% if page == 'discussions' %} is-active{% endif %}"{% if page == 'discussions' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-discussions"/></svg>GitHub 协作</a>
       {% if me.role in ('admin', 'manager') %}

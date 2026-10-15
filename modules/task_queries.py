@@ -65,6 +65,10 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
     predecessor_map = _relation_map(db, "task_dependencies", "predecessor_id", task_ids)
     # Most recent progress event and its live screenshots are included in board data.
     latest_progress: dict[int, JsonObject] = {}
+    latest_notes = {int(row['task_id']): (row['note'], row['actor_name']) for row in db.execute(
+        "SELECT task_id,note,actor_name FROM task_progress_updates WHERE id IN "
+        "(SELECT MAX(id) FROM task_progress_updates WHERE TRIM(note) <> '' GROUP BY task_id)"
+    )}
     if task_ids:
         placeholders = ",".join("?" for _ in task_ids)
         updates = db.execute(
@@ -106,6 +110,7 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
         task["participant_ids"] = participant_map[task_id]
         task["predecessor_ids"] = predecessor_map[task_id]
         task["latest_progress"] = latest_progress.get(task_id)
+        task["latest_note"], task["latest_note_author"] = latest_notes.get(task_id, ('', ''))
         warnings: list[str] = []
         predecessor_dates: list[str] = []
         dates_complete = bool(predecessor_map[task_id])

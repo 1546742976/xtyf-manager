@@ -146,7 +146,7 @@ async function checkPasswordVisibility(page, base) {
     await admin.locator('#funds-feedback').filter({hasText:'记录已变更'}).waitFor();
 
     // Actual DOM selections survive refresh, and removed selections block submission.
-    await admin.goto(base+'/manage');
+    await admin.goto(base+'/tasks');await admin.locator('#new-task-toggle').click();
     await admin.waitForFunction(()=>document.querySelector('#create-owner').options.length>1);
     const project=(await api(admin,'/api/projects')).body.projects.find(item=>item.is_active);
     const dependency=(await api(admin,'/api/task',{title:'Browser predecessor'})).body;

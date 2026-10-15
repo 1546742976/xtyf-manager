@@ -37,17 +37,32 @@
     pages.hidden = state.kind !== "issues";
     document.getElementById("github-prev").disabled = state.page <= 1;
   }
+  let retryAt = 0;
+  function externalList() {
+    const base = safeLink(root.dataset.repository);
+    return base ? `${base}/${state.kind}` : '';
+  }
+  function failureView(message, detail = false) {
+    const url = externalList();
+    return `<p class="form-message" role="alert">${safe(message)}</p><div class="github-error-actions"><button class="btn" type="button" ${detail ? 'data-github-retry-detail' : 'data-github-retry'}>重新加载</button>${url ? `<a class="btn primary" href="${safe(url)}" target="_blank" rel="noopener noreferrer">前往 GitHub 查看 ↗</a>` : ''}</div>`;
+  }
   async function loadItems() {
     const generation = ++state.generation;
     state.number = null;
     updateTab();
+    root.classList?.toggle('is-unavailable', false);
+    document.getElementById("github-next").disabled = true;
     sourceNote.textContent = "";
     listBox.innerHTML = '<p class="empty">正在读取 GitHub 主题…</p>';
     detailBox.innerHTML = '<p class="empty">选择主题查看正文与回复。</p>';
     const data = await request(`/discussions/api/items?kind=${state.kind}&page=${state.page}`);
     if (generation !== state.generation) return;
     if (!data?.ok) {
-      listBox.innerHTML = `<p class="form-message" role="alert">${safe(data?.error || "加载失败")}</p><button type="button" data-github-retry>重新加载</button>`;
+      retryAt = Date.now() + (Number(data?.retry_after) || 0) * 1000;
+      root.classList?.toggle('is-unavailable', true);
+      pages.hidden = true;
+      listBox.innerHTML = failureView(data?.error || "加载失败");
+      if (retryAt > Date.now()) sourceNote.textContent = `预计 ${new Date(retryAt).toLocaleTimeString('zh-CN', {hour:'2-digit', minute:'2-digit'})} 后可重试。`;
       return;
     }
     sourceNote.textContent = state.kind === "discussions" && data.source === "atom"
@@ -58,7 +73,7 @@
       <strong>#${Number(item.number)} · ${safe(item.title)}</strong>
       <small>${meta(item)}${item.category ? " · " + safe(item.category) : ""} ${item.comments_count == null ? "" : " · 回复 " + Number(item.comments_count)}</small>
     </button>`).join("") || '<p class="empty">此板块暂无主题。</p>';
-    document.getElementById("github-next").disabled = state.kind !== "issues" || items.length < 30;
+    document.getElementById("github-next").disabled = state.kind !== "issues" || !(data.has_next ?? items.length >= 30);
   }
   async function loadDetail(number) {
     state.number = number;
@@ -70,7 +85,7 @@
     const data = await request(`/discussions/api/item/${state.kind}/${number}`);
     if (generation !== state.generation) return;
     if (!data?.ok) {
-      detailBox.innerHTML = `<p class="form-message" role="alert">${safe(data?.error || "加载详情失败")}</p><button type="button" data-github-retry-detail>重试详情</button>`;
+      detailBox.innerHTML = failureView(data?.error || "加载详情失败", true);
       return;
     }
     const item = data.item;
@@ -86,7 +101,7 @@
     </article>`;
   }
   root.addEventListener("click", (event) => {
-    if (event.target.closest('[data-github-retry]')) { loadItems(); return; }
+    if (event.target.closest('[data-github-retry]')) { if (Date.now() < retryAt) { sourceNote.textContent = 'GitHub 额度尚未恢复，请稍后重试或使用直达入口。'; return; } loadItems(); return; }
     if (event.target.closest('[data-github-retry-detail]')) { loadDetail(state.number); return; }
     const tab = event.target.closest("[data-github-kind]");
     if (tab) { state.kind = tab.dataset.githubKind; state.page = 1; loadItems(); return; }

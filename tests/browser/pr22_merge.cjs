@@ -95,7 +95,7 @@ async function login(page, base, username, password, firstLogin=true) {
       assert.equal(saved.status(),200);
       assert.equal(await shortcut.getAttribute('aria-label'),theme==='dark'?'切换为银白主题':'切换为黑色主题');
       await page.reload();assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
-      await page.goto(base+'/tasks');await page.locator(`.task[data-task-id="${blocked.id}"]`).waitFor();
+      await page.goto(base+'/tasks');await page.locator('[data-view="status"]').click();await page.locator(`.task[data-task-id="${blocked.id}"]`).waitFor();
       assert.match(await page.locator(`.task[data-task-id="${blocked.id}"]`).getAttribute('class'),/is-blocked.*is-due-soon/);
       assert.match(await page.locator(`.task[data-task-id="${overdue.id}"]`).getAttribute('class'),/overdue/);
       await page.locator('#f-project').selectOption(String(project));await page.locator('.timeline-row').waitFor();
@@ -114,14 +114,14 @@ async function login(page, base, username, password, firstLogin=true) {
       await page.screenshot({path:path.join(output,theme+'-github.png'),fullPage:true});
       failGithub=true;await page.locator('[data-github-kind=issues]').click();await page.locator('#github-topic-list [role=alert]').waitFor();failGithub=false;
     }
-    await page.goto(base+'/tasks');await page.locator(`.task[data-task-id="${blocked.id}"]`).click();
+    await page.goto(base+'/tasks');await page.locator('[data-view="status"]').click();await page.locator(`.task[data-task-id="${blocked.id}"]`).click();
     await page.locator('#progress-form [name=progress]').fill('45');
     await page.locator('#progress-form [name=note]').fill('合并后无截图进度记录');
     await page.locator('#progress-form button[type=submit]').click();await page.locator('#modal-mask').waitFor({state:'hidden'});
     assert.equal((await api(page,`/api/task/${blocked.id}/progress`)).body.updates[0].progress,45);
     const managerContext=await browser.newContext(), manager=await managerContext.newPage();
     manager.on('pageerror',error=>errors.push(error.message));await login(manager,base,'merge-manager','merge-test-password');
-    await manager.goto(base+'/manage');await manager.locator('#create-parent').waitFor();
+    await manager.goto(base+'/tasks');await manager.locator('#new-task-toggle').click();await manager.locator('#create-parent').waitFor();
     assert.equal(await manager.locator('.task-create-dependencies').count(),1);
     assert.equal(await manager.locator('.task-create-details').count(),1);
     const child=await api(manager,'/api/task',{title:'项管创建主前置任务',owner_id:member.id,parent_id:blocked.id});assert.equal(child.status,200);

@@ -39,6 +39,7 @@
     </section>
   </div>
   <div class="ux-account-settings">
+    {% include "_email_settings.html" %}
     {% if not me.must_change_password %}<section class="panel">
       <h2>修改个人资料</h2>
       <p class="ux-note">用户名用于登录，修改成功后旧用户名不能再登录。专业组和造车组别均可多选。</p>
@@ -66,4 +67,5 @@
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='account.js') }}"></script>
+<script src="{{ url_for('static', filename='email.js') }}"></script>
 {% endblock %}

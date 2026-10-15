@@ -60,7 +60,7 @@ def login_required(view):
         if current_user() is None:
             if "/api/" in request.path:
                 return jsonify(ok=False, error="未登录"), 401
-            return redirect(url_for("login"))
+            return redirect(url_for("login", next=request.full_path.rstrip('?')))
         return view(*args, **kwargs)
     return wrapper
 

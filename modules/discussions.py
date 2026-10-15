@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import hashlib
+import time
 from html.parser import HTMLParser
 from xml.etree import ElementTree as ET
 from typing import Final, TypedDict
@@ -31,9 +33,10 @@ class GitHubUrls(TypedDict):
 
 
 class GitHubError(Exception):
-    def __init__(self, message: str, status: int = 502):
+    def __init__(self, message: str, status: int = 502, retry_after: int = 0):
         super().__init__(message)
         self.status = status
+        self.retry_after = retry_after
 
 
 def _repository() -> str | None:
@@ -64,6 +67,32 @@ def _token() -> str:
 
 
 def _remote(path: str, payload: dict | None = None, graphql: bool = False):
+    """Share short-lived reads within a worker and respect upstream cooldowns."""
+    scope = (_repository(), hashlib.sha256(_token().encode()).hexdigest())
+    key = scope + (path, graphql, json.dumps(payload, sort_keys=True))
+    cache = current_app.extensions.setdefault('github_read_cache', {})
+    cooldowns = current_app.extensions.setdefault('github_cooldowns', {})
+    now = time.time()
+    if key in cache and cache[key][0] > now:
+        return cache[key][1]
+    cooldown = cooldowns.get(scope)
+    if cooldown and cooldown[0] > now:
+        raise GitHubError(cooldown[1], 503, max(1, int(cooldown[0] - now)))
+    try:
+        result = _remote_uncached(path, payload, graphql)
+    except GitHubError as error:
+        if error.retry_after:
+            if len(cooldowns) >= 64:
+                cooldowns.clear()
+            cooldowns[scope] = (now + error.retry_after, str(error))
+        raise
+    if len(cache) >= 128:
+        cache.clear()
+    cache[key] = (time.time() + 60, result)
+    return result
+
+
+def _remote_uncached(path: str, payload: dict | None = None, graphql: bool = False):
     """Fixed GitHub API origin and validated repository prevent user-controlled SSRF."""
     repo = _repository()
     if repo is None:
@@ -92,12 +121,20 @@ def _remote(path: str, payload: dict | None = None, graphql: bool = False):
                 raise GitHubError("GitHub 响应超过限制")
             result = json.loads(content)
     except HTTPError as error:
-        if error.code in (401, 403, 429):
-            raise GitHubError("GitHub API 访问受限，请稍后重试", 503) from error
+        headers = error.headers or {}
+        if error.code in (403, 429) and (headers.get('X-RateLimit-Remaining') == '0' or error.code == 429 or headers.get('Retry-After')):
+            try:
+                delay = int(headers.get('Retry-After') or max(60, float(headers.get('X-RateLimit-Reset', 0)) - time.time()))
+            except (ValueError, TypeError):
+                delay = 60
+            delay = min(3600, max(1, delay))
+            raise GitHubError("GitHub 读取额度暂时用尽，额度恢复后可重新加载；现在可以前往 GitHub 查看。", 503, delay) from error
+        if error.code in (401, 403):
+            raise GitHubError("GitHub 读取授权不可用，请联系管理员检查连接设置；也可前往 GitHub 查看。", 503) from error
         if error.code == 404:
             raise GitHubError("GitHub 资源不存在或无访问权限", 404) from error
         raise GitHubError(f"GitHub API 暂不可用（HTTP {error.code}）") from error
-    except (URLError, TimeoutError, ValueError) as error:
+    except (URLError, TimeoutError, ValueError, OSError) as error:
         raise GitHubError("无法连接 GitHub，请稍后重试") from error
     if graphql:
         if result.get("errors"):
@@ -282,7 +319,7 @@ def items():
                 return jsonify(ok=False, error="页码不合法"), 400
             items = _remote(f"/issues?state=all&per_page=30&page={int(raw_page)}")
             return jsonify(ok=True, items=[_issue(item) for item in items if "pull_request" not in item],
-                           source="rest", comments_available=True)
+                           source="rest", comments_available=True, has_next=len(items) == 30 and int(raw_page) < 20)
         if _token():
             try:
                 data = (_graphql(_DISCUSSION_LIST, _parts()).get("repository") or {})
@@ -296,7 +333,7 @@ def items():
                 pass
         return jsonify(ok=True, items=_atom_feed(), source="atom", comments_available=False)
     except GitHubError as error:
-        return jsonify(ok=False, error=str(error)), error.status
+        return jsonify(ok=False, error=str(error), retry_after=error.retry_after), error.status
 
 
 @discussions_bp.get("/api/item/<kind>/<int:number>")
@@ -331,4 +368,4 @@ def detail(kind: str, number: int):
             return jsonify(ok=False, error="当前订阅源未收录该讨论，请在 GitHub 查看", url=_github_urls(_repository())["discussions"]), 404
         return jsonify(ok=True, item=item, comments=[], comments_available=False)
     except GitHubError as error:
-        return jsonify(ok=False, error=str(error)), error.status
+        return jsonify(ok=False, error=str(error), retry_after=error.retry_after), error.status

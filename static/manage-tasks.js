@@ -5,14 +5,14 @@ const taskFilters = { q: "", project: "", status: "" };
 function renderCreateChoices() {
   const owner = document.getElementById("create-owner");
   const project = document.getElementById("create-project");
-  refreshDraftSelect(owner, state.members, "未指定");
+  refreshDraftSelect(owner, state.members.filter((member) => member.role !== "admin"), "未指定");
   refreshDraftSelect(project, state.projects, "未选择");
   const participants = document.getElementById("create-participants");
   const dependencies = document.getElementById("create-dependencies");
   const parent = document.getElementById("create-parent");
-  refreshDraftChoices(participants, "participant_ids", state.members, (member) => member.name);
+  refreshDraftChoices(participants, "participant_ids", state.members.filter((member) => member.role !== "admin"), (member) => member.name);
   refreshDraftChoices(dependencies, "predecessor_ids", state.tasks, taskLabel);
-  refreshDraftSelect(parent, state.tasks, "无父任务");
+  refreshDraftSelect(parent, state.tasks.map((task) => ({...task, name: taskLabel(task)})), "无父任务");
 }
 
 function fillTaskFilters() {
@@ -167,6 +167,13 @@ addDataListener(() => {
   renderCatalogs();
 });
 document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("new-task-toggle")?.addEventListener("click", (event) => {
+    const panel = document.getElementById("task-create-panel");
+    panel.hidden = !panel.hidden;
+    event.currentTarget.setAttribute("aria-expanded", String(!panel.hidden));
+    event.currentTarget.textContent = panel.hidden ? "新建任务" : "收起新建任务";
+    if (!panel.hidden) document.querySelector('#create-form input[name="title"]')?.focus();
+  });
   bindTaskManagement();
   bindCatalogs();
 });

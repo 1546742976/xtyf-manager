@@ -5,7 +5,7 @@ function modalMembers(task) {
   taskParticipants(task).forEach((id) => {
     if (!map.has(id)) map.set(id, { id, name: `成员 #${id}`, is_active: 0 });
   });
-  return [...map.values()];
+  return [...map.values()].filter((member) => member.role !== "admin" || taskParticipants(task).includes(Number(member.id)));
 }
 function memberLabel(member) {
   return `${member.name}${(member.group_names || [member.group_name]).filter(Boolean).length ? ` · ${(member.group_names || [member.group_name]).filter(Boolean).join("/")}` : ""}`;
@@ -16,7 +16,7 @@ function memberOptions(members, selected) {
     members
       .map(
         (member) =>
-          `<option value="${Number(member.id)}" ${Number(member.id) === Number(selected) ? "selected" : ""}>${esc(memberLabel(member))}${member.is_active === 0 ? "（已停用）" : ""}</option>`,
+          `<option ${member.role === "admin" ? "hidden" : ""} value="${Number(member.id)}" ${Number(member.id) === Number(selected) ? "selected" : ""}>${esc(memberLabel(member))}${member.role === "admin" ? "（历史分配）" : ""}${member.is_active === 0 ? "（已停用）" : ""}</option>`,
       )
       .join("")
   );
@@ -41,11 +41,11 @@ function taskForm(task) {
   return `<form id="task-form" class="task-settings"><input type="hidden" name="version" value="${Number(task.version || 0)}">
     <label>标题<input name="title" value="${esc(task.title)}" required></label>
     <div class="grid-2"><label>负责人（主负责人）<select name="owner_id">${memberOptions(members, task.owner_id)}</select></label><label>造车组别<select name="project_id">${options(state.projects, task.project_id, "未选择")}</select></label></div>
-    <fieldset><legend>参与成员（可多选）</legend><p class="field-help">负责人和参与成员都可编辑任务设置。</p>${choiceGrid("participant_ids", members, task.participant_ids || [], memberLabel)}</fieldset>
+    <fieldset><legend>参与成员（可多选）</legend><p class="field-help">负责人和参与成员都可编辑任务设置。</p>${choiceGrid("participant_ids", members.filter((member) => member.role !== "admin"), task.participant_ids || [], memberLabel)}${members.filter((member) => member.role === "admin" && (task.participant_ids || []).includes(Number(member.id))).map((member) => `<input type="hidden" name="legacy_admin_participant" value="${Number(member.id)}">`).join('')}</fieldset>
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
     <div class="grid-2"><label>开始日期<input name="start_date" type="date" value="${esc(task.start_date)}"></label><label>截止日期<input name="due_date" type="date" value="${esc(task.due_date)}"></label></div>
     ${task.suggested_start_date ? `<p class="advisory">根据前置任务计划截止日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}
-    ${`<label>主前置任务（父任务）<select name="parent_id">${options(others, task.parent_id, "无父任务")}</select></label>`}
+    ${`<label>主前置任务（父任务）<select name="parent_id">${options(others.map((item) => ({...item, name: taskLabel(item)})), task.parent_id, "无父任务")}</select></label>`}
     <fieldset><legend>其他前置任务（支持多选）</legend>${choiceGrid("predecessor_ids", others, task.predecessor_ids || [], taskLabel)}</fieldset>
     ${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}
     <label>说明<textarea name="detail" rows="3">${esc(task.detail)}</textarea></label><label>本次更新备注<input name="note" placeholder="选填，记录本次调整原因"></label>
@@ -72,7 +72,7 @@ function bindTaskForm(task, generation) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(form));
-    payload.participant_ids = checkedValues(form, "participant_ids");
+    payload.participant_ids = [...checkedValues(form, "participant_ids"), ...[...form.querySelectorAll('[name="legacy_admin_participant"]')].map((input) => Number(input.value))];
     payload.predecessor_ids = checkedValues(form, "predecessor_ids");
     const projectSelect = form.querySelector('[name="project_id"]');
     if (projectSelect) payload.project_id = retainArchivedCatalogSelection(

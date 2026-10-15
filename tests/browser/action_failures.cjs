@@ -41,9 +41,9 @@ async function api(page,url,data,method='POST') {
     await page.unroute('**/api/password');await page.locator('#account-password-form button').click();await page.waitForURL(base+'/');
     checks.push('login network failure and password-save rejection retain inputs and recover');
     await api(page,'/api/admin/permissions/1',{permissions:['funds.review','invoices.manage']});
-    const task=(await api(page,'/api/task',{title:'按钮失败测试任务',owner_id:1})).body;
+    const task=(await api(page,'/api/task',{title:'按钮失败测试任务'})).body;
 
-    await page.goto(base+'/manage');await page.locator('#create-form [name=title]').fill('保留任务输入');
+    await page.goto(base+'/tasks');await page.locator('#new-task-toggle').click();await page.locator('#create-form [name=title]').fill('保留任务输入');
     let release,calls=0;const held=new Promise(resolve=>release=resolve);
     await page.route('**/api/task',async r=>{calls++;await held;await r.fulfill({status:500,json:{ok:false,error:'模拟创建失败'}});});
     await page.evaluate(()=>{const form=document.getElementById('create-form');form.requestSubmit();form.requestSubmit();});
@@ -52,6 +52,7 @@ async function api(page,url,data,method='POST') {
     await page.locator('#create-form .form-message').filter({hasText:'模拟创建失败'}).waitFor();
     assert.equal(await page.locator('#create-form [name=title]').inputValue(),'保留任务输入');await idle('#create-form button[type=submit]');
     await page.unroute('**/api/task');checks.push('duplicate task submit sends one request; failure restores controls and draft');
+    await page.goto(base+'/manage');
     await reject(`**/api/task/${task.id}/delete`);
     await page.locator(`[data-delete-task="${task.id}"]`).click();await idle(`[data-delete-task="${task.id}"]`);
     assert.ok((await api(page,'/api/data')).body.tasks.some(t=>t.id===task.id));await page.unroute(`**/api/task/${task.id}/delete`);

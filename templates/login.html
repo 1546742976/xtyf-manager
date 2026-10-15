@@ -51,7 +51,7 @@ document.getElementById('login-form').addEventListener('submit', async (event) =
     res = await BusinessUI.fetch('/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: form.get('username'), password: form.get('password') }),
+    body: JSON.stringify({ username: form.get('username'), password: form.get('password'), next: new URLSearchParams(location.search).get('next') }),
     });
   } catch (error) {
     const el = document.getElementById('login-error');

@@ -65,6 +65,10 @@ This is an internal operations workstation for team members, project managers, a
 
 ## 8. Accepted debt and handoff
 
+- Daily projects use their own sidebar entry and one card per shared goal. Explicit group ownership controls editing; mechanical, electrical and vision panels retain independent drafts. Mobile panels stack vertically. The dashboard daily-project summary is separate from vehicle-task metrics. Email configuration appears in account settings; delivery state is stated in text, and SMTP acceptance must never be labelled inbox delivery.
+- Task-center person lanes initially show one task, with a bottom-right button to reveal remaining tasks. Expansion survives refresh polling in page memory, independently of tree expansion. Compact cards reserve a single-line note, using the latest nonempty progress note or “无备注”; full history and screenshots remain in details. Authorized administrators/managers create tasks from the task center; the management page retains catalogs, scheduling and existing-task operations. Administrators are excluded from new vehicle-task assignments, while existing historical associations are preserved.
+- GitHub API reads are cached for 60 seconds per worker and credential scope; upstream rate-limit cooldowns are honored. Failed lists use a compact error panel with a direct GitHub link, never an empty-success state. Pagination follows the upstream page length before filtering pull requests.
+
 - Legacy styles retain structural rules; `static/apple.css` is the final shared visual layer. New visual changes belong in that layer and reuse its semantic tokens. The finance Bootstrap and invoice modal containers keep their original layout behavior.
 - The task table remains horizontally scrollable on narrow screens because all columns are operationally meaningful.
 - Browser screenshot and interaction QA is a separate final verification lane after backend integration; this implementation must still pass static syntax and server render checks first.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check XTYF mail queue every five minutes
+
+[Timer]
+OnCalendar=*-*-* *:0/5:00
+Persistent=true
+Unit=rm-mail.service
+
+[Install]
+WantedBy=timers.target

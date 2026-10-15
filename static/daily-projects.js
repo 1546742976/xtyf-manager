@@ -1,0 +1,131 @@
+"use strict";
+(() => {
+  const stages = {mechanical:'机械',electrical:'电控',vision:'视觉'};
+  const statuses = ['未开始','进行中','已完成','阻塞','已取消'];
+  const escape = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  async function request(url, data) {
+    const options = data === undefined ? {} : data instanceof FormData ? {method:'POST',body:data} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)};
+    const response = await BusinessUI.fetch(url,options), body = await response.json();
+    if(!response.ok || !body.ok) throw new Error(body.error || '请求失败');
+    return body;
+  }
+  function reasons(project) {
+    if(['已完成','已取消'].includes(project.status))return '';
+    const days=project.days_left, labels=[];
+    if(days!==null && days<0)labels.push(`已逾期 ${-days} 天`);
+    if(project.status==='阻塞')labels.push('阻塞');
+    if(days!==null && days>=0 && days<=3)labels.push(days===0?'今天截止':`剩余 ${days} 天`);
+    return labels.join(' · ');
+  }
+  function meter(value,label) {
+    return `<div class="daily-meter"><span>${escape(label)} <strong>${Number(value)}%</strong></span><progress max="100" value="${Number(value)}" aria-label="${escape(label)}"></progress></div>`;
+  }
+  function card(project) {
+    const enabled=project.groups.filter(g=>g.enabled), owners=[...new Set(enabled.flatMap(g=>g.owners.map(o=>o.name)))];
+    return `<article class="daily-card${reasons(project)?' daily-alert':''}"><h2><a href="/daily-projects/${project.id}">${escape(project.title)}</a></h2><p>${escape(project.status)} · ${escape(project.priority)}优先级</p><p class="muted">${escape(owners.join('、'))}</p>${meter(project.progress,'总进度')}<div>${enabled.map(g=>meter(g.progress,g.label)).join('')}</div><p>${escape(reasons(project)|| (project.due_date?'截止：'+project.due_date:'未设置截止日期'))}</p><a class="btn" href="/daily-projects/${project.id}">查看项目</a></article>`;
+  }
+  const dashboard=document.getElementById('daily-dashboard');
+  if(dashboard) {
+    const load=async()=>{
+      const data=await request('/api/daily-projects?dashboard=1');
+      dashboard.innerHTML=`<p>已展示 ${data.items.length}／共 ${data.total} 项</p><div class="daily-grid">${data.items.map(card).join('') || '<p>暂无自己的待办或需要提醒的日常项目</p>'}</div>`;
+    };
+    const refresh=document.getElementById('daily-dashboard-refresh');
+    const reload=()=>BusinessUI.action('daily-dashboard',[refresh],load,error=>{dashboard.textContent=error+'；可点击刷新重试。';});
+    refresh.addEventListener('click',reload); reload();
+  }
+  const root=document.getElementById('daily-app');
+  if(!root)return;
+  const isManager=root.dataset.manager==='1', memberId=Number(root.dataset.memberId);
+  const host=document.getElementById('daily-detail'), editor=document.getElementById('daily-editor'), message=document.getElementById('daily-message');
+  let page=1, members=[], groups=[], current=null;
+  const feedback=text=>{message.textContent=text;};
+  const action=(key, controls, work)=>BusinessUI.action(key,controls,work,feedback);
+  const choice=(items, selected)=>items.map(value=>`<option ${value===selected?'selected':''}>${escape(value)}</option>`).join('');
+  async function list() {
+    const form=document.getElementById('daily-filters'), params=new URLSearchParams(new FormData(form));
+    params.set('mine',form.elements.mine.checked?'1':'0'); params.set('page',page);
+    const data=await request('/api/daily-projects?'+params);
+    document.getElementById('daily-list').innerHTML=data.items.map(card).join('') || '<p class="empty">暂无符合条件的项目</p>';
+    const pages=document.getElementById('daily-pages');
+    pages.innerHTML=`<button class="btn" type="button" data-page="${page-1}" ${page<=1?'disabled':''}>上一页</button><span>第 ${page} 页 · 共 ${data.total} 项</span><button class="btn" type="button" data-page="${page+1}" ${page*20>=data.total?'disabled':''}>下一页</button>`;
+  }
+  function own(group) {return isManager || group.owners.some(o=>o.id===memberId);}
+  async function history(project, stage, before) {
+    const box=host.querySelector(`[data-history="${stage}"]`);
+    if(!box)return;
+    const data=await request(`/api/daily-projects/${project.id}/groups/${stage}/progress`+(before?'?before='+before:''));
+    if(current?.id!==project.id || !box.isConnected)return;
+    const rows=data.updates.map(row=>`<article class="daily-update"><strong>${row.progress}% · ${escape(row.actor_name)}</strong><time>${escape(row.created_at)}</time><p class="daily-note">${escape(row.note||'无备注')}</p><div class="daily-images">${row.images.map(image=>`<a href="${escape(image.url)}" target="_blank" rel="noopener"><img src="${escape(image.url)}" alt="${escape(image.original_name)}" loading="lazy"></a>`).join('')}</div></article>`).join('');
+    if(before)box.querySelector('[data-more]')?.remove();else box.innerHTML='';
+    box.insertAdjacentHTML('beforeend',rows || (!before?'<p class="muted">还没有进度记录</p>':''));
+    if(data.next_before)box.insertAdjacentHTML('beforeend',`<button class="btn" type="button" data-more="${data.next_before}" data-stage="${stage}">加载更早记录</button>`);
+  }
+  async function show(id) {
+    const data=await request('/api/daily-projects/'+id); current=data.project;
+    const project=current, closed=['已完成','已取消'].includes(project.status);
+    host.hidden=false; editor.hidden=true; document.getElementById('daily-list-panel').hidden=true;
+    host.innerHTML=`<a class="btn" href="/daily-projects">返回项目列表</a><h2>${escape(project.title)}</h2><p class="daily-note">${escape(project.detail||'暂无目标说明')}</p><p>${escape(project.status)} · ${escape(project.priority)}优先级 · ${escape(project.start_date||'未设开始日期')} → ${escape(project.due_date||'未设截止日期')}</p><p>${escape(reasons(project))}</p>${meter(project.progress,'总进度')}${isManager?`<div class="daily-actions"><button type="button" class="btn" id="daily-edit">${closed?'重新打开／调整项目':'编辑项目'}</button><button type="button" class="btn danger" id="daily-delete">删除项目</button></div>`:''}<div class="daily-group-grid">${project.groups.map(g=>`<section class="daily-group"><h3>${escape(g.label)}${g.enabled?'':'（已停用）'}</h3><p>负责人：${g.owners.map(o=>escape(o.name)+(!o.is_active||o.deleted_at?'（已停用）':'')).join('、')}</p>${meter(g.progress,g.label+'进度')}${g.enabled&&!closed&&own(g)?`<form data-progress-form="${g.stage}"><label>进度百分比<input name="progress" type="number" min="0" max="100" step="1" value="${g.progress}" required></label><label>进度备注<textarea name="note" rows="3" maxlength="2000"></textarea></label><label>图片（最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple></label><button class="btn primary" type="submit">提交${escape(g.label)}进度</button><p class="form-message" role="status" aria-live="polite"></p></form>`:'<p class="muted">只读记录</p>'}<h4>进度记录</h4><div data-history="${g.stage}">加载中…</div><button class="btn" type="button" data-history-retry="${g.stage}">刷新记录</button></section>`).join('')}</div>`;
+    for(const group of project.groups) history(project,group.stage).catch(error=>{const box=host.querySelector(`[data-history="${group.stage}"]`);if(box)box.textContent=error.message;});
+    document.getElementById('daily-edit')?.addEventListener('click',()=>action('daily-editor',[document.getElementById('daily-edit')],()=>edit(project)));
+    document.getElementById('daily-delete')?.addEventListener('click',()=>{
+      if(!confirm('删除该项目？项目将从列表移除，历史记录仍保留。'))return;
+      action('daily-delete',host.querySelectorAll('button'),async()=>{await request(`/api/daily-projects/${id}/delete`,{version:project.version});location.assign('/daily-projects');});
+    });
+    host.querySelectorAll('[data-progress-form]').forEach(form=>form.addEventListener('submit',event=>{
+      event.preventDefault();
+      const stage=form.dataset.progressForm, group=current.groups.find(g=>g.stage===stage), local=form.querySelector('.form-message');
+      BusinessUI.action('daily-progress:'+id+stage,form.querySelectorAll('button'),async()=>{
+        if(form.elements.files.files.length>5)throw new Error('一次最多上传 5 张图片');
+        const fields={progress:Number(form.elements.progress.value),note:form.elements.note.value,version:group.version,project_version:current.version};
+        let body=fields;
+        if(form.elements.files.files.length){body=new FormData(form);body.set('version',group.version);body.set('project_version',current.version);}
+        local.textContent='正在保存…';
+        const result=await request(`/api/daily-projects/${id}/groups/${stage}/progress`,body);
+        group.version=result.version;group.progress=fields.progress;
+        form.elements.note.value='';form.elements.files.value='';local.textContent='进度已保存';
+        const section=form.closest('.daily-group');section.querySelector('progress').value=fields.progress;section.querySelector('.daily-meter strong').textContent=fields.progress+'%';
+        // Refresh only this history and total; preserve drafts in the other groups.
+        try {
+          const fresh=(await request('/api/daily-projects/'+id)).project;
+          host.querySelector(':scope > .daily-meter strong').textContent=fresh.progress+'%';host.querySelector(':scope > .daily-meter progress').value=fresh.progress;
+          await history(current,stage);
+        } catch(error) {local.textContent='进度已保存，但最新摘要加载失败，请刷新记录核对：'+error.message;}
+      },text=>{local.textContent=text+'；输入已保留。若版本冲突，请记录草稿后重新打开项目。';});
+    }));
+  }
+  host.addEventListener('click',event=>{
+    const retry=event.target.closest('[data-history-retry]'),more=event.target.closest('[data-more]');
+    if(retry||more)action('history:'+(retry?.dataset.historyRetry||more.dataset.stage),[retry||more],()=>history(current,retry?.dataset.historyRetry||more.dataset.stage,more?.dataset.more));
+  });
+  async function edit(project=null) {
+    if(!members.length){const data=await request('/api/data');members=data.members;groups=data.groups;}
+    editor.hidden=false;
+    const enabled=project?.groups.filter(g=>g.enabled)||[];
+    editor.innerHTML=`<h2>${project?'编辑项目':'新建项目'}</h2><form id="daily-form" class="ux-account-form"><label>目标名称<input name="title" maxlength="200" required value="${escape(project?.title||'')}"></label><label>目标说明<textarea name="detail" maxlength="10000" rows="3">${escape(project?.detail||'')}</textarea></label><div class="daily-form-row"><label>状态<select name="status">${choice(statuses,project?.status||'未开始')}</select></label><label>优先级<select name="priority">${choice(['高','中','低'],project?.priority||'中')}</select></label><label>开始日期<input type="date" name="start_date" value="${escape(project?.start_date||'')}"></label><label>截止日期<input type="date" name="due_date" value="${escape(project?.due_date||'')}"></label></div><p>至少启用一个组，每组至少选一位负责人；按住 Ctrl／Command 可多选。调整参与组会重新计算总进度，停用组的历史保留。</p><div class="daily-group-grid">${Object.entries(stages).map(([stage,label])=>{
+      const group=project?.groups.find(g=>g.stage===stage),ids=group?.owners.map(o=>o.id)||[];
+      const sorted=[...members].sort((a,b)=>Number((b.group_ids||[]).some(id=>groups.find(g=>g.id===id)?.name===label))-Number((a.group_ids||[]).some(id=>groups.find(g=>g.id===id)?.name===label))||a.id-b.id);
+      return `<fieldset><legend><label><input type="checkbox" name="enabled" value="${stage}" ${enabled.some(g=>g.stage===stage)?'checked':''}>${label}</label></legend><label>搜索负责人<input type="search" data-owner-search="${stage}"></label><div class="daily-owner-choices" data-owner-choices="${stage}">${sorted.map(m=>`<label data-owner-name="${escape(m.name)}"><input type="checkbox" name="owners-${stage}" value="${m.id}" ${ids.includes(m.id)?'checked':''}>${escape(m.name)} <small>${escape((m.group_ids||[]).map(id=>groups.find(g=>g.id===id)?.name).filter(Boolean).join('／'))}</small></label>`).join('')}</div></fieldset>`;
+    }).join('')}</div><div class="daily-actions"><button type="submit" class="btn primary">保存项目</button><button type="button" class="btn" id="daily-editor-close">取消</button></div><p class="form-message" role="status" aria-live="polite"></p></form>`;
+    const form=document.getElementById('daily-form');
+    form.querySelector('p').textContent='至少启用一个组，每组至少勾选一位负责人。调整参与组会重新计算总进度，停用组的历史保留。';
+    editor.querySelectorAll('[data-owner-search]').forEach(input=>input.addEventListener('input',()=>{editor.querySelectorAll(`[data-owner-choices="${input.dataset.ownerSearch}"] [data-owner-name]`).forEach(label=>{label.hidden=!label.dataset.ownerName.toLowerCase().includes(input.value.toLowerCase());});}));
+    document.getElementById('daily-editor-close').addEventListener('click',()=>{editor.hidden=true;});
+    form.addEventListener('submit',event=>{
+      event.preventDefault();const local=form.querySelector('.form-message');
+      BusinessUI.action('daily-save',form.querySelectorAll('button'),async()=>{
+        const body=Object.fromEntries(new FormData(form)); body.groups={};if(project)body.version=project.version;
+        form.querySelectorAll('[name=enabled]:checked').forEach(input=>{body.groups[input.value]=[...form.querySelectorAll(`[name="owners-${input.value}"]:checked`)].map(input=>Number(input.value));});
+        local.textContent='正在保存…';const result=await request('/api/daily-projects'+(project?'/'+project.id:''),body);
+        location.assign('/daily-projects/'+result.id);
+      },text=>{local.textContent=text;});
+    });
+    editor.querySelector('[name=title]').focus();editor.scrollIntoView({block:'start'});
+  }
+  document.getElementById('daily-new')?.addEventListener('click',()=>action('daily-editor',[document.getElementById('daily-new')],()=>edit()));
+  const reload=()=>action('daily-load',[document.getElementById('daily-reload')],()=>root.dataset.projectId?show(Number(root.dataset.projectId)):list());
+  document.getElementById('daily-reload').addEventListener('click',reload);
+  document.getElementById('daily-filters').addEventListener('submit',event=>{event.preventDefault();page=1;reload();});
+  document.getElementById('daily-pages').addEventListener('click',event=>{if(event.target.dataset.page){page=Number(event.target.dataset.page);reload();}});
+  reload();
+})();

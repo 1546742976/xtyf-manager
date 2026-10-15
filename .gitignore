@@ -25,3 +25,5 @@ backups/
 *.log
 .omo/
 dist/
+mail.env
+data/mail-preview/

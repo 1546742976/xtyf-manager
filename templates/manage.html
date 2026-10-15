@@ -3,30 +3,10 @@
 {% block title %}任务管理{% endblock %}
 {% block content %}
 <div class="ux-page-head">
-  <div><p class="ux-eyebrow">TEAM / MANAGEMENT</p><h1>任务管理</h1><p>创建任务、分配负责人、维护优先级与截止日期。</p></div>
+  <div><p class="ux-eyebrow">TEAM / MANAGEMENT</p><h1>任务管理</h1><p>管理造车组别、排期和现有任务；新任务在任务中心创建。</p></div>
   <div class="ux-page-actions"><a class="btn" href="{{ url_for('tasks') }}">任务中心</a><a class="btn" href="{{ url_for('members') }}">成员管理</a><a class="btn" data-download-name="tasks.csv" href="{{ url_for('export_csv') }}">导出任务 CSV</a></div>
 </div>
-<section class="panel">
-  <h2>新建任务</h2>
-  <p class="ux-note">负责人可暂不指定；选择参与成员后必须指定负责人。任务按造车组别（步兵、哨兵、重装、飞镖等）归档，专业组只用于成员技能分类。</p>
-  <!-- 新建任务表单：剩余天数由截止日期自动计算，无需手工填写 -->
-<form id="create-form" class="form-grid">
-    <label class="span-2">任务标题<input name="title" required></label>
-    <label>负责人<select name="owner_id" id="create-owner"><option value="">未指定</option></select></label>
-    <label>造车组别<select name="project_id" id="create-project"><option value="">未选择</option></select></label>
-    <fieldset class="span-2"><legend>参与成员（可多选）</legend><div id="create-participants" class="choice-host"></div></fieldset>
-    <label>优先级<select name="priority">{% for p in priorities %}<option>{{ p }}</option>{% endfor %}</select></label>
-    <label>状态<select name="status">{% for s in statuses %}<option>{{ s }}</option>{% endfor %}</select></label>
-    <label>开始日期<input name="start_date" type="date"></label>
-    <label>截止日期<input name="due_date" type="date"></label>
-    <label>主前置任务（父任务）<select name="parent_id" id="create-parent"><option value="">无父任务</option></select></label>
-    <fieldset class="span-2 task-create-dependencies"><legend>其他前置任务（支持多选，将绘制连线）</legend><div id="create-dependencies" class="choice-host"></div></fieldset>
-    <div class="span-2 task-create-details">
-      <label>说明<textarea name="detail" rows="2"></textarea></label>
-      <div class="task-create-actions"><button class="btn primary" type="submit">创建任务</button><p class="form-message" role="alert"></p></div>
-    </div>
-  </form>
-</section>
+
 
 <section class="panel">
   <h2>造车组别字典</h2><p class="ux-note">按车种/机器人类别管理任务，例如步兵、哨兵、重装、飞镖。可自行增加或重命名；不会改变成员的专业组。</p>

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}日常项目{% endblock %}
+{% block content %}
+<div id="daily-app" data-member-id="{{ me.id }}" data-manager="{{ '1' if me.role in ('admin','manager') else '0' }}" data-project-id="{{ project_id or '' }}">
+<div class="ux-page-head"><div><p class="ux-eyebrow">TEAM / DAILY PROJECTS</p><h1>日常项目</h1><p>一个共同目标，按机械、电控、视觉分别记录进度。</p></div>{% if me.role in ('admin','manager') %}<button class="btn primary" type="button" id="daily-new">新建项目</button>{% endif %}</div>
+<p id="daily-message" role="status" aria-live="polite"></p>
+<section id="daily-editor" class="panel" hidden></section>
+<section id="daily-detail" class="panel" hidden></section>
+<section id="daily-list-panel">
+<form id="daily-filters" class="toolbar daily-filters"><label>搜索目标<input name="q" type="search" maxlength="200"></label><label>状态<select name="status"><option value="">全部状态</option>{% for status in ['未开始','进行中','已完成','阻塞','已取消'] %}<option>{{ status }}</option>{% endfor %}</select></label><label><input name="mine" type="checkbox">我负责的</label><button class="btn" type="submit">筛选</button><button class="btn" type="button" id="daily-reload">刷新</button></form>
+<div id="daily-list" class="daily-grid"></div><div id="daily-pages" class="daily-actions"></div>
+</section></div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static',filename='daily-projects.js') }}"></script>{% endblock %}

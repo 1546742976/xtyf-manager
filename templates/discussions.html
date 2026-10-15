@@ -6,7 +6,7 @@
     <p>在工作台同步浏览 GitHub Issues 与 Discussions；创建、评论和回复请在 GitHub 完成。</p></div>
 </div>
 {% if github_urls %}
-<section class="panel github-hub" id="github-hub" data-new-issue="{{ github_urls.new_issue }}" data-new-discussion="{{ github_urls.new_discussion }}">
+<section class="panel github-hub" id="github-hub" data-repository="{{ github_urls.repository }}" data-new-issue="{{ github_urls.new_issue }}" data-new-discussion="{{ github_urls.new_discussion }}">
   <div class="github-hub-toolbar">
     <div class="seg" role="tablist" aria-label="GitHub 协作板块">
       <button type="button" role="tab" class="active" aria-selected="true" data-github-kind="issues">Issues · 问题与建议</button>
@@ -21,7 +21,7 @@
   </div>
   <div class="github-pages"><button type="button" class="btn ghost sm" id="github-prev" disabled>上一页</button><span id="github-page">第 1 页</span><button type="button" class="btn ghost sm" id="github-next">下一页</button></div>
 </section>
-<p class="ux-note">只读展示板：Issues 直接读取公开 API；Discussions 可通过 GitHub 官方 Atom 订阅源读取近期公开主题，无须配置 Token。若服务器配置只读 <code>GITHUB_TOKEN</code>，可查看讨论回复。
+<p class="ux-note">这里展示仓库的近期问题与讨论；连接暂时不可用时，可直接到 GitHub 查看。
   创建和参与讨论需使用个人 GitHub 账号，前往 <a href="{{ github_urls.discussions }}" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> 或 <a href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">新建 Issue</a>。请勿公开敏感信息。</p>
 {% else %}
 <section class="panel"><h2>尚未配置 GitHub 仓库</h2><p class="ux-note">请联系管理员配置 GITHUB_REPOSITORY（格式：owner/repository），然后重新打开此页面。</p></section>
