@@ -18,6 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--jdk', type=Path, default=next((ROOT / '.build-tools/jdk21').glob('jdk-*'), None))
     parser.add_argument('--sdk', type=Path, default=ROOT / '.build-tools/android')
+    parser.add_argument('--output-dir', type=Path, default=ROOT / 'dist/clients/android')
     args = parser.parse_args()
     if not args.jdk:
         parser.error('Provide --jdk pointing to a JDK 17 or newer')
@@ -33,7 +34,7 @@ def main():
         arguments = [str(command[0])] + [str(v.relative_to(ROOT) if isinstance(v, Path) and v.is_relative_to(ROOT) else v) for v in command[1:]]
         subprocess.run(arguments, check=True, env=env, cwd=ROOT)
     config = json.loads((CLIENT / 'config.json').read_text(encoding='utf-8'))
-    out = ROOT / 'dist/clients/android'
+    out = args.output_dir.resolve()
     work = (SOURCE / 'build').resolve()
     # Compile from an empty directory so removed Java/DEX classes cannot survive.
     if work.parent != SOURCE.resolve():

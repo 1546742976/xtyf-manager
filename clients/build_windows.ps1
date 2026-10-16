@@ -1,4 +1,4 @@
-param([switch]$InstallDependencies)
+param([switch]$InstallDependencies, [string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $env:ELECTRON_CACHE = Join-Path $projectRoot '.build-tools\electron-cache'
@@ -16,6 +16,7 @@ try {
     npm.cmd test
     if ($LASTEXITCODE -ne 0) { throw 'Client tests failed' }
     $extraArguments = @()
+    if ($OutputDirectory) { $extraArguments += "-c.directories.output=$([IO.Path]::GetFullPath($OutputDirectory))" }
     $localElectron = Join-Path $projectRoot '.build-tools\electron-dist'
     if (Test-Path (Join-Path $localElectron 'electron.exe')) { $extraArguments += "-c.electronDist=$localElectron" }
     & .\node_modules\.bin\electron-builder.cmd --win nsis --x64 --publish never "-c.extraMetadata.version=$($config.version)" @extraArguments

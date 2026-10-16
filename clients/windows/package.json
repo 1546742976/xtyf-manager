@@ -1,7 +1,8 @@
 {
   "name": "xtyf-manager-client",
-  "version": "1.0.0",
-  "description": "巡天御风管理系统 Windows 客户端",
+  "version": "1.0.3",
+  "description": "巡天御风管理系统桌面客户端",
+  "homepage": "http://manager.skywalker-rm.online",
   "author": "巡天御风",
   "private": true,
   "main": "main.cjs",
@@ -18,16 +19,78 @@
     "appId": "online.skywalker.manager",
     "productName": "巡天御风管理系统",
     "artifactName": "XTYF-Manager-Setup-${version}-${arch}.${ext}",
-    "directories": { "output": "../../dist/clients/windows" },
-    "files": ["main.cjs", "preload.cjs", "url.cjs", "settings.html", "settings.js", "config.json"],
-    "win": { "target": "nsis", "icon": "icon.ico", "signExecutable": false },
+    "directories": {
+      "output": "../../dist/clients/windows"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "url.cjs",
+      "settings.html",
+      "settings.js",
+      "config.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico",
+      "signExecutable": false
+    },
+    "linux": {
+      "executableName": "xtyf-manager",
+      "maintainer": "巡天御风 <1546742976@qq.com>",
+      "vendor": "巡天御风",
+      "category": "Office",
+      "icon": "icon-256x256.png",
+      "artifactName": "XTYF-Manager-${version}-${arch}.${ext}"
+    },
+    "deb": {
+      "packageName": "xtyf-manager",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2",
+        "libgbm1",
+        "libdrm2",
+        "libxkbcommon0",
+        "libcups2"
+      ]
+    },
+    "rpm": {
+      "packageName": "xtyf-manager",
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "libXtst",
+        "xdg-utils",
+        "at-spi2-core",
+        "libuuid",
+        "libsecret",
+        "alsa-lib",
+        "mesa-libgbm",
+        "libdrm",
+        "libxkbcommon",
+        "cups-libs"
+      ]
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "installerLanguages": ["zh_CN", "en_US"],
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
       "displayLanguageSelector": false,
       "deleteAppDataOnUninstall": false
     }
