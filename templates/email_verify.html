@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}确认收件邮箱{% endblock %}
 {% block content %}
-<section class="panel"><h1>确认收件邮箱</h1><p>请使用申请绑定邮箱的账户登录。确认后每天北京时间 22:00 接收全团队未完成事项及当天完成事项的简报；如需暂停，请联系管理员。</p>
+<section class="panel"><h1>确认收件邮箱</h1><p>请使用申请绑定邮箱的账户登录。确认后每天北京时间 08:00 接收个人未完成任务早报，22:00 接收全团队未完成事项及当天完成事项的简报，包含周末。无个人事项时不发送早报；如需暂停两类邮件，请联系管理员。</p>
 {% if me %}<p>当前账户：{{ me.name }}（{{ me.username }}）</p>{% else %}<p>请先<a href="/login" target="_blank" rel="noopener">在新标签页登录</a>，然后回到这里确认。</p>{% endif %}
 <button class="btn primary" type="button" id="email-confirm">确认绑定</button><p id="email-confirm-result" role="status" aria-live="polite"></p></section>
 {% endblock %}

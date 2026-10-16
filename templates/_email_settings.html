@@ -1,5 +1,5 @@
 {% if not me.must_change_password %}
-<section class="panel"><h2>团队项目晚报</h2><p>验证邮箱后，每天北京时间 22:00 收到全团队未完成事项及当天完成事项的简报。仅对您负责且超过 48 小时未更新的任务或项目组提示催更。如需暂停，请联系管理员。</p>
+<section class="panel"><h2>每日任务邮件</h2><p>验证邮箱后，每天北京时间 08:00 收到个人未完成任务早报，22:00 收到全团队未完成事项及当天完成事项的简报，包含周末。无个人事项时不发送早报。仅对您负责且超过 48 小时未更新的任务或项目组提示催更。如需暂停两类邮件，请联系管理员。</p>
 <p id="email-state" role="status">正在加载邮箱状态…</p>
 <form id="email-form" class="ux-account-form"><label for="email-address">收件邮箱</label><input id="email-address" name="email" type="email" maxlength="254" autocomplete="email" required><button type="submit" class="btn">发送／重发验证邮件</button><p>修改邮箱会停止向原地址发送，新地址验证后恢复。</p><p id="email-result" role="status" aria-live="polite"></p></form>
 <button type="button" class="btn" id="email-refresh">刷新验证状态</button>

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}邮件提醒管理{% endblock %}
 {% block content %}
-<div id="mail-admin"><h1>邮件提醒管理</h1><p>每天北京时间 22:00 汇总截至发送时全团队未完成及当天完成的事项，仅对收件人负责且超过 48 小时未更新的事项催更。“SMTP 已接受”仅表示邮件服务器接受，不表示已进入收件箱。</p>
+<div id="mail-admin"><h1>邮件提醒管理</h1><p>每天北京时间 08:00 发送个人未完成任务早报，22:00 汇总截至发送时全团队未完成及当天完成的事项，包含周末。无个人事项时不发送早报；暂停提醒同时暂停早报和晚报。仅对收件人负责且超过 48 小时未更新的事项催更。“SMTP 已接受”仅表示邮件服务器接受，不表示已进入收件箱。</p>
 <div class="daily-actions"><button type="button" class="btn" id="mail-refresh">刷新</button><button type="button" class="btn" id="mail-test">向本人发送测试邮件</button></div><p id="mail-result" role="status" aria-live="polite"></p>
 <section class="panel"><h2>成员邮箱与提醒状态</h2><div id="mail-members" class="daily-grid"></div></section>
 <section class="panel"><h2>发送记录</h2><div id="mail-jobs"></div><div class="daily-actions"><button class="btn" type="button" id="mail-prev">上一页</button><span id="mail-page"></span><button class="btn" type="button" id="mail-next">下一页</button></div></section></div>

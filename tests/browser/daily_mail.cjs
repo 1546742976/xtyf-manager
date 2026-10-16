@@ -40,17 +40,32 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
       }
     }
     checks.push('both themes at 375/390/767/768/1280 CSS pixels without body overflow');
-    await page.setViewportSize({width:1280,height:900});await page.goto(base+'/account');await page.locator('#email-address').fill('browser@example.com');await page.locator('#email-form button').click();await page.locator('#email-result').filter({hasText:'模拟模式'}).waitFor();
+    await page.setViewportSize({width:1280,height:900});await page.goto(base+'/account');
+    const mailPanel=page.locator('section').filter({has:page.locator('#email-form')});
+    assert.match(await mailPanel.textContent(),/08:00.*个人未完成任务早报.*22:00/);
+    await page.locator('#email-address').fill('browser@example.com');await page.locator('#email-form button').click();await page.locator('#email-result').filter({hasText:'模拟模式'}).waitFor();
     const query=spawnSync(python,['-c',"import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); print(db.execute('SELECT generation FROM member_email WHERE member_id=1').fetchone()[0])",path.join(testRoot,'data.db')],{encoding:'utf8'});assert.equal(query.status,0,query.stderr);
     const token=crypto.createHmac('sha256',fs.readFileSync(path.join(testRoot,'secret.key'),'utf8').trim()).update('email:'+query.stdout.trim()).digest('hex');
-    await page.goto(base+'/account/email/verify#token='+token);await page.locator('#email-confirm').click();await page.locator('#email-confirm-result').filter({hasText:'邮箱已验证'}).waitFor();assert.equal(page.url(),base+'/account/email/verify');
+    await page.goto(base+'/account/email/verify#token='+token);assert.match(await page.locator('main').textContent(),/08:00.*22:00/);await page.locator('#email-confirm').click();await page.locator('#email-confirm-result').filter({hasText:'邮箱已验证'}).waitFor();assert.equal(page.url(),base+'/account/email/verify');
     await page.goto(base+'/admin/mail');await page.locator('[data-mail-member="1"]').click();await page.locator('[data-mail-member="1"]').filter({hasText:'恢复'}).waitFor();
     await page.goto(base+'/account');await page.locator('#email-state').filter({hasText:'管理员已暂停'}).waitFor();
     await page.goto(base+'/admin/mail');await page.locator('[data-mail-member="1"]').click();await page.locator('[data-mail-member="1"]').filter({hasText:'暂停'}).waitFor();await page.locator('#mail-test').click();await page.locator('#mail-result').filter({hasText:'加入队列'}).waitFor();checks.push('email request, confirmation, token removal, admin pause/resume and test queue');
+    const mailState=(await api(page,'/api/admin/mail?page=1')).body;
+    const sample=mailState.jobs[0];assert.ok(sample);
+    await page.route('**/api/admin/mail?*',r=>r.fulfill({json:{...mailState,jobs:[{...sample,kind:'morning'},{...sample,kind:'daily'}]}}));
+    await page.locator('#mail-refresh').click();
+    await page.locator('#mail-jobs strong').filter({hasText:'个人任务早报'}).waitFor();
+    await page.locator('#mail-jobs strong').filter({hasText:'团队项目晚报'}).waitFor();
+    assert.match(await page.locator('#mail-admin').textContent(),/08:00.*22:00/);
+    await page.screenshot({path:path.join(output,'morning-evening-mail-admin.png'),fullPage:true});
+    await page.unroute('**/api/admin/mail?*');checks.push('08:00 personal and 22:00 team notices and separate admin record labels');
     await page.goto(base+'/');await page.locator('#daily-dashboard a').filter({hasText:'共同大目标'}).waitFor();
     const task=(await api(page,'/api/task',{title:'邮件链接目标'})).body;
     await page.goto(base+'/tasks?task='+task.id);await page.locator('#modal').filter({hasText:'邮件链接目标'}).waitFor();
-    await api(page,'/logout',{}).catch(()=>{});await page.goto(base+`/daily-projects/${id}`);await page.waitForURL(/\/login\?/);await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('daily-browser-password');await page.locator('#login-form [type=submit]').click();await page.waitForURL(base+`/tasks?type=daily&project=${id}`);checks.push('separate dashboard and login returns to linked goal');
+    // Use a fresh unauthenticated context for email-link login; background task polling
+    // in the original page must not race a fetch-based logout and restore its cookie.
+    const returnPage=await browser.newPage();returnPage.on('pageerror',e=>errors.push(e.message));
+    await returnPage.goto(base+`/daily-projects/${id}`);await returnPage.waitForURL(/\/login\?/);await returnPage.locator('[name=username]').fill('admin');await returnPage.locator('[name=password]').fill('daily-browser-password');await returnPage.locator('#login-form [type=submit]').click();await returnPage.waitForURL(base+`/tasks?type=daily&project=${id}`);await returnPage.context().close();checks.push('separate dashboard and login returns to linked goal');
     if(process.env.REVIEW_WEBKIT_PATH){
       phoneBrowser=await webkit.launch({headless:true,executablePath:process.env.REVIEW_WEBKIT_PATH});
       const context=await phoneBrowser.newContext({...devices['iPhone 13']});await context.addCookies(await page.context().cookies());const phone=await context.newPage();phone.on('pageerror',e=>errors.push(e.message));

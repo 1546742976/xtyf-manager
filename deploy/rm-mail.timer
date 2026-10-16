@@ -1,6 +1,7 @@
 [Unit]
 Description=Check XTYF mail queue every five minutes
-# Team briefs send from 22:00 to midnight Asia/Shanghai; verification runs all day.
+# Personal briefs send 08:00-12:00, team briefs 22:00-midnight Asia/Shanghai.
+# Verification and test mail jobs run all day.
 
 [Timer]
 OnCalendar=*-*-* *:0/5:00

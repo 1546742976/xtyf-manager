@@ -36,7 +36,7 @@
       const data=await api('/api/admin/mail?page='+page);
       result.textContent=`邮件服务：${data.available?data.mode==='smtp'?'SMTP 已配置':'模拟模式':'未启用或配置不完整'}`;
       document.getElementById('mail-members').innerHTML=data.members.map(m=>`<article class="daily-card"><strong>${esc(m.name)}</strong><p>${esc(m.address||'未绑定')} · ${m.verified?'已验证':'未验证'}${!m.is_active||m.deleted_at?' · 账户停用':''}</p><button class="btn" type="button" data-mail-member="${m.id}" data-paused="${m.paused?'0':'1'}">${m.paused?'恢复每日提醒':'暂停每日提醒'}</button></article>`).join('');
-      document.getElementById('mail-jobs').innerHTML=data.jobs.map(j=>`<article class="daily-update"><strong>${esc(j.name)} · ${esc({verify:'邮箱验证',daily:'团队项目晚报',test:'测试邮件'}[j.kind])}</strong><p>${esc(j.day)} · ${esc(states[j.state])} · 尝试 ${j.attempts} 次</p><p>${esc(j.error)}</p></article>`).join('')||'<p>暂无发送记录</p>';
+      document.getElementById('mail-jobs').innerHTML=data.jobs.map(j=>`<article class="daily-update"><strong>${esc(j.name)} · ${esc({verify:'邮箱验证',morning:'个人任务早报',daily:'团队项目晚报',test:'测试邮件'}[j.kind]||j.kind)}</strong><p>${esc(j.day)} · ${esc(states[j.state])} · 尝试 ${j.attempts} 次</p><p>${esc(j.error)}</p></article>`).join('')||'<p>暂无发送记录</p>';
       document.getElementById('mail-prev').disabled=page<=1;document.getElementById('mail-next').disabled=!data.has_more;document.getElementById('mail-page').textContent='第 '+page+' 页';
     };
     const reload=()=>BusinessUI.action('mail-admin-load',[document.getElementById('mail-refresh')],load,text=>{result.textContent=text;});

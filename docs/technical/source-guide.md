@@ -8,7 +8,7 @@
 | `common.py` | `PROGRESS_DB`、请求级数据库连接、用户会话与权限装饰器 |
 | `modules/task_api.py` | 任务 API 路由 |
 | `modules/daily_projects.py` / `daily_schema.py` / `static/daily-projects.js` | 独立日常目标、组负责人、组别进度、迁移及工作台摘要 |
-| `modules/email_api.py` / `mail_service.py` / `deploy/mail_worker.py` | 邮箱验证、个人日报、持久队列、SMTP 与模拟发送 |
+| `modules/email_api.py` / `mail_service.py` / `deploy/mail_worker.py` | 邮箱验证、08:00 个人早报、22:00 团队晚报、持久队列、SMTP 与模拟发送 |
 | `modules/task_schedule.py` / `static/task-schedule.js` | 专业阶段判定、排期预览、快照冲突校验、原子保存及预览交互 |
 | `modules/task_mutations.py` / `task_validation.py` | 任务新增、更新及输入合法性校验 |
 | `modules/task_queries.py` / `task_types.py` | 看板数据组织与共享类型 |
