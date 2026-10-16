@@ -11,7 +11,7 @@ from uuid import uuid4
 from test_tasks import app_module
 from common import get_db, DB_PATH
 from modules.daily_projects import TZ
-from modules.mail_service import (verification_token, stale, deadline, daily_window, digest_content, digest_items, enqueue_daily,
+from modules.mail_service import (verification_code, verification_digest, stale, deadline, daily_window, digest_content, digest_items, enqueue_daily,
                                   claim, process_job, DeliveryError, smtp_send, queue, run_once)
 
 
@@ -249,16 +249,49 @@ class DailyMailTest(unittest.TestCase):
                 self.assertEqual(process_job(self.db,job,morning,transport),'skipped')
         transport.assert_not_called()
 
+    def test_verification_and_test_mail_take_priority_over_digest(self):
+        self.db.execute("UPDATE mail_jobs SET state='skipped' WHERE state='pending'");self.db.commit()
+        generation=self.bind()
+        for kind in ('daily','test','verify'):
+            queue(self.db,self.mid,kind,self.at.date().isoformat(),generation,self.at.timestamp(),uuid4().hex)
+        self.db.commit()
+        self.assertEqual([claim(self.db,self.at)['kind'] for _ in range(3)],['verify','test','daily'])
+
     def test_verification_expiry_replay_and_wrong_account(self):
         result=self.member.post('/api/account/email/request',json={'email':'member@example.com'});self.assertEqual(result.status_code,202)
         row=self.db.execute('SELECT * FROM member_email WHERE member_id=?',(self.mid,)).fetchone()
-        token=verification_token(row['generation'])
-        self.assertNotEqual(token,row['token_hash'])
-        self.assertEqual(self.admin.post('/api/account/email/verify',json={'token':token}).status_code,400)
+        code=verification_code(row['generation'])
+        self.assertRegex(code,r'^[0-9]{6}$')
+        self.assertEqual(row['token_hash'],verification_digest(row['generation'],code))
+        self.assertNotEqual(code,row['token_hash'])
+        self.assertEqual(self.admin.post('/api/account/email/verify',json={'code':code}).status_code,400)
         with patch('modules.email_api.epoch_now',return_value=row['expires_at']+1):
-            self.assertEqual(self.member.post('/api/account/email/verify',json={'token':token}).status_code,400)
-        self.assertEqual(self.member.post('/api/account/email/verify',json={'token':token}).status_code,200)
-        self.assertEqual(self.member.post('/api/account/email/verify',json={'token':token}).status_code,400)
+            self.assertEqual(self.member.post('/api/account/email/verify',json={'code':code}).status_code,400)
+        self.assertEqual(self.member.post('/api/account/email/verify',json={'token':'a'*64}).status_code,400)
+        self.assertEqual(self.member.post('/api/account/email/verify',json={'code':code}).status_code,200)
+        self.assertEqual(self.member.post('/api/account/email/verify',json={'code':code}).status_code,400)
+        still=self.db.execute('SELECT verified,token_hash FROM member_email WHERE member_id=?',(self.mid,)).fetchone()
+        self.assertEqual(still['verified'],1);self.assertIsNone(still['token_hash'])
+        self.assertEqual(self.member.post('/api/account/email/request',json={'email':'member@example.com'}).status_code,200)
+        self.assertEqual(self.member.get('/account/email/verify').status_code,302)
+
+    def test_wrong_codes_lock_after_five_attempts_and_keep_verifier_private(self):
+        self.member.post('/api/account/email/request',json={'email':'member@example.com'})
+        row=self.db.execute('SELECT * FROM member_email WHERE member_id=?',(self.mid,)).fetchone()
+        code=verification_code(row['generation'])
+        wrong='000000' if code!='000000' else '000001'
+        state=self.member.get('/api/account/email').get_json()['email']
+        self.assertTrue(state['pending']);self.assertNotIn('token_hash',state);self.assertNotIn('verify_attempts',state)
+        for attempt in range(5):
+            response=self.member.post('/api/account/email/verify',json={'code':wrong})
+            self.assertEqual(response.status_code,400,response.get_json())
+        current=self.db.execute('SELECT token_hash,verify_attempts,verified FROM member_email WHERE member_id=?',(self.mid,)).fetchone()
+        self.assertIsNone(current['token_hash']);self.assertEqual(current['verify_attempts'],5);self.assertFalse(current['verified'])
+        self.assertFalse(self.member.get('/api/account/email').get_json()['email']['pending'])
+        self.assertEqual(self.member.post('/api/account/email/verify',json={'code':code}).status_code,400)
+        with patch('modules.email_api.epoch_now',return_value=row['requested_at']+60):
+            self.assertEqual(self.member.post('/api/account/email/request',json={'email':'member@example.com'}).status_code,202)
+        self.assertEqual(self.db.execute('SELECT verify_attempts FROM member_email WHERE member_id=?',(self.mid,)).fetchone()[0],0)
 
     def test_resend_limit_address_change_and_pause_preserved(self):
         base=self.at.timestamp()
@@ -272,7 +305,7 @@ class DailyMailTest(unittest.TestCase):
                 self.assertEqual(self.member.post('/api/account/email/request',json={'email':'second@example.com'}).status_code,202)
         with patch('modules.email_api.epoch_now',return_value=base+300):
             self.assertEqual(self.member.post('/api/account/email/request',json={'email':'second@example.com'}).status_code,429)
-        self.assertEqual(self.member.post('/api/account/email/verify',json={'token':verification_token(old)}).status_code,400)
+        self.assertEqual(self.member.post('/api/account/email/verify',json={'code':verification_code(old)}).status_code,400)
         row=self.db.execute('SELECT * FROM member_email WHERE member_id=?',(self.mid,)).fetchone()
         self.assertEqual(row['address'],'second@example.com');self.assertEqual(row['paused'],1);self.assertEqual(row['verified'],0)
 
@@ -471,13 +504,24 @@ class DailyMailTest(unittest.TestCase):
         self.assertEqual(process_job(self.db,job,self.at-timedelta(seconds=1),not_called),'skipped')
         not_called.assert_not_called()
 
-    def test_transient_retry_permanent_unknown_and_limit(self):
+    def test_test_mail_transient_retry_permanent_unknown_and_limit(self):
         job=self.job();transport=MagicMock(side_effect=DeliveryError('暂时失败',retry=True))
         self.assertEqual(process_job(self.db,job,self.at,transport),'pending')
-        self.assertEqual(self.db.execute('SELECT next_at FROM mail_jobs WHERE id=?',(job['id'],)).fetchone()[0],self.at.timestamp()+900)
+        self.assertEqual(self.db.execute('SELECT next_at FROM mail_jobs WHERE id=?',(job['id'],)).fetchone()[0],self.at.timestamp()+60)
         self.assertEqual(process_job(self.db,job|{'attempts':3},self.at,transport),'failed')
         self.assertEqual(process_job(self.db,job,self.at,MagicMock(side_effect=DeliveryError('收件人拒绝'))),'failed')
         self.assertEqual(process_job(self.db,job,self.at,MagicMock(side_effect=DeliveryError('未知','unknown'))),'unknown')
+
+    def test_verification_mail_retry_is_fast_and_bounded(self):
+        response=self.member.post('/api/account/email/request',json={'email':'fast@example.com'})
+        self.assertEqual(response.status_code,202,response.get_json())
+        job=dict(self.db.execute("SELECT * FROM mail_jobs WHERE member_id=? AND kind='verify' ORDER BY id DESC LIMIT 1",(self.mid,)).fetchone())|{'attempts':1}
+        now=datetime.now(TZ)
+        transport=MagicMock(side_effect=DeliveryError('临时失败',retry=True))
+        self.assertEqual(process_job(self.db,job,now,transport),'pending')
+        state=self.db.execute("SELECT next_at,attempts FROM mail_jobs WHERE id=?",(job['id'],)).fetchone()
+        self.assertEqual(state['next_at'],now.timestamp()+60)
+        self.assertEqual(process_job(self.db,job|{'attempts':3},now,transport),'failed')
 
     def test_changed_email_paused_and_inactive_are_checked_at_send(self):
         job=self.job();transport=MagicMock()
@@ -530,8 +574,14 @@ class DailyMailTest(unittest.TestCase):
         job=dict(self.db.execute('SELECT * FROM mail_jobs WHERE member_id=? ORDER BY id DESC LIMIT 1',(self.mid,)).fetchone())|{'attempts':1}
         sent=[]
         self.assertEqual(process_job(self.db,job,datetime.now(TZ),sent.append),'sent')
-        token=verification_token(binding['generation'])
-        self.assertIn('/account/email/verify#token='+token,sent[0].get_body(preferencelist=('plain',)).get_content())
+        code=verification_code(binding['generation'])
+        for part in sent[0].walk():
+            if part.get_content_type() in ('text/plain','text/html'):
+                body=part.get_content()
+                self.assertIn(code,body)
+                self.assertNotIn('/account/email/verify#token=',body)
+                self.assertNotIn('href=',body)
+        self.assertNotIn(code,sent[0]['Subject'])
         self.db.execute('UPDATE member_email SET generation=? WHERE member_id=?',('replacement',self.mid));self.db.commit()
         self.assertEqual(process_job(self.db,job,datetime.now(TZ),sent.append),'skipped');self.assertEqual(len(sent),1)
 

@@ -47,8 +47,16 @@ def configured():
     return bool(url.scheme == 'https' and cfg['host'] and cfg['sender'] and cfg['tls'] in ('ssl', 'starttls'))
 
 
-def verification_token(generation):
-    return hmac.new(current_app.secret_key.encode(), ('email:' + generation).encode(), hashlib.sha256).hexdigest()
+def verification_code(generation):
+    """Derive a six-digit one-time code without storing a recoverable code in SQLite."""
+    digest = hmac.new(current_app.secret_key.encode(), ('email-code:' + generation).encode(), hashlib.sha256).digest()
+    return f'{int.from_bytes(digest[:8], "big") % 1_000_000:06d}'
+
+
+def verification_digest(generation, code):
+    """Keyed verifier: a database dump alone must not allow guessing 1e6 possible codes."""
+    message = f'email-code-check:{generation}:{code}'.encode()
+    return hmac.new(current_app.secret_key.encode(), message, hashlib.sha256).hexdigest()
 
 
 def queue(db, mid, kind, day, generation, at, key):
@@ -264,7 +272,7 @@ def claim(db, at):
             db.execute("UPDATE mail_jobs SET state='skipped',error=?,finished_at=? WHERE kind=? AND state='pending' "
                        "AND (day<>? OR ? < ? OR ? >= ?)",
                        (f'已超出当日{label}窗口', epoch, kind, at.date().isoformat(), at.hour, start, at.hour, end))
-        row = db.execute("SELECT * FROM mail_jobs WHERE state='pending' AND next_at<=? ORDER BY CASE kind WHEN 'verify' THEN 0 ELSE 1 END,id LIMIT 1", (epoch,)).fetchone()
+        row = db.execute("SELECT * FROM mail_jobs WHERE state='pending' AND next_at<=? ORDER BY CASE kind WHEN 'verify' THEN 0 WHEN 'test' THEN 1 ELSE 2 END,id LIMIT 1", (epoch,)).fetchone()
         if row:
             db.execute("UPDATE mail_jobs SET state='sending',claimed_at=?,attempts=attempts+1 WHERE id=?", (epoch, row['id']))
         db.commit()
@@ -287,13 +295,14 @@ def process_job(db, job, at, transport=None):
         message['To'] = member['address']
         message['Message-ID'] = f'<xtyf-{job["id"]}-{job["generation"]}@{message["From"].split("@")[-1]}>'
         if job['kind'] == 'verify':
-            if member['verified'] or member['expires_at'] <= epoch:
+            if member['verified'] or not member['token_hash'] or member['verify_attempts'] >= 5 or member['expires_at'] <= epoch:
                 raise DeliveryError('验证已完成或过期', 'skipped')
-            token = verification_token(member['generation'])
-            url = settings()['base_url'] + '/account/email/verify#token=' + token
-            message['Subject'] = '巡天御风｜验证收件邮箱'
-            text = f'请登录对应账户并确认绑定邮箱。链接自申请起 30 分钟有效：\n{url}\n验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；无个人待办时跳过早报。如非本人操作请忽略。'
-            markup = '<p>请登录对应账户并确认绑定邮箱，链接自申请起 30 分钟有效。</p><p><a href="' + html.escape(url, quote=True) + '">确认绑定邮箱</a></p><p>验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；无个人待办时跳过早报。如非本人操作请忽略。</p>'
+            code = verification_code(member['generation'])
+            message['Subject'] = '巡天御风｜邮箱验证码'
+            text = f'您的邮箱验证码是：{code}\n请在网站的个人账户页面输入验证码，30 分钟内有效。请勿转发给他人。\n验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；无个人待办时跳过早报。如非本人操作请忽略。'
+            markup = ('<p>您的邮箱验证码是：</p><p style="font-size:30px;font-weight:700;letter-spacing:6px">' + code +
+                      '</p><p>请在网站的个人账户页面输入验证码，30 分钟内有效。请勿转发给他人。</p>' +
+                      '<p>验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；无个人待办时跳过早报。如非本人操作请忽略。</p>')
         else:
             if not member['verified'] or member['paused']:
                 raise DeliveryError('邮箱未验证或提醒已暂停', 'skipped')
@@ -322,7 +331,7 @@ def process_job(db, job, at, transport=None):
         if (exc.retry and exc.state == 'failed' and job['attempts'] < 3
                 and (job['kind'] not in ('morning', 'daily')
                      or daily_window(at + timedelta(minutes=15), job['day'], kind=job['kind']))):
-            state, next_at = 'pending', epoch + 900
+            state, next_at = 'pending', epoch + (60 if job['kind'] in ('verify', 'test') else 900)
     except Exception:
         # Do not log exceptions containing message bodies, addresses or tokens.
         state, error = 'unknown', '处理异常，请检查配置与任务状态，未自动重发'

@@ -1,15 +1,13 @@
 """Verified self-service mail binding and administrator delivery controls."""
-import hashlib
-import hmac
 import re
 import secrets
 from time import time as epoch_now
 from datetime import datetime
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, jsonify, redirect, render_template, request
 from common import current_user, get_db, login_required, ROLE_NAMES
 from modules.daily_projects import failure, TZ
-from modules.mail_service import configured, settings, verification_token, queue
+from modules.mail_service import configured, settings, verification_code, verification_digest, queue
 
 bp = Blueprint('email', __name__)
 
@@ -21,8 +19,13 @@ def admin():
 @bp.get('/api/account/email')
 @login_required
 def get_email():
-    row = get_db().execute('SELECT address,verified,paused,requested_at,expires_at FROM member_email WHERE member_id=?', (current_user()['id'],)).fetchone()
-    return jsonify(ok=True, email=dict(row) if row else None, available=configured(), mode=settings()['mode'])
+    row = get_db().execute('SELECT address,verified,paused,requested_at,expires_at,token_hash,verify_attempts FROM member_email WHERE member_id=?', (current_user()['id'],)).fetchone()
+    email = None
+    if row:
+        email = {key: row[key] for key in ('address', 'verified', 'paused', 'requested_at', 'expires_at')}
+        email['pending'] = bool(not row['verified'] and row['token_hash'] and row['expires_at']
+                                and row['expires_at'] > epoch_now() and row['verify_attempts'] < 5)
+    return jsonify(ok=True, email=email, available=configured(), mode=settings()['mode'])
 
 
 @bp.post('/api/account/email/request')
@@ -44,38 +47,46 @@ def request_email():
     db, mid, epoch = get_db(), current_user()['id'], epoch_now()
     db.execute('BEGIN IMMEDIATE')
     old = db.execute('SELECT * FROM member_email WHERE member_id=?', (mid,)).fetchone()
+    if old and old['verified'] and old['address'] == address:
+        db.rollback()
+        return jsonify(ok=True, message='该邮箱已验证，无需重复发送')
     count = db.execute("SELECT count(*) FROM mail_jobs WHERE member_id=? AND kind='verify' AND created_at>?", (mid, epoch-3600)).fetchone()[0]
     if (old and epoch-old['requested_at'] < 60) or count >= 5:
         db.rollback(); return failure('请间隔 60 秒重试，每小时最多申请 5 次', 429)
     generation = secrets.token_hex(24)
-    token_hash = hashlib.sha256(verification_token(generation).encode()).hexdigest()
-    db.execute('INSERT INTO member_email(member_id,address,generation,token_hash,expires_at,requested_at) VALUES(?,?,?,?,?,?) '
-               'ON CONFLICT(member_id) DO UPDATE SET address=excluded.address,generation=excluded.generation,token_hash=excluded.token_hash,expires_at=excluded.expires_at,requested_at=excluded.requested_at,verified=0',
-               (mid, address, generation, token_hash, epoch+1800, epoch))
+    code_hash = verification_digest(generation, verification_code(generation))
+    db.execute('INSERT INTO member_email(member_id,address,generation,token_hash,expires_at,requested_at,verify_attempts) VALUES(?,?,?,?,?,?,0) '
+               'ON CONFLICT(member_id) DO UPDATE SET address=excluded.address,generation=excluded.generation,token_hash=excluded.token_hash,expires_at=excluded.expires_at,requested_at=excluded.requested_at,verified=0,verify_attempts=0',
+               (mid, address, generation, code_hash, epoch+1800, epoch))
     queue(db, mid, 'verify', datetime.now(TZ).date().isoformat(), generation, epoch, 'verify:'+generation)
     db.commit()
-    return jsonify(ok=True, message='验证请求已受理，请稍后查看邮箱' if settings()['mode']=='smtp' else '验证请求已受理（模拟模式，不会向真实邮箱发送）'), 202
+    return jsonify(ok=True, message='6 位验证码已加入发送队列，请查看邮箱' if settings()['mode']=='smtp' else '验证码请求已受理（模拟模式，不会向真实邮箱发送）'), 202
 
 
 @bp.get('/account/email/verify')
 def verify_page():
-    # Keep the token in the URL fragment; neither access logs nor referrers see it.
-    return render_template('email_verify.html', me=current_user(), role_names=ROLE_NAMES, page='account')
+    # Legacy email links cannot verify an address after switching to numeric codes.
+    return redirect('/account')
 
 
 @bp.post('/api/account/email/verify')
 @login_required
 def verify():
     body = request.get_json(silent=True) or {}
-    token = body.get('token', '')
-    if not isinstance(token, str) or len(token) != 64:
-        return failure('验证链接无效')
+    code = body.get('code')
+    if not isinstance(code, str) or not re.fullmatch(r'[0-9]{6}', code):
+        return failure('请输入 6 位数字验证码')
     db, mid = get_db(), current_user()['id']
     db.execute('BEGIN IMMEDIATE')
     row = db.execute('SELECT * FROM member_email WHERE member_id=?', (mid,)).fetchone()
-    if not row or row['verified'] or not row['token_hash'] or row['expires_at'] <= epoch_now() or not hmac.compare_digest(row['token_hash'], hashlib.sha256(token.encode()).hexdigest()):
-        db.rollback(); return failure('验证链接过期、已使用或不属于当前账户')
-    db.execute('UPDATE member_email SET verified=1,token_hash=NULL WHERE member_id=?', (mid,))
+    if not row or row['verified'] or not row['token_hash'] or not row['expires_at'] or row['expires_at'] <= epoch_now() or row['verify_attempts'] >= 5:
+        db.rollback(); return failure('验证码已过期或失效，请重新发送')
+    if not secrets.compare_digest(row['token_hash'], verification_digest(row['generation'], code)):
+        attempts = row['verify_attempts'] + 1
+        db.execute('UPDATE member_email SET verify_attempts=?,token_hash=CASE WHEN ?>=5 THEN NULL ELSE token_hash END WHERE member_id=?', (attempts, attempts, mid))
+        db.commit()
+        return failure('验证码错误次数过多，请重新发送' if attempts >= 5 else f'验证码错误，还可尝试 {5-attempts} 次')
+    db.execute('UPDATE member_email SET verified=1,token_hash=NULL,verify_attempts=0 WHERE member_id=?', (mid,))
     db.commit()
     return jsonify(ok=True, message='邮箱已验证；每日提醒' + ('仍由管理员暂停' if row['paused'] else '已开启'))
 
