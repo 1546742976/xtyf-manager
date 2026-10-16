@@ -1,10 +1,12 @@
 """Release lifecycle tests use fake builders and isolated files, never production artifacts."""
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('client_release', Path(__file__).with_name('release.py'))
@@ -17,13 +19,18 @@ class ReleaseTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='xtyf-release-test-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        for directory in ('clients/windows', 'clients/android', 'dist/clients/windows', 'dist/clients/android', 'dist/clients/linux'):
+        for directory in ('clients/desktop', 'clients/android', 'dist/clients/windows', 'dist/clients/android', 'dist/clients/linux'):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         self.config = {'name': 'Test', 'serverUrl': 'http://example.test', 'version': '1.0.9', 'versionCode': 11}
-        for relative in ('clients/config.json', 'clients/windows/config.json'):
+        for relative in ('clients/config.json',):
             module.write_json(self.root / relative, self.config)
-        module.write_json(self.root / 'clients/windows/package.json', {'name': 'test', 'version': '1.0.9'})
-        module.write_json(self.root / 'clients/windows/package-lock.json', {'version': '1.0.9', 'packages': {'': {'version': '1.0.9'}}})
+        module.write_json(self.root / 'clients/desktop/package.json', {'name': 'test', 'version': '1.0.9'})
+        module.write_json(self.root / 'clients/desktop/package-lock.json', {'version': '1.0.9', 'packages': {'': {'version': '1.0.9'}}})
+        module.write_json(self.root / 'clients/desktop/tauri.conf.json', {'version':'1.0.9'})
+        (self.root / 'clients/desktop/Cargo.toml').write_text('[package]\nname = \"xtyf-manager\"\nversion = \"1.0.9\"\n')
+        (self.root / 'clients/desktop/Cargo.lock').write_text('[[package]]\nname = \"xtyf-manager\"\nversion = \"1.0.9\"\n')
+        (self.root / 'clients/frontend/dist').mkdir(parents=True)
+        (self.root / 'clients/frontend/dist/asset-manifest.json').write_text('{}')
         (self.root / 'clients/android/AndroidManifest.xml').write_text('<manifest xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="11" android:versionName="1.0.9"/>', encoding='utf-8')
         (self.root / 'clients/README.md').write_text('instructions', encoding='utf-8')
         self.output = self.root / 'dist/clients'
@@ -45,9 +52,12 @@ class ReleaseTests(unittest.TestCase):
         # Old packages must remain available while any platform is still building.
         self.assertTrue(all(file.exists() for file in self.old))
         config = module.read_json(root / 'clients/config.json')
-        if '--check' in command:
+        if '--check' in command or '-Check' in command:
             self.assertEqual(config, self.config)
             self.assertFalse(list(self.output.glob('.release-*')))
+            return
+        if any(Path(str(arg)).name == 'build_frontend.py' for arg in command):
+            module.write_json(root / 'clients/frontend/dist/asset-manifest.json', {'version': config['version'], 'protocolVersion': 1, 'files': {'index.html': hashlib.sha256(b'local page').hexdigest()}})
             return
         if '-OutputDirectory' in command:
             out = Path(command[command.index('-OutputDirectory') + 1])
@@ -61,8 +71,17 @@ class ReleaseTests(unittest.TestCase):
         out.mkdir(parents=True, exist_ok=True)
         for name in names:
             (out / name).write_bytes(b'new installer ' + config['version'].encode())
+            if name.endswith('.apk'):
+                with zipfile.ZipFile(out / name, 'w') as apk:
+                    apk.writestr('assets/frontend/asset-manifest.json', (root / 'clients/frontend/dist/asset-manifest.json').read_bytes())
+                    apk.writestr('assets/frontend/index.html', b'local page')
+        if out.name == 'windows':
+            module.write_json(out / 'windows-verification.json', {'version':config['version'], 'framework':'tauri', 'architecture':'x64', 'installer':'NSIS', 'configurationTestsPassed':True, 'nativeExecutableVerified':True, 'clientPayloadVerified':True, 'installerPayloadExtracted':True, 'embeddedFrontendVerified':True, 'runtimeUiVerified':False, 'frontendManifestSha256': self.frontend_digest()})
         if out.name == 'linux':
             module.write_json(out / 'linux-verification.json', self.verification(config['version']))
+
+    def frontend_digest(self):
+        return hashlib.sha256((self.root / 'clients/frontend/dist/asset-manifest.json').read_bytes()).hexdigest()
 
     def verification(self, version):
         common = {
@@ -70,6 +89,7 @@ class ReleaseTests(unittest.TestCase):
             'elfArchitectureVerified': True, 'glibcRequired': '2.31',
             'elfFilesChecked': 12, 'desktopEntryVerified': True,
             'clientPayloadVerified': True, 'runtimeUiVerified': False,
+            'localFrontendManifestSha256': self.frontend_digest(),
         }
         return {
             'ubuntu': {**common, 'distribution': 'Ubuntu 22.04', 'architecture': 'arm64', 'format': 'deb', 'glibcLimit': '2.35', 'dependencies': ['libc6 (>= 2.35)']},
@@ -96,7 +116,7 @@ class ReleaseTests(unittest.TestCase):
         report = module.release(self.root, self.builder)
         self.assertEqual(report['version'], '1.0.10')
         self.assertEqual(report['android']['versionCode'], 12)
-        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(len(self.calls), 6)
         self.assertIn('--check', self.calls[0])
         self.assertEqual(len(report['artifacts']), 4)
         self.assertEqual(report['linux'], self.verification('1.0.10'))
@@ -105,8 +125,8 @@ class ReleaseTests(unittest.TestCase):
         self.assertTrue(all(file.exists() for file in unrelated))
         for artifact in report['artifacts']:
             self.assertTrue((self.output / artifact['file']).exists())
-        package = module.read_json(self.root / 'clients/windows/package.json')
-        lock = module.read_json(self.root / 'clients/windows/package-lock.json')
+        package = module.read_json(self.root / 'clients/desktop/package.json')
+        lock = module.read_json(self.root / 'clients/desktop/package-lock.json')
         self.assertEqual(package['version'], '1.0.10')
         self.assertEqual(lock['packages']['']['version'], '1.0.10')
         manifest = module.ET.parse(self.root / 'clients/android/AndroidManifest.xml').getroot()
@@ -121,6 +141,29 @@ class ReleaseTests(unittest.TestCase):
             module.release(self.root, fail_android)
         self.assert_rollback()
         self.assertEqual(module.next_config(self.root)['version'], '1.0.10')
+
+    def test_frontend_mismatch_rolls_back_all_packages(self):
+        for platform in ('windows', 'ubuntu', 'fedora', 'android'):
+            with self.subTest(platform=platform):
+                def corrupt(command, root):
+                    self.builder(command, root)
+                    if '--output-dir' in command and Path(command[1]).name == 'build_linux.py':
+                        staging = Path(command[command.index('--output-dir') + 1]).parent
+                        if platform == 'android':
+                            path = staging / 'android/XTYF-Manager-1.0.10.apk'
+                            with zipfile.ZipFile(path, 'w') as apk:
+                                apk.writestr('assets/frontend/asset-manifest.json', b'{}')
+                        else:
+                            path = staging / ('windows/windows-verification.json' if platform == 'windows' else 'linux/linux-verification.json')
+                            value = module.read_json(path)
+                            if platform == 'windows':
+                                value['frontendManifestSha256'] = 'wrong'
+                            else:
+                                value[platform]['localFrontendManifestSha256'] = 'wrong'
+                            module.write_json(path, value)
+                with self.assertRaisesRegex(RuntimeError, 'frontend manifest mismatch'):
+                    module.release(self.root, corrupt)
+                self.assert_rollback()
 
     def test_linux_preflight_failure_does_not_change_version_or_start_builds(self):
         def fail_preflight(command, root):
@@ -140,7 +183,7 @@ class ReleaseTests(unittest.TestCase):
             self.builder(command, root)
         with self.assertRaises(subprocess.CalledProcessError):
             module.release(self.root, fail_linux)
-        self.assertEqual(len(self.calls), 4)
+        self.assertEqual(len(self.calls), 6)
         self.assert_rollback()
 
     def test_missing_linux_artifact_does_not_publish_partial_release(self):
@@ -188,6 +231,21 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'verification report'):
             module.release(self.root, omit_verification)
         self.assert_rollback()
+
+    def test_windows_payload_must_actually_be_verified(self):
+        for field in ('installerPayloadExtracted', 'embeddedFrontendVerified', 'configurationTestsPassed'):
+            with self.subTest(field=field):
+                def invalid(command, root):
+                    self.builder(command, root)
+                    if '-OutputDirectory' in command:
+                        out = Path(command[command.index('-OutputDirectory') + 1])
+                        path = out / 'windows-verification.json'
+                        result = module.read_json(path)
+                        result[field] = False
+                        module.write_json(path, result)
+                with self.assertRaisesRegex(RuntimeError, 'Windows verification failed'):
+                    module.release(self.root, invalid)
+                self.assert_rollback()
 
     def test_missing_artifact_does_not_count_as_success(self):
         with self.assertRaisesRegex(RuntimeError, 'complete installer'):

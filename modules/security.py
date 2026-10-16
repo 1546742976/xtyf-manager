@@ -184,10 +184,16 @@ def init_security(app):
                 return _error("页面凭据已过期，请刷新页面后重试", "csrf_failed")
             if request.is_json and not isinstance(request.get_json(silent=True), dict):
                 return _error("请求必须是 JSON 对象", "invalid_payload", 400)
-        if user and user["must_change_password"] and request.endpoint not in {
-            "static", "account", "api_password", "logout", "security.get_csrf"
+        native_client = request.headers.get("X-XTYF-Client-Protocol") == "1"
+        if native_client and user is None and request.endpoint not in {
+            "client_api.bootstrap", "client_api.login", "client_api.logout", "security.get_csrf",
         }:
-            if "/api/" in request.path:
+            return _error("未登录", "authentication_required", 401)
+        if user and user["must_change_password"] and request.endpoint not in {
+            "static", "account", "api_password", "logout", "security.get_csrf",
+            "client_api.bootstrap", "client_api.logout",
+        }:
+            if native_client or "/api/" in request.path:
                 return _error("请先在账户设置中修改初始密码", "password_change_required")
             return redirect(url_for("account"))
 

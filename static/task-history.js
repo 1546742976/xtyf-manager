@@ -14,6 +14,7 @@ const FIELD_LABELS = {
   start_date_origin: "日期来源",
   due_date: "截止日期",
   schedule_stage: "排期阶段",
+  schedule_locked: "自动排期时固定日期",
   parent_id: "主前置任务",
   predecessor_ids: "前置任务",
 };
@@ -25,6 +26,7 @@ const REVISION_KIND_LABELS = {
 };
 
 function revisionValue(field, value) {
+  if (field === "schedule_locked") return value ? "是" : "否";
   if (value == null || value === "") return "未设置";
   if (field === "start_date_origin") return ({frozen: "已有日期（固定）", manual: "手动设置", dependency: "主前置任务建议（固定）", schedule: "确认应用排期"})[value] || String(value);
   if (field === "owner_id") return memberById(value)?.name || `成员 #${value}`;

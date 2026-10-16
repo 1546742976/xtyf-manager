@@ -189,6 +189,10 @@ def migrate(db: sqlite3.Connection) -> None:
             # dates are unknown until a real future completion transition.
             _add_column(db, "tasks", "completed_at TEXT")
             db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (7, ?)", (now_str(),))
+        if db.execute("SELECT 1 FROM schema_migrations WHERE version=8").fetchone() is None:
+            # A saved/manual date is not a request to freeze automatic scheduling.
+            _add_column(db, "tasks", "schedule_locked INTEGER NOT NULL DEFAULT 0 CHECK (schedule_locked IN (0,1))")
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (8, ?)", (now_str(),))
         db.commit()
     except sqlite3.Error:
         db.rollback()

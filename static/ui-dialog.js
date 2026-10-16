@@ -1,28 +1,41 @@
 "use strict";
 
 let modalReturnFocus = null;
+let modalOptions = {};
 
-function showModal(html, label = "任务操作窗口") {
+function showModal(html, label = "任务操作窗口", options = {}) {
+  if (modalOptions.beforeClose?.() === false) return false;
+  modalOptions.onClose?.();
   const modal = document.getElementById("modal");
+  if (modalOptions.className) modal.classList.remove(modalOptions.className);
+  modalOptions = options;
+  if (options.className) modal.classList.add(options.className);
   modalReturnFocus = document.activeElement;
   modal.innerHTML = html;
   modal.setAttribute("aria-label", label);
   document.getElementById("modal-mask").classList.remove("hidden");
   document.body.classList.add("modal-open");
   modal.querySelector("button, input, select, textarea, a[href]")?.focus();
+  return true;
 }
 
 function hideModal() {
+  if (modalOptions.beforeClose?.() === false) return false;
+  modalOptions.onClose?.();
+  if (modalOptions.className) document.getElementById("modal")?.classList.remove(modalOptions.className);
+  modalOptions = {};
   document.getElementById("modal-mask")?.classList.add("hidden");
   document.getElementById("modal")?.replaceChildren();
   document.body.classList.remove("modal-open");
   modalReturnFocus?.focus?.();
+  return true;
 }
 
 function modalKeydown(event) {
   const mask = document.getElementById("modal-mask");
   if (!mask || mask.classList.contains("hidden")) return;
   if (event.key === "Escape") {
+    event.preventDefault();
     hideModal();
     return;
   }
@@ -46,10 +59,10 @@ function modalKeydown(event) {
 
 function bindPasswordButton() {
   document.getElementById("btn-password")?.addEventListener("click", () => {
-    showModal(
+    if (showModal(
       `<div class="modal-head"><h2>修改密码</h2><button class="btn ghost sm" type="button" data-close>关闭</button></div><form id="pw-form"><label>原密码<input name="old" type="password" required></label><label>新密码（至少 8 位）<input name="new" type="password" minlength="8" required></label><div class="modal-actions"><button class="btn primary">保存</button></div><p class="form-message" role="alert"></p></form>`,
       "修改密码",
-    );
+    ) === false) return;
     document.querySelector("[data-close]").addEventListener("click", hideModal);
     document.getElementById("pw-form").addEventListener("submit", async (event) => {
       event.preventDefault();

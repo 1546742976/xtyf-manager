@@ -7,6 +7,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
 import zipfile
 import xml.etree.ElementTree as ET
 
@@ -19,6 +20,7 @@ def main():
     parser.add_argument('--jdk', type=Path, default=next((ROOT / '.build-tools/jdk21').glob('jdk-*'), None))
     parser.add_argument('--sdk', type=Path, default=ROOT / '.build-tools/android')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'dist/clients/android')
+    parser.add_argument('--skip-frontend-build', action='store_true', help='Use the shared frontend already built by release.py')
     args = parser.parse_args()
     if not args.jdk:
         parser.error('Provide --jdk pointing to a JDK 17 or newer')
@@ -34,6 +36,18 @@ def main():
         arguments = [str(command[0])] + [str(v.relative_to(ROOT) if isinstance(v, Path) and v.is_relative_to(ROOT) else v) for v in command[1:]]
         subprocess.run(arguments, check=True, env=env, cwd=ROOT)
     config = json.loads((CLIENT / 'config.json').read_text(encoding='utf-8'))
+    if not args.skip_frontend_build:
+        subprocess.run([sys.executable, str(CLIENT / 'build_frontend.py')], check=True, cwd=ROOT)
+    frontend = CLIENT / 'frontend/dist'
+    if not (frontend / 'index.html').is_file() or not (frontend / 'asset-manifest.json').is_file():
+        raise RuntimeError('Shared local frontend is missing; run python clients/build_frontend.py first')
+    asset_manifest = json.loads((frontend / 'asset-manifest.json').read_text(encoding='utf-8'))
+    if asset_manifest.get('version') != config['version']:
+        raise RuntimeError('Shared frontend version does not match the Android build version')
+    for name, digest in asset_manifest['files'].items():
+        asset = (frontend / name).resolve()
+        if not asset.is_relative_to(frontend.resolve()) or not asset.is_file() or hashlib.sha256(asset.read_bytes()).hexdigest() != digest:
+            raise RuntimeError(f'Shared frontend asset is missing or changed: {name}')
     out = args.output_dir.resolve()
     work = (SOURCE / 'build').resolve()
     # Compile from an empty directory so removed Java/DEX classes cannot survive.
@@ -61,6 +75,8 @@ def main():
     with zipfile.ZipFile(work / 'resources.apk') as base, zipfile.ZipFile(work / 'unsigned.apk', 'w') as apk:
         for entry in base.infolist(): apk.writestr(entry, base.read(entry.filename))
         for dex in (work / 'dex').glob('*.dex'): apk.write(dex, dex.name, compress_type=zipfile.ZIP_DEFLATED)
+        for name in sorted([*asset_manifest['files'], 'asset-manifest.json']):
+            apk.write(frontend / name, 'assets/frontend/' + name, compress_type=zipfile.ZIP_DEFLATED)
     run(tools / 'zipalign.exe', '-f', '-p', '4', work / 'unsigned.apk', work / 'aligned.apk')
     signing = CLIENT / 'signing'
     signing.mkdir(exist_ok=True)

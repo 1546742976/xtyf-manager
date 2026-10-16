@@ -2,86 +2,237 @@ package online.skywalker.manager;
 
 import android.app.*;
 import android.content.*;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.*;
+import android.provider.OpenableColumns;
 import android.view.*;
 import android.webkit.*;
 import android.widget.*;
+import org.json.*;
 import java.io.*;
-import java.net.URI;
-import java.net.URL;
-import java.net.HttpURLConnection;
-import java.util.concurrent.Executors;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.concurrent.*;
 
+/** The main WebView contains APK assets only. Network credentials stay native. */
 public class MainActivity extends Activity {
-    private WebView web;
-    private ProgressBar progress;
-    private LinearLayout errorPanel;
-    private TextView errorText;
-    private String server;
-    private ValueCallback<Uri[]> upload;
-    private String downloadUrl, downloadCookies, downloadAgent;
+    private static final String LOCAL_ORIGIN = "https://appassets.androidplatform.net";
     private static final int PICK_FILE = 10, SAVE_FILE = 11;
-
+    private WebView web, externalWeb;
+    private Dialog externalDialog;
+    private WebMessagePort port;
+    private NativeHttpClient client;
+    private String server;
+    private final ExecutorService workers = Executors.newFixedThreadPool(4);
+    private final Map<String, Uri> files = new ConcurrentHashMap<>();
+    private Pending picker, download;
+    private ValueCallback<Uri[]> legacyPicker;
+    private boolean destroyed;
+    private static final class Pending {
+        final Object id; final JSONObject args; final WebMessagePort channel; final NativeHttpClient client;
+        Pending(Object id, JSONObject args, WebMessagePort channel, NativeHttpClient client) { this.id=id; this.args=args; this.channel=channel; this.client=client; }
+    }
     private int dp(int n) { return Math.round(n * getResources().getDisplayMetrics().density); }
     private void message(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
     private Button button(String title, Runnable action) {
-        Button b = new Button(this); b.setText(title); b.setAllCaps(false);
-        b.setMinHeight(dp(48)); b.setOnClickListener(v -> action.run()); return b;
+        Button button = new Button(this); button.setText(title); button.setAllCaps(false); button.setOnClickListener(v -> action.run()); return button;
     }
-    private String normalize(String value) throws Exception {
-        URI u = new URI(value.trim()); String path = u.getPath();
-        if (!("http".equalsIgnoreCase(u.getScheme()) || "https".equalsIgnoreCase(u.getScheme())) || u.getHost() == null || u.getRawUserInfo() != null || u.getQuery() != null || u.getFragment() != null || !(path == null || path.isEmpty() || "/".equals(path)))
-            throw new Exception("请输入完整的网站根地址，不含账号、密码、路径或参数");
-        return new URI(u.getScheme().toLowerCase(), null, u.getHost().toLowerCase(), u.getPort(), null, null, null).toString();
+    private void connect(String value) throws IOException {
+        String normalized = NativeHttpClient.normalize(value); if (client != null) client.cancelAll();
+        String key = "native.session.v1." + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(normalized.getBytes(StandardCharsets.UTF_8));
+        SharedPreferences prefs = getPreferences(MODE_PRIVATE);
+        client = new NativeHttpClient(normalized, prefs.getString(key, ""), saved -> prefs.edit().putString(key, saved).apply());
+        server = normalized; prefs.edit().putString("server", normalized).apply(); files.clear();
     }
-    private boolean sameServer(String value) {
-        try { URL a = new URL(value), b = new URL(server); return a.getProtocol().equals(b.getProtocol()) && a.getHost().equalsIgnoreCase(b.getHost()) && (a.getPort() < 0 ? a.getDefaultPort() : a.getPort()) == (b.getPort() < 0 ? b.getDefaultPort() : b.getPort()); }
-        catch (Exception e) { return false; }
+    private boolean isLocal(Uri uri) {
+        return "https".equals(uri.getScheme()) && "appassets.androidplatform.net".equals(uri.getHost()) && uri.getPort() == -1 && uri.getUserInfo() == null;
     }
-    private void external(String value) {
-        Uri uri = Uri.parse(value);
-        if (!("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()) || "mailto".equals(uri.getScheme()) || "tel".equals(uri.getScheme()))) return;
-        try { startActivity(new Intent(Intent.ACTION_VIEW, uri)); } catch (ActivityNotFoundException e) { message("没有可打开此链接的应用"); }
+    private boolean isRoot(String url) {
+        if (url == null) return false;
+        Uri uri = Uri.parse(url); return isLocal(uri) && ("/index.html".equals(uri.getPath()) || "/".equals(uri.getPath()));
     }
-    private void loadHome() { errorPanel.setVisibility(View.GONE); web.setVisibility(View.VISIBLE); web.loadUrl(server); }
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        server = getPreferences(MODE_PRIVATE).getString("server", BuildConfig.SERVER_URL);
-        try { server = normalize(server); } catch (Exception e) { server = BuildConfig.SERVER_URL; }
+        try { connect(getPreferences(MODE_PRIVATE).getString("server", BuildConfig.SERVER_URL)); }
+        catch (IOException error) { try { connect(BuildConfig.SERVER_URL); } catch (IOException invalid) { throw new IllegalStateException(invalid); } }
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.rgb(245,247,251));
         root.setOnApplyWindowInsetsListener((v, insets) -> { v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom()); return insets; });
-        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal); root.addView(progress, new LinearLayout.LayoutParams(-1, dp(3)));
-        errorPanel = new LinearLayout(this); errorPanel.setOrientation(LinearLayout.VERTICAL); errorPanel.setPadding(dp(24),dp(24),dp(24),dp(24));
-        errorText = new TextView(this); errorText.setTextSize(18); errorPanel.addView(errorText);
-        errorPanel.addView(button("重新连接", () -> loadHome())); errorPanel.addView(button("修改服务器地址", () -> settings()));
-        errorPanel.setVisibility(View.GONE); root.addView(errorPanel);
-        web = new WebView(this); root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1)); setContentView(root);
-        WebSettings cfg = web.getSettings(); cfg.setJavaScriptEnabled(true); cfg.setDomStorageEnabled(true);
-        cfg.setAllowFileAccess(false); cfg.setAllowContentAccess(false); cfg.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        cfg.setSupportZoom(true); cfg.setBuiltInZoomControls(true); cfg.setDisplayZoomControls(false); cfg.setUseWideViewPort(true); cfg.setLoadWithOverviewMode(true);
-        cfg.setUserAgentString(cfg.getUserAgentString() + " XTYFManager/" + BuildConfig.VERSION);
-        CookieManager.getInstance().setAcceptCookie(true); CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
+        web = new WebView(this); configure(web); root.addView(web, new LinearLayout.LayoutParams(-1, -1)); setContentView(root);
+        // Legacy WebView login cookies are deliberately not imported. HTTP sessions now live only in the native transport.
+        CookieManager.getInstance().setAcceptCookie(false); CookieManager.getInstance().removeAllCookies(null);
         web.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) { return asset(request.getUrl(), request.getMethod()); }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString(); if (sameServer(url)) return false;
-                if (request.isForMainFrame()) external(url); return true;
+                if (isLocal(request.getUrl())) return false;
+                if (request.isForMainFrame()) openExternal(request.getUrl().toString()); return true;
             }
-            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { progress.setVisibility(View.VISIBLE); }
-            @Override public void onPageFinished(WebView view, String url) {
-                progress.setVisibility(View.GONE); CookieManager.getInstance().flush();
-                if (!sameServer(url)) return;
-                // The site's CSV/ZIP helper uses blob URLs. Navigate to the original
-                // authenticated endpoint instead so Android can stream to a user-selected file.
-                web.evaluateJavascript("(function(){if(window.__xtyfDownloads)return;window.__xtyfDownloads=true;if(window.BusinessUI){window.BusinessUI.download=function(url){var u=new URL(url,location.href);if(u.origin!==location.origin)return Promise.reject(new Error('下载地址必须属于当前服务器'));location.assign(u.href);return Promise.resolve();};}document.addEventListener('click',function(e){var a=e.target.closest('a[data-download-name],a[download]');if(a&&new URL(a.href).origin===location.origin){e.preventDefault();e.stopImmediatePropagation();location.assign(a.href);}},true);})();", null);
-            }
-            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) { errorText.setText("无法连接服务器\n" + server + "\n" + error.getDescription()); errorPanel.setVisibility(View.VISIBLE); web.setVisibility(View.GONE); progress.setVisibility(View.GONE); }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { closePort(); }
+            @Override public void onPageFinished(WebView view, String url) { if (isRoot(url) && port == null) attachPort(); }
+            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) { if (request.isForMainFrame()) message("本地页面无法打开：" + error.getDescription()); }
+        });
+        web.setWebChromeClient(chrome(true)); web.setDownloadListener((url, agent, disposition, mime, length) -> message("请使用页面中的保存按钮下载文件"));
+        web.loadUrl(LOCAL_ORIGIN + "/index.html");
+    }
+    private void configure(WebView view) {
+        WebSettings settings = view.getSettings(); settings.setJavaScriptEnabled(true); settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(false); settings.setAllowContentAccess(false); settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false); settings.setSupportMultipleWindows(false);
+        settings.setSupportZoom(true); settings.setBuiltInZoomControls(true); settings.setDisplayZoomControls(false); settings.setUseWideViewPort(true); settings.setLoadWithOverviewMode(true);
+        settings.setUserAgentString(settings.getUserAgentString() + " XTYFManager/" + BuildConfig.VERSION); CookieManager.getInstance().setAcceptThirdPartyCookies(view, false);
+    }
+    private WebResourceResponse asset(Uri uri, String method) {
+        if (!isLocal(uri) || !"GET".equals(method)) return denied(403, "Forbidden");
+        String path = uri.getPath(); if ("/".equals(path)) path = "/index.html";
+        if (path == null || path.indexOf('\\') >= 0 || path.indexOf('\0') >= 0 || Arrays.asList(path.split("/")).contains("..")) return denied(403, "Forbidden");
+        try {
+            Map<String, String> headers = new HashMap<>(); headers.put("Cache-Control", "no-cache"); headers.put("X-Content-Type-Options", "nosniff");
+            headers.put("Content-Security-Policy", "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'");
+            return new WebResourceResponse(mime(path), "UTF-8", 200, "OK", headers, getAssets().open("frontend/" + path.substring(1)));
+        } catch (IOException error) { return denied(404, "Not Found"); }
+    }
+    private static String mime(String name) {
+        String extension = name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
+        switch (extension) {
+            case "html": return "text/html"; case "js": case "mjs": return "text/javascript"; case "css": return "text/css";
+            case "json": case "map": return "application/json"; case "svg": return "image/svg+xml"; case "wasm": return "application/wasm";
+            case "woff": return "font/woff"; case "woff2": return "font/woff2"; case "pdf": return "application/pdf";
+            default: String result = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension); return result == null ? "application/octet-stream" : result;
+        }
+    }
+    private static WebResourceResponse denied(int status, String reason) {
+        return new WebResourceResponse("text/plain", "UTF-8", status, reason, Collections.emptyMap(), new ByteArrayInputStream(reason.getBytes(StandardCharsets.UTF_8)));
+    }
+    private void closePort() { if (port != null) { port.close(); port = null; } }
+    private void attachPort() {
+        closePort(); WebMessagePort[] pair = web.createWebMessageChannel(); port = pair[0];
+        port.setWebMessageCallback(new WebMessagePort.WebMessageCallback() {
+            @Override public void onMessage(WebMessagePort channel, WebMessage message) {
+                if (channel != port || !isRoot(web.getUrl())) return;
+                try {
+                    JSONObject payload = new JSONObject(message.getData()); Object id = payload.get("id");
+                    if (!(id instanceof String || id instanceof Number)) throw new JSONException("Invalid request id");
+                    JSONObject args = payload.optJSONObject("args"); dispatch(payload.getString("action"), new Pending(id, args == null ? new JSONObject() : args, channel, client));
+                } catch (Exception error) { message("无效的本地请求：" + error.getMessage()); }
             }
         });
-        web.setWebChromeClient(new WebChromeClient() {
-            @Override public void onProgressChanged(WebView view, int value) { progress.setProgress(value); }
+        web.postWebMessage(new WebMessage("xtyf-native-port", new WebMessagePort[]{pair[1]}), Uri.parse(LOCAL_ORIGIN));
+    }
+    private void reply(Pending request, Object result, Exception error) {
+        runOnUiThread(() -> {
+            if (destroyed || request.channel != port) return;
+            try {
+                JSONObject response = new JSONObject().put("id", request.id).put("result", error == null ? result : JSONObject.NULL)
+                    .put("error", error == null ? JSONObject.NULL : (error.getMessage() == null ? "请求失败" : error.getMessage()));
+                request.channel.postMessage(new WebMessage(response.toString()));
+            } catch (JSONException | IllegalStateException ignored) { /* Navigation can close the previous document's channel. */ }
+        });
+    }
+    private void dispatch(String action, Pending request) {
+        try {
+            switch (action) {
+                case "get_config": reply(request, new JSONObject().put("serverUrl", server).put("version", BuildConfig.VERSION), null); break;
+                case "set_server": connect(request.args.getString("serverUrl")); reply(request, new JSONObject().put("serverUrl", server).put("version", BuildConfig.VERSION), null); break;
+                case "pick_files": pickFiles(request); break;
+                case "download": saveFile(request); break;
+                case "open_external": openExternal(request.args.getString("url")); reply(request, new JSONObject(), null); break;
+                case "cancel": request.client.cancel(request.args.getString("requestId")); reply(request, new JSONObject(), null); break;
+                case "request": case "read_resource": workers.execute(() -> { try { reply(request, http(request, "read_resource".equals(action)), null); } catch (Exception error) { reply(request, null, error); } }); break;
+                default: throw new IOException("不支持的本地操作");
+            }
+        } catch (Exception error) { reply(request, null, error); }
+    }
+    private JSONObject http(Pending request, boolean binary) throws Exception {
+        JSONObject args = request.args; String path = args.getString("path"), method = binary ? "GET" : args.optString("method", "GET");
+        Map<String, String> headers = new LinkedHashMap<>(); JSONObject given = args.optJSONObject("headers");
+        if (given != null) for (Iterator<String> names = given.keys(); names.hasNext();) { String name = names.next(); headers.put(name, given.getString(name)); }
+        NativeHttpClient.Body body = null; JSONObject multipart = args.optJSONObject("multipart");
+        if (multipart != null) { String boundary = "xtyf-" + UUID.randomUUID(); headers.put("Content-Type", "multipart/form-data; boundary=" + boundary); body = output -> writeMultipart(output, multipart, boundary); }
+        else if (args.has("body") && !args.isNull("body")) { byte[] bytes = args.getString("body").getBytes(StandardCharsets.UTF_8); body = output -> output.write(bytes); }
+        final JSONObject[] response = new JSONObject[1];
+        request.client.request(path, method, headers, body, args.optString("requestId", request.id.toString()), (status, responseHeaders, input) -> {
+            ByteArrayOutputStream output = new ByteArrayOutputStream(); NativeHttpClient.copy(input, output);
+            try {
+                byte[] bytes = output.toByteArray(); response[0] = new JSONObject().put("status", status).put("headers", new JSONObject(responseHeaders))
+                    .put("body", binary ? java.util.Base64.getEncoder().encodeToString(bytes) : new String(bytes, StandardCharsets.UTF_8)).put("encoding", binary ? "base64" : "text");
+            } catch (JSONException error) { throw new IOException(error); }
+        });
+        return response[0];
+    }
+    private static String quoted(String value) { return value.replace("\\", "_").replace("\"", "_").replace("\r", "_").replace("\n", "_"); }
+    private void writeMultipart(OutputStream output, JSONObject multipart, String boundary) throws IOException {
+        try {
+            JSONArray fields = multipart.optJSONArray("fields"), entries = multipart.optJSONArray("files");
+            if (fields != null) for (int index = 0; index < fields.length(); index++) {
+                JSONObject field = fields.getJSONObject(index);
+                output.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + quoted(field.getString("name")) + "\"\r\n\r\n" + field.getString("value") + "\r\n").getBytes(StandardCharsets.UTF_8));
+            }
+            if (entries != null) for (int index = 0; index < entries.length(); index++) {
+                JSONObject file = entries.getJSONObject(index); Uri uri = files.get(file.getString("handle")); if (uri == null) throw new IOException("文件选择已失效，请重新选择");
+                output.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + quoted(file.getString("field")) + "\"; filename=\"" + quoted(file.getString("name")) + "\"\r\nContent-Type: " + quoted(file.optString("mime", "application/octet-stream")) + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+                try (InputStream input = getContentResolver().openInputStream(uri)) { if (input == null) throw new IOException("无法读取所选文件"); NativeHttpClient.copy(input, output); }
+                output.write("\r\n".getBytes(StandardCharsets.UTF_8));
+            }
+            output.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        } catch (JSONException error) { throw new IOException("无效的上传参数", error); }
+    }
+    private void pickFiles(Pending request) throws IOException {
+        if (picker != null || legacyPicker != null) throw new IOException("请先完成当前文件选择"); picker = request;
+        try { startActivityForResult(fileIntent(request.args.optBoolean("multiple", false), request.args.opt("accept")), PICK_FILE); }
+        catch (ActivityNotFoundException error) { picker = null; throw new IOException("无法打开文件选择器", error); }
+    }
+    private Intent fileIntent(boolean multiple, Object accept) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*").putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+        List<String> types = new ArrayList<>(); String acceptText = accept instanceof String ? (String) accept : "";
+        if (accept instanceof JSONArray) { JSONArray array = (JSONArray)accept; for (int index=0; index<array.length(); index++) acceptText += "," + array.optString(index); }
+        for (String part : acceptText.split(",")) { String type = part.trim(); if (type.startsWith(".")) type = MimeTypeMap.getSingleton().getMimeTypeFromExtension(type.substring(1)); if (type != null && type.contains("/")) types.add(type); }
+        if (!types.isEmpty()) intent.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[0])); return intent;
+    }
+    private void saveFile(Pending request) throws Exception {
+        if (download != null) throw new IOException("请先完成当前保存选择"); request.client.resolve(request.args.getString("path")); download = request;
+        String filename = request.args.optString("filename", "download").replaceAll("[\\\\/\r\n]", "_");
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime(filename)).putExtra(Intent.EXTRA_TITLE, filename);
+        try { startActivityForResult(intent, SAVE_FILE); } catch (ActivityNotFoundException error) { download = null; throw new IOException("无法打开保存窗口", error); }
+    }
+    private JSONObject selected(Uri uri) throws Exception {
+        String handle = UUID.randomUUID().toString(), name = "upload"; long size = -1;
+        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME), sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (nameColumn >= 0) name = cursor.getString(nameColumn); if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) size = cursor.getLong(sizeColumn);
+            }
+        }
+        files.put(handle, uri); String type = getContentResolver().getType(uri);
+        return new JSONObject().put("handle", handle).put("name", name).put("size", size).put("mime", type == null ? "application/octet-stream" : type);
+    }
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == PICK_FILE) {
+            Pending request = picker; picker = null; List<Uri> uris = new ArrayList<>();
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getClipData() != null) for (int index = 0; index < data.getClipData().getItemCount(); index++) uris.add(data.getClipData().getItemAt(index).getUri());
+                else if (data.getData() != null) uris.add(data.getData());
+            }
+            if (legacyPicker != null) { legacyPicker.onReceiveValue(uris.isEmpty() ? null : uris.toArray(new Uri[0])); legacyPicker = null; }
+            if (request != null) try { JSONArray result = new JSONArray(); for (Uri uri : uris) result.put(selected(uri)); reply(request, result, null); } catch (Exception error) { reply(request, null, error); }
+        }
+        if (requestCode == SAVE_FILE && download != null) {
+            Pending request = download; download = null;
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) { try { reply(request, new JSONObject().put("cancelled", true), null); } catch (JSONException ignored) {} return; }
+            Uri destination = data.getData(); workers.execute(() -> {
+                try {
+                    request.client.request(request.args.getString("path"), "GET", Collections.emptyMap(), null, request.args.optString("requestId", request.id.toString()), (status, headers, input) -> {
+                        String type = headers.getOrDefault("content-type", "");
+                        if (status < 200 || status >= 300 || type.contains("text/html") || type.contains("application/json")) throw new IOException("服务器拒绝下载，请检查登录状态（" + status + "）");
+                        try (OutputStream output = getContentResolver().openOutputStream(destination, "wt")) { if (output == null) throw new IOException("无法写入所选位置"); NativeHttpClient.copy(input, output); }
+                    }); reply(request, new JSONObject().put("cancelled", false).put("path", destination.toString()), null);
+                } catch (Exception error) { reply(request, null, error); }
+            });
+        }
+    }
+    private WebChromeClient chrome(boolean local) {
+        return new WebChromeClient() {
             @Override public boolean onJsAlert(WebView view, String url, String text, JsResult result) {
                 new AlertDialog.Builder(MainActivity.this).setMessage(text).setPositiveButton("确定", (d,w) -> result.confirm()).setOnCancelListener(d -> result.cancel()).show(); return true;
             }
@@ -89,71 +240,50 @@ public class MainActivity extends Activity {
                 new AlertDialog.Builder(MainActivity.this).setMessage(text).setPositiveButton("确定", (d,w) -> result.confirm()).setNegativeButton("取消", (d,w) -> result.cancel()).setOnCancelListener(d -> result.cancel()).show(); return true;
             }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
-                if (upload != null) upload.onReceiveValue(null); upload = callback;
-                Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
-                pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
-                try { startActivityForResult(pick, PICK_FILE); } catch (ActivityNotFoundException e) { upload.onReceiveValue(null); upload = null; message("无法打开文件选择器"); }
-                return true;
+                if (!local || picker != null || legacyPicker != null) { callback.onReceiveValue(null); return true; } legacyPicker = callback;
+                try { startActivityForResult(fileIntent(params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE, String.join(",", params.getAcceptTypes())), PICK_FILE); }
+                catch (ActivityNotFoundException error) { legacyPicker = null; callback.onReceiveValue(null); } return true;
             }
-        });
-        web.setDownloadListener((url, agent, disposition, mime, length) -> {
-            if (!sameServer(url)) { message("只能下载当前服务器的文件"); return; }
-            if (downloadUrl != null) { message("请先完成当前文件的保存选择"); return; }
-            downloadUrl = url; downloadCookies = CookieManager.getInstance().getCookie(url); downloadAgent = agent;
-            Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime == null || mime.isEmpty() ? "application/octet-stream" : mime);
-            save.putExtra(Intent.EXTRA_TITLE, URLUtil.guessFileName(url, disposition, mime));
-            try { startActivityForResult(save, SAVE_FILE); } catch (ActivityNotFoundException e) { downloadUrl = null; message("无法打开文件保存窗口"); }
-        });
-        if (state == null || web.restoreState(state) == null) loadHome();
+        };
     }
-    private void settings() {
-        LinearLayout panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL); panel.setPadding(dp(24),dp(12),dp(24),dp(12));
-        TextView label = new TextView(this); label.setText("服务器完整网址（http:// 或 https://）"); panel.addView(label);
-        EditText input = new EditText(this); input.setSingleLine(true); input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI); input.setText(server); panel.addView(input);
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("服务器设置").setView(panel).setPositiveButton("保存并连接", null).setNegativeButton("取消", null).create();
-        dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            try { server = normalize(input.getText().toString()); getPreferences(MODE_PRIVATE).edit().putString("server", server).apply(); web.clearHistory(); loadHome(); dialog.dismiss(); }
-            catch (Exception e) { input.setError(e.getMessage()); }
-        })); dialog.show();
-    }
-    @Override protected void onActivityResult(int request, int result, Intent data) {
-        super.onActivityResult(request, result, data);
-        if (request == PICK_FILE && upload != null) {
-            Uri[] uris = null;
-            if (result == RESULT_OK && data != null) {
-                if (data.getClipData() != null) { ClipData clip = data.getClipData(); uris = new Uri[clip.getItemCount()]; for (int i=0;i<uris.length;i++) uris[i]=clip.getItemAt(i).getUri(); }
-                else if (data.getData() != null) uris = new Uri[]{data.getData()};
+    private void openExternal(String value) {
+        Uri uri = Uri.parse(value);
+        if (!("http".equals(uri.getScheme()) || "https".equals(uri.getScheme())) || uri.getHost() == null || uri.getUserInfo() != null || isLocal(uri)) {
+            new AlertDialog.Builder(this).setMessage("此链接类型无法在应用内打开").setPositiveButton("复制链接", (d,w) -> {
+                ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("链接", value)); message("链接已复制");
+            }).setNegativeButton("关闭", null).show(); return;
+        }
+        if (externalDialog != null) externalDialog.dismiss(); Dialog dialog = new Dialog(this, android.R.style.Theme_Material_Light_NoActionBar); externalDialog = dialog;
+        LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL);
+        root.setOnApplyWindowInsetsListener((v, insets) -> { v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom()); return insets; });
+        LinearLayout navigation = new LinearLayout(this); TextView address = new TextView(this); address.setText(uri.getHost()); address.setSingleLine(true);
+        WebView browser = new WebView(this); externalWeb = browser; configure(browser);
+        navigation.addView(button("返回", () -> { if (browser.canGoBack()) browser.goBack(); else dialog.dismiss(); }));
+        navigation.addView(address, new LinearLayout.LayoutParams(0, -2, 1)); navigation.addView(button("关闭", dialog::dismiss));
+        root.addView(navigation); root.addView(browser, new LinearLayout.LayoutParams(-1, 0, 1)); dialog.setContentView(root); browser.setWebChromeClient(chrome(false));
+        browser.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri target = request.getUrl(); boolean allowed = ("http".equals(target.getScheme()) || "https".equals(target.getScheme())) && !isLocal(target) && target.getUserInfo() == null;
+                if (!allowed && request.isForMainFrame()) message("此链接类型无法在应用内打开"); return !allowed;
             }
-            upload.onReceiveValue(uris); upload = null;
-        }
-        if (request == SAVE_FILE) {
-            String url = downloadUrl, cookies = downloadCookies, agent = downloadAgent; downloadUrl = null; downloadCookies = null; downloadAgent = null;
-            if (result == RESULT_OK && data != null && data.getData() != null && url != null) saveDownload(url, cookies, agent, data.getData());
-        }
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) { return isLocal(request.getUrl()) ? denied(403, "Forbidden") : null; }
+            @Override public void onPageFinished(WebView view, String url) { address.setText(Uri.parse(url).getHost()); }
+        });
+        browser.setDownloadListener((url, agent, disposition, mime, length) -> message("站外页面仅供浏览；请返回业务页面保存附件"));
+        dialog.setOnKeyListener((d,key,event) -> { if (key == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP) { if (browser.canGoBack()) browser.goBack(); else dialog.dismiss(); return true; } return false; });
+        dialog.setOnDismissListener(d -> { browser.destroy(); if (externalDialog == dialog) { externalDialog=null; externalWeb=null; } });
+        dialog.show(); dialog.getWindow().setLayout(-1, -1); browser.loadUrl(value);
     }
-    private void saveDownload(String url, String cookies, String agent, Uri destination) {
-        message("正在下载文件…");
-        java.util.concurrent.ExecutorService worker = Executors.newSingleThreadExecutor();
-        worker.execute(() -> {
-            HttpURLConnection connection = null;
-            try {
-                connection = (HttpURLConnection)new URL(url).openConnection(); connection.setInstanceFollowRedirects(false); connection.setConnectTimeout(20000); connection.setReadTimeout(180000);
-                if (cookies != null) connection.setRequestProperty("Cookie", cookies); if (agent != null) connection.setRequestProperty("User-Agent", agent);
-                int status = connection.getResponseCode(); String type = connection.getContentType();
-                if (status != 200 || (type != null && (type.contains("text/html") || type.contains("application/json")))) throw new IOException("服务器拒绝下载，请检查登录状态（" + status + "）");
-                try (InputStream source = connection.getInputStream(); OutputStream target = getContentResolver().openOutputStream(destination, "wt")) {
-                    if (target == null) throw new IOException("无法写入所选文件"); byte[] buffer = new byte[65536]; int count;
-                    while ((count = source.read(buffer)) != -1) target.write(buffer, 0, count);
-                }
-                runOnUiThread(() -> message("文件已保存"));
-            } catch (Exception e) { runOnUiThread(() -> message("下载失败：" + e.getMessage())); }
-            finally { if (connection != null) connection.disconnect(); worker.shutdown(); }
+    @Override public void onBackPressed() {
+        if (externalDialog != null) { externalDialog.dismiss(); return; }
+        web.evaluateJavascript("Boolean(window.XTYFClient && window.XTYFClient.back && window.XTYFClient.back())", handled -> {
+            if (!"true".equals(handled)) new AlertDialog.Builder(this).setMessage("退出巡天御风管理系统？").setPositiveButton("退出", (d,w) -> finish()).setNegativeButton("取消", null).show();
         });
     }
-    private void goBack() { if (web.canGoBack()) web.goBack(); else new AlertDialog.Builder(this).setMessage("退出巡天御风管理系统？").setPositiveButton("退出", (d,w) -> finish()).setNegativeButton("取消", null).show(); }
-    @Override public void onBackPressed() { goBack(); }
-    @Override protected void onSaveInstanceState(Bundle state) { web.saveState(state); super.onSaveInstanceState(state); }
-    @Override protected void onPause() { super.onPause(); web.onPause(); CookieManager.getInstance().flush(); }
-    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }
-    @Override protected void onDestroy() { if (upload != null) upload.onReceiveValue(null); web.destroy(); super.onDestroy(); }
+    @Override protected void onPause() { super.onPause(); if (web != null) web.onPause(); if (externalWeb != null) externalWeb.onPause(); }
+    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); if (externalWeb != null) externalWeb.onResume(); }
+    @Override protected void onDestroy() {
+        destroyed = true; closePort(); if (client != null) client.cancelAll(); workers.shutdownNow();
+        if (legacyPicker != null) legacyPicker.onReceiveValue(null); if (externalDialog != null) externalDialog.dismiss(); if (web != null) web.destroy(); super.onDestroy();
+    }
 }

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from modules.task_types import JsonObject
 from modules.task_schedule import resolve_stage
-from modules.task_dates import dependency_start_date
+from modules.task_dates import dependency_boundary, parse_calendar_date
 
 
 def _relation_map(
@@ -97,6 +97,7 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
     tasks: list[JsonObject] = []
     for row in rows:
         task = dict(row)
+        task["schedule_locked"] = bool(task["schedule_locked"])
         task_id = int(task["id"])
         task["stage_options"], task["owner_stage"] = resolve_stage(owner_groups.get(task["owner_id"], []), task.get("schedule_stage"))
         due = str(task.get("due_date") or "").strip()
@@ -124,14 +125,14 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
                 warnings.append(f"前置任务“{predecessor['title']}”已取消")
             elif predecessor["status"] != "已完成":
                 warnings.append(f"前置任务“{predecessor['title']}”尚未完成")
-            pred_due = str(predecessor.get("due_date") or "")
-            if pred_due:
-                if task.get("start_date") and str(task["start_date"]) < pred_due:
-                    warnings.append(f"开始日期早于前置任务“{predecessor['title']}”截止日期")
+            boundary = dependency_boundary(predecessor)
+            if boundary:
+                if parse_calendar_date(task.get("start_date")) and task["start_date"] < boundary:
+                    warnings.append(f"开始日期早于前置任务“{predecessor['title']}”允许衔接日期 {boundary}（最多提前 2 天）")
             else:
-                warnings.append(f"前置任务“{predecessor['title']}”未设置截止日期")
+                warnings.append(f"前置任务“{predecessor['title']}”缺少有效完成日期或截止日期")
         parent = by_id.get(parent_id)
-        task["suggested_start_date"] = dependency_start_date(parent.get("due_date")) if parent else None
+        task["suggested_start_date"] = dependency_boundary(parent) if parent else None
         task["dependency_warnings"] = warnings
         tasks.append(task)
     return members, all_members, groups, projects, tasks

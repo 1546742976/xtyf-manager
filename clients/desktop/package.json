@@ -1,0 +1,11 @@
+{
+  "name": "xtyf-manager-desktop",
+  "private": true,
+  "version": "1.0.3",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.10.1"
+  }
+}

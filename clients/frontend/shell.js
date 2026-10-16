@@ -1,0 +1,205 @@
+(() => {
+  'use strict';
+  const localBase=location.protocol+'//'+location.host;
+  const isLocal=url=>url.protocol===location.protocol&&url.host===location.host;
+  const routes={
+    '/':['dashboard.html','dashboard'], '/login':['login.html','login'], '/tasks':['board.html','tasks'],
+    '/account':['account.html','account'], '/manage':['manage.html','manage','manage_tasks'],
+    '/members':['members.html','members','manage_members'], '/discussions':['discussions.html','discussions'],
+    '/funds':['funds.html','funds','access_funds'], '/invoices':['invoices.html','invoices'],
+    '/account/email/verify':['email_verify.html','account'], '/admin/mail':['mail_admin.html','mail','manage_mail'],
+    '/admin/security':['security.html','security','manage_security']
+  };
+  const anonymousBootstrap=()=>({authenticated:false,me:null,user:null,permissions:{},role_names:{admin:'管理员',manager:'管理人员',member:'成员'},statuses:[],priorities:[]});
+  let config={serverUrl:'',version:''},bootstrap=anonymousBootstrap();
+  let route='/',frame=null,sequence=0,generation=0,historyIndex=0,serverGeneration=0,bootSequence=0,bootstrapSequence=0,booting=false,compatible=false,preview=null,noticeTimer;
+  const requests=new Map(),resourceURLs=new Set();
+  const host=document.getElementById('page-host'),settings=document.getElementById('client-settings'),previewDialog=document.getElementById('resource-preview');
+  function notify(text){const el=document.getElementById('client-notice');el.textContent=text;el.hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>el.hidden=true,6000);}
+  function connection(text=''){const el=document.getElementById('connection-status');el.querySelector('span').textContent=text;el.hidden=!text;}
+  function pathFor(value){
+    const url=new URL(value,localBase+route);
+    if(!isLocal(url)&&(!config.serverUrl||url.origin!==new URL(config.serverUrl).origin))throw new Error('业务请求仅允许连接当前服务器。');
+    return url.pathname+url.search;
+  }
+  function bytes(response){return Uint8Array.from(atob(response.body||''),char=>char.charCodeAt(0));}
+  function asResponse(result){
+    const status=Number(result.status),headers=new Headers(result.headers||{});
+    return new Response([204,205,304].includes(status)?null:result.encoding==='base64'?bytes(result):result.body??'',{status,headers});
+  }
+  async function request(input,options={}){
+    const server=serverGeneration;
+    let path=pathFor(input instanceof Request?input.url:input);
+    if(path.split('?')[0]==='/login')path='/api/client/login';
+    if(path.split('?')[0]==='/logout')path='/api/client/logout';
+    const id='request-'+(++sequence),method=String(options.method||'GET').toUpperCase();
+    const headers=Object.fromEntries(new Headers(options.headers||{}));
+    // Session cookies and CSRF are always owned by the native transport.
+    for(const key of Object.keys(headers))if(/^(cookie|authorization|x-csrf-token)$/i.test(key))delete headers[key];
+    headers['X-XTYF-Client-Protocol']='1';
+    const args={path,method,headers,requestId:id};
+    if(options.body?._nativeMultipart){
+      const fields=[],files=[];
+      for(const [name,value] of options.body.entries()){
+        if(value&&typeof value==='object'&&value.handle)files.push({field:name,handle:value.handle,name:value.name,mime:value.type||value.mime||'application/octet-stream'});
+        else if(typeof value==='string')fields.push({name,value});
+        else if(value?.name)throw new Error('请使用应用内文件选择器添加文件。');
+      }
+      args.multipart={fields,files};
+    }else if(options.body!==undefined&&options.body!==null)args.body=String(options.body);
+    if(path==='/api/client/logout'){delete args.multipart;args.body='{}';headers['Content-Type']='application/json';}
+    const controller=new AbortController();requests.set(id,controller);
+    let abort;
+    const aborted=new Promise((_,reject)=>{abort=()=>{controller.abort();XTYFNative.invoke('cancel',{requestId:id}).catch(()=>{});reject(new DOMException('请求已取消','AbortError'));};});
+    if(options.signal?.aborted){requests.delete(id);throw new DOMException('请求已取消','AbortError');}
+    options.signal?.addEventListener('abort',abort,{once:true});controller.signal.addEventListener('abort',()=>{}, {once:true});
+    requests.set(id,{abort});
+    try{
+      const response=asResponse(await Promise.race([XTYFNative.invoke('request',args),aborted]));
+      if(server!==serverGeneration)throw new DOMException('服务器已切换','AbortError');
+      if(response.status===401&&path!=='/api/client/login'&&path!=='/api/client/bootstrap'&&route.split('?')[0]!=='/login'){
+        bootstrap=anonymousBootstrap();setTimeout(()=>{if(server===serverGeneration)navigate('/login?next='+encodeURIComponent(route),true);},0);
+      }else if(response.status===403){const data=await response.clone().json().catch(()=>({}));if(data.reason==='password_change_required')setTimeout(()=>{if(server===serverGeneration)navigate('/account',true);},0);}
+      const changesSession=path==='/api/client/login'||path==='/api/client/logout'||path==='/api/password'||path==='/api/account/preferences'||path==='/api/account/profile'||/^\/api\/(?:admin\/permissions\/|member\/\d+\/profile)/.test(path);
+      if(changesSession&&!['GET','HEAD','OPTIONS'].includes(method)&&response.ok){
+        const info=await response.clone().json().catch(()=>({}));
+        if(info.ok!==false){try{await refreshBootstrap(server);}catch(_){}}
+      }
+      return response;
+    }finally{requests.delete(id);options.signal?.removeEventListener('abort',abort);}
+  }
+  function cancelPage(){for(const item of requests.values())item.abort();requests.clear();for(const url of resourceURLs)URL.revokeObjectURL(url);resourceURLs.clear();}
+  async function refreshBootstrap(server=serverGeneration){
+    const attempt=++bootstrapSequence;
+    const result=await XTYFNative.invoke('request',{path:'/api/client/bootstrap',method:'GET',headers:{'X-XTYF-Client-Protocol':'1'},requestId:'bootstrap-'+(++sequence)});
+    if(server!==serverGeneration||attempt!==bootstrapSequence)throw Object.assign(new DOMException('初始化已被替换','AbortError'),{superseded:true});
+    if(result.status===404){compatible=false;throw Object.assign(new Error('服务器需要更新：请部署支持本地客户端的服务器版本。'),{incompatible:true});}
+    let data;try{data=JSON.parse(result.body);}catch(_){data=null;}
+    if(result.status<200||result.status>=300)throw new Error(data?.error||'服务器暂时不可用（'+result.status+'）');
+    if(!data||typeof data!=='object'||Array.isArray(data)||data.protocolVersion!==1){compatible=false;throw Object.assign(new Error('服务器协议不兼容，请更新服务器或客户端后重试。'),{incompatible:true});}
+    if(result.status!==200||!data.ok)throw new Error(data.error||'服务器暂时不可用');
+    bootstrap=data;compatible=true;connection('');return data;
+  }
+  function normalized(value){const u=new URL(value,localBase+route);return u.pathname+u.search+u.hash;}
+  function setRoute(value,replace=false,render=true){
+    route=normalized(value);const url='#'+route;
+    if(!replace)historyIndex++;
+    if(replace)history.replaceState({xtyf:true,index:historyIndex},'',url);else history.pushState({xtyf:true,index:historyIndex},'',url);
+    if(render)renderRoute();
+  }
+  function navigate(value,replace=false){
+    const u=new URL(value,localBase+route);
+    if(!isLocal(u)&&(!config.serverUrl||u.origin!==new URL(config.serverUrl).origin))return XTYFNative.invoke('open_external',{url:u.href}).catch(error=>notify(error.message));
+    setRoute(u.pathname+u.search+u.hash,replace);
+  }
+  function localError(title,message){
+    cancelPage();if(frame){frame.remove();frame=null;}
+    const section=document.createElement('section');section.className='local-error';
+    const h=document.createElement('h1');h.textContent=title;
+    const p=document.createElement('p');p.textContent=message;
+    const retry=document.createElement('button');retry.textContent='重试';retry.onclick=boot;
+    const edit=document.createElement('button');edit.textContent='服务器设置';edit.onclick=openSettings;
+    section.append(h,p,retry,edit);host.replaceChildren(section);
+  }
+  function renderRoute(){
+    const url=new URL(route,localBase),key=url.pathname.replace(/\/$/,'')||'/';
+    const entry=routes[key];
+    if(!entry)return localError('本地页面不存在','此链接没有对应的应用页面。可返回工作台或检查服务器地址。');
+    if(!bootstrap.authenticated&&key!=='/login'&&key!=='/account/email/verify'){
+      setRoute('/login?next='+encodeURIComponent(route),true,false);return renderRoute();
+    }
+    if(bootstrap.authenticated&&bootstrap.me?.must_change_password&&key!=='/account'){
+      setRoute('/account',true,false);return renderRoute();
+    }
+    if(bootstrap.authenticated&&key==='/login'){
+      setRoute(url.searchParams.get('next')||'/',true,false);return renderRoute();
+    }
+    if(entry[2]&&!bootstrap.permissions[entry[2]])return localError('没有访问权限','当前账户不能访问此页面。');
+    const taskType=url.searchParams.get('type')==='daily'?'daily':'vehicle',project=url.searchParams.get('project')||'';
+    const context={...bootstrap,page:entry[1],task_type:taskType,project_id:taskType==='daily'&&/^[1-9]\d{0,18}$/.test(project)?project:''};
+    const html=XTYFTemplates.render(entry[0],context);
+    cancelPage();generation++;
+    if(frame)frame.remove();
+    frame=document.createElement('iframe');frame.title='巡天御风工作空间';
+    frame.setAttribute('referrerpolicy','no-referrer');
+    // Both template and scripts are packaged. All server strings were escaped by the compiler.
+    frame.srcdoc=html.replace('<head>','<head><base href="'+localBase+'/"><script src="/page-runtime.js"></script>');
+    host.replaceChildren(frame);document.title='巡天御风管理系统';
+  }
+  async function boot(){
+    if(booting)return;booting=true;const server=serverGeneration,attempt=++bootSequence;
+    try{
+      const nextConfig=await XTYFNative.invoke('get_config',{});
+      if(server!==serverGeneration||attempt!==bootSequence)return;
+      config=nextConfig;document.getElementById('server-url').value=config.serverUrl;
+      document.getElementById('client-version').textContent='客户端 '+config.version;
+      await refreshBootstrap(server);
+      if(server!==serverGeneration||attempt!==bootSequence)return;
+      renderRoute();
+    }catch(error){
+      if(server!==serverGeneration||attempt!==bootSequence||error.superseded)return;
+      if(error.incompatible)localError('服务器需要更新',error.message);
+      else{connection('暂时无法连接服务器，页面已在本地打开。');if(!frame)renderRoute();}
+    }finally{if(attempt===bootSequence)booting=false;}
+  }
+  function openSettings(){document.getElementById('server-url').value=config.serverUrl;document.getElementById('settings-error').textContent='';settings.showModal();}
+  async function download(value,filename='download'){return XTYFNative.invoke('download',{path:pathFor(value),filename});}
+  async function readResource(value){
+    const server=serverGeneration;
+    const result=await XTYFNative.invoke('read_resource',{path:pathFor(value)});
+    if(server!==serverGeneration)throw new DOMException('服务器已切换','AbortError');
+    if(result.status!==200)throw new Error('附件读取失败（'+result.status+'）');
+    return result;
+  }
+  async function imageURL(value){
+    const own=generation,result=await readResource(value),response=asResponse(result),blob=await response.blob();
+    if(own!==generation)throw new DOMException('页面已离开','AbortError');
+    if(!blob.type.startsWith('image/'))throw new Error('附件不是图片');
+    const url=URL.createObjectURL(blob);resourceURLs.add(url);return url;
+  }
+  function closePreview(){previewDialog.close();preview=null;window.XTYFPreview=null;document.getElementById('preview-content').replaceChildren();}
+  async function previewResource(value,filename='附件'){
+    const result=await readResource(value),response=asResponse(result),blob=await response.blob();
+    if(blob.type!=='application/pdf'&&!blob.type.startsWith('image/'))return download(value,filename);
+    preview={path:value,filename};document.getElementById('preview-title').textContent=filename;
+    const container=document.getElementById('preview-content');container.replaceChildren();
+    if(blob.type==='application/pdf'){
+      window.XTYFPreview={data:new Uint8Array(await blob.arrayBuffer()),filename};const child=document.createElement('iframe');child.title='PDF 预览';child.src='/pdf-viewer.html';container.append(child);
+    }else{const img=document.createElement('img'),url=URL.createObjectURL(blob);resourceURLs.add(url);img.src=url;img.alt=filename;container.append(img);}
+    previewDialog.showModal();
+  }
+  function back(){
+    if(settings.open){settings.close();return true;}if(previewDialog.open){closePreview();return true;}
+    const doc=frame?.contentDocument;if(doc){
+      const dialog=[...doc.querySelectorAll('dialog[open]')].pop();if(dialog){if(dialog.dispatchEvent(new Event('cancel',{cancelable:true})))dialog.close();return true;}
+      const modal=[...doc.querySelectorAll('.show,.modal-mask:not(.hidden)')].reverse().find(el=>/modal|mask/i.test(el.className));
+      if(modal){const close=modal.querySelector('[data-close],.modal-close,[onclick*="close"],button[aria-label*="关闭"]');if(close){close.click();return true;}}
+      if(doc.body.classList.contains('ws-menu-open')){doc.querySelector('[data-ws-menu]')?.click();return true;}
+    }
+    if(historyIndex>0){history.back();return true;}
+    if(route!=='/'&&!route.startsWith('/login')){navigate('/',true);return true;}return false;
+  }
+  window.XTYF={request,download,readResource,imageURL,preview:previewResource,navigate,notify,openSettings,localBase,isLocal,
+    invoke:(action,args)=>XTYFNative.invoke(action,args),get route(){return route;},get bootstrap(){return bootstrap;},get config(){return config;},get generation(){return generation;},
+    replaceRoute:value=>setRoute(value,true,false),isPage:value=>Object.hasOwn(routes,new URL(value,localBase).pathname.replace(/\/$/,'')||'/'),
+    openExternal:url=>XTYFNative.invoke('open_external',{url}),get compatible(){return compatible;}};
+  window.XTYFClient={back};
+  document.getElementById('client-settings-open').onclick=openSettings;document.getElementById('settings-cancel').onclick=()=>settings.close();
+  document.getElementById('connection-retry').onclick=boot;
+  document.getElementById('preview-close').onclick=closePreview;previewDialog.addEventListener('cancel',closePreview);
+  document.getElementById('preview-save').onclick=()=>preview&&download(preview.path,preview.filename).catch(error=>notify(error.message));
+  document.getElementById('server-form').onsubmit=async event=>{
+    event.preventDefault();const button=event.target.querySelector('[type="submit"]');button.disabled=true;
+    // Supersede a pending initial boot before invoking native server replacement.
+    serverGeneration++;bootSequence++;bootstrapSequence++;booting=false;
+    try{
+      const result=await XTYFNative.invoke('set_server',{serverUrl:document.getElementById('server-url').value.trim()});
+      config={...config,...result};cancelPage();bootstrap=anonymousBootstrap();compatible=false;historyIndex=0;
+      if(previewDialog.open)closePreview();
+      settings.close();navigate('/login',true);await boot();
+    }catch(error){document.getElementById('settings-error').textContent=error.message;await boot();}finally{button.disabled=false;}
+  };
+  window.addEventListener('popstate',event=>{historyIndex=event.state?.index||0;route=location.hash.slice(1)||'/';renderRoute();});
+  window.addEventListener('keydown',event=>{if(event.key==='Escape'&&back())event.preventDefault();});
+  route=location.hash.slice(1)||'/';renderRoute();boot();
+})();

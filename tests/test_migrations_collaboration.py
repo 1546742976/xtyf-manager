@@ -33,8 +33,25 @@ class TestCollaborationMigration(unittest.TestCase):
         db.commit()
         migrate(db)
         migrate(db)
-        self.assertEqual(db.execute('SELECT start_date,due_date,schedule_stage,start_date_origin FROM tasks').fetchone(),
-                         ('2026-10-14', '2026-10-22', None, 'frozen'))
+        self.assertEqual(db.execute('SELECT start_date,due_date,schedule_stage,start_date_origin,schedule_locked FROM tasks').fetchone(),
+                         ('2026-10-14', '2026-10-22', None, 'frozen', 0))
+        db.close()
+
+    def test_schedule_lock_upgrade_does_not_infer_locks_and_preserves_explicit_locks(self):
+        db = self._legacy_db()
+        db.execute("ALTER TABLE tasks ADD COLUMN start_date_origin TEXT NOT NULL DEFAULT 'frozen'")
+        db.execute("UPDATE tasks SET start_date_origin='manual'")
+        db.commit()
+        migrate(db)
+        self.assertEqual(db.execute('SELECT start_date_origin,schedule_locked FROM tasks').fetchone(), ('manual', 0))
+        db.execute("UPDATE tasks SET start_date_origin='manual',schedule_locked=1")
+        db.commit()
+        migrate(db)
+        self.assertEqual(db.execute('SELECT start_date_origin,schedule_locked FROM tasks').fetchone(), ('manual', 1))
+        with self.assertRaises(sqlite3.IntegrityError):
+            db.execute('UPDATE tasks SET schedule_locked=2')
+        db.rollback()
+        self.assertIsNotNone(db.execute('SELECT version FROM schema_migrations WHERE version=8').fetchone())
         db.close()
 
     def _legacy_db(self, factory=sqlite3.Connection):
@@ -109,7 +126,7 @@ class TestCollaborationMigration(unittest.TestCase):
         self.assertIn("新赛季步兵", vehicle_names)
         self.assertNotIn("步兵", vehicle_names)
         self.assertNotIn("飞镖", vehicle_names)
-        self.assertTrue(set(range(1, 7)).issubset({row[0] for row in db.execute("SELECT version FROM schema_migrations")}))
+        self.assertTrue(set(range(1, 9)).issubset({row[0] for row in db.execute("SELECT version FROM schema_migrations")}))
         db.close()
 
     def test_injected_failure_rolls_back_entire_migration(self):

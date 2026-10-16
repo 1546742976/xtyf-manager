@@ -327,20 +327,71 @@ tbody tr:hover td { background: var(--surface-inset); }
 .ws-quick-link svg { width: 22px; height: 22px; fill: none; stroke: var(--primary); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .ws-page-help { color: var(--muted); font-size: 13px; line-height: 1.9; margin: 0; }
 .task-plan-dates { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
-.schedule-summary { font-size: 13px; color: var(--muted); margin: 18px 0; }
-.schedule-summary strong { color: var(--text); }
-.schedule-table { margin: 16px 0; max-width: 100%; }
-.schedule-table table { min-width: 720px; }
-.schedule-table td { vertical-align: top; }
-.schedule-table td:nth-child(2) { white-space: nowrap; }
-.schedule-table td:first-child { min-width: 150px; max-width: 200px; }
-.schedule-table td small, .schedule-date span, .schedule-date strong { display: block; }
-.schedule-table td small, .schedule-old { color: var(--muted); font-size: 11px; }
-.schedule-date { white-space: nowrap; font-size: 12px; }
-.schedule-date strong { font-weight: 500; }
-.schedule-table select { min-width: 110px; padding: 6px 8px; }
-.schedule-note { font-size: 12px; min-width: 130px; }
+.modal-mask > .modal.schedule-dialog { max-width: 1120px; padding: 0; overflow: hidden; }
+.schedule-shell { display: flex; flex-direction: column; max-height: 88vh; max-height: 88dvh; }
+.schedule-head { padding: 22px 24px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.schedule-scroll { padding: 16px 24px 24px; overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+.schedule-scroll > .ux-note { margin-top: 0; }
+.schedule-controls { display: flex; align-items: end; gap: 24px; flex-wrap: wrap; }
+.schedule-controls label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
+.schedule-controls input, .schedule-duration input { min-height: 40px; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--card); color: var(--text); font: inherit; padding: 8px 10px; }
+.schedule-summary { font-size: 13px; color: var(--muted); margin: 8px 0; }
+.schedule-tasks { display: grid; gap: 12px; margin-top: 18px; }
+.schedule-task { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(225px, 1fr) minmax(0, .85fr); gap: 20px; padding: 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); scroll-margin: 16px; }
+.schedule-task:focus { outline: 3px solid var(--primary); outline-offset: 2px; }
+.schedule-task > div { min-width: 0; overflow-wrap: anywhere; }
+.schedule-selection { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.schedule-selection input { width: 18px; height: 18px; flex-shrink: 0; margin: 2px 0; accent-color: var(--primary); }
+.schedule-selection strong { font-size: 14px; }
+.schedule-selection small { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; }
+.schedule-protection { font-size: 12px; color: var(--orange-text); margin: 10px 0; }
+.schedule-predecessors { font-size: 12px; color: var(--muted); margin-top: 12px; }
+.schedule-predecessors ul { padding-left: 18px; margin: 4px 0 0; }
+.schedule-predecessors li { margin-top: 3px; }
+.schedule-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px; align-content: start; }
+.schedule-dates > div > span, .schedule-dates strong { display: block; }
+.schedule-field-name { margin-bottom: 5px; color: var(--muted); }
+.schedule-old { color: var(--muted); margin-bottom: 3px; }
+.schedule-dates strong { font-weight: 600; }
+.schedule-duration { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; grid-column: 1 / -1; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.schedule-duration input { width: 88px; }
+.schedule-reason { font-size: 12px; }
+.schedule-reason p { margin: 9px 0 0; color: var(--muted); }
+.schedule-state { display: inline-block; border-radius: 6px; background: var(--surface-inset); padding: 3px 7px; }
+.schedule-state-changed { color: var(--brand-text); background: var(--blue-soft); }
+.schedule-state-conflict, .schedule-state-needs_duration { color: var(--red-text); background: var(--red-soft); }
+.schedule-state-protected { color: var(--orange-text); background: var(--orange-soft); }
+.schedule-shift { display: block; margin-top: 8px; }
+.schedule-problems { margin-top: 16px; }
+.schedule-problems li { margin-top: 5px; }
+.schedule-warnings { background: var(--surface-inset); color: var(--text); border-color: var(--border); }
+.schedule-problem-link { border: 0; padding: 2px 0; font: inherit; color: inherit; background: transparent; text-decoration: underline; cursor: pointer; }
+.schedule-stale { padding: 10px 12px; background: var(--orange-soft); color: var(--orange-text); border-radius: 8px; font-size: 13px; }
+.schedule-footer { flex-shrink: 0; border-top: 1px solid var(--border); padding: 14px 24px 18px; background: var(--card); }
+.schedule-footer .form-message { margin: 0 0 10px; text-align: left; color: var(--muted); }
+.schedule-footer .schedule-error { color: var(--red-text); }
+.schedule-footer .schedule-success { color: var(--green-text); }
+.schedule-footer .modal-actions { flex-wrap: wrap; }
+.schedule-footer .btn { background: var(--card); color: var(--text); border-color: var(--control-border); transition: none; }
+.schedule-footer .btn.primary { background: var(--primary) !important; color: var(--on-primary) !important; border-color: var(--primary) !important; }
+.schedule-footer .btn:hover:not(:disabled) { background: var(--surface-hover); }
+.schedule-footer .btn.primary:hover:not(:disabled) { background: var(--primary-dark) !important; border-color: var(--primary-dark) !important; }
+.schedule-lock-choice, .modal form label.schedule-lock-choice { flex-direction: row; align-items: center; justify-content: start; gap: 8px; }
+.schedule-lock-choice input { width: 18px; height: 18px; flex: none; }
 .schedule-success { color: var(--green); text-align: left; }
+@media (max-width: 760px) {
+  .schedule-task { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 14px; }
+  .schedule-dates { border-top: 1px solid var(--border); padding-top: 12px; }
+  .schedule-reason { border-top: 1px solid var(--border); padding-top: 12px; }
+  .schedule-shift { display: inline; margin-left: 10px; }
+  .schedule-head { padding: 18px 16px 12px; }
+  .schedule-scroll { padding: 14px 16px 18px; }
+  .schedule-footer { padding: 12px 16px; }
+  .schedule-footer .btn { min-height: 44px; flex: 1; }
+  .schedule-controls { gap: 10px; }
+  .schedule-controls label { width: 100%; }
+  .schedule-controls input { width: 100%; min-width: 0; }
+}
 #task-table { min-width: 1200px; }
 #task-table .cell-title { min-width: 180px; }
 

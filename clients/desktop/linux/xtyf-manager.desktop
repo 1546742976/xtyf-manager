@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=巡天御风管理系统
+Comment=巡天御风本地工作空间客户端
+Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories=Office;
+StartupWMClass=xtyf-manager

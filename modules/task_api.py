@@ -24,7 +24,7 @@ def schedule_preview(project_id: int):
     if response is not None:
         return response
     try:
-        result = preview_schedule(get_db(), project_id, body.get("phase_choices", {}))
+        result = preview_schedule(get_db(), project_id, body)
     except ScheduleError as exc:
         return jsonify(ok=False, error=str(exc)), exc.status
     return jsonify(ok=True, **result)

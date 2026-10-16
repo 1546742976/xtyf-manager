@@ -1,0 +1,9 @@
+{
+  "productName": "xtyf-manager",
+  "bundle": {
+    "linux": {
+      "deb": {"desktopTemplate": "linux/xtyf-manager.desktop"},
+      "rpm": {"desktopTemplate": "linux/xtyf-manager.desktop"}
+    }
+  }
+}

@@ -14,11 +14,13 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILES = (
-    'clients/config.json', 'clients/windows/config.json',
-    'clients/windows/package.json', 'clients/windows/package-lock.json',
+    'clients/config.json', 'clients/desktop/tauri.conf.json',
+    'clients/desktop/package.json', 'clients/desktop/package-lock.json',
+    'clients/desktop/Cargo.toml', 'clients/desktop/Cargo.lock',
     'clients/android/AndroidManifest.xml',
 )
 INSTALLERS = {
@@ -65,14 +67,30 @@ def next_config(root):
 
 
 def sync_versions(root, config):
-    for relative in ('clients/config.json', 'clients/windows/config.json'):
-        write_json(root / relative, config)
-    for relative in ('clients/windows/package.json', 'clients/windows/package-lock.json'):
+    write_json(root / 'clients/config.json', config)
+    tauri_path = root / 'clients/desktop/tauri.conf.json'
+    tauri_config = read_json(tauri_path)
+    tauri_config['version'] = config['version']
+    write_json(tauri_path, tauri_config)
+    for relative in ('clients/desktop/package.json', 'clients/desktop/package-lock.json'):
         data = read_json(root / relative)
         data['version'] = config['version']
         if 'packages' in data:
             data['packages']['']['version'] = config['version']
         write_json(root / relative, data)
+    cargo_path = root / 'clients/desktop/Cargo.toml'
+    cargo = cargo_path.read_text(encoding='utf-8')
+    cargo, count = re.subn(r'(?m)^(version\s*=\s*)"[^"]+"', lambda m: m[1] + '"' + config['version'] + '"', cargo, count=1)
+    if count != 1:
+        raise RuntimeError('Desktop crate has no package version')
+    cargo_path.write_text(cargo, encoding='utf-8')
+    lock_path = root / 'clients/desktop/Cargo.lock'
+    if lock_path.exists():
+        lock = lock_path.read_text(encoding='utf-8')
+        lock, count = re.subn(r'(\[\[package\]\]\s*name = "xtyf-manager"\s*version = ")[^"]+(".*?)(?=\n\[\[package\]\]|\Z)', lambda m: m[1] + config['version'] + m[2], lock, count=1, flags=re.S)
+        if count != 1:
+            raise RuntimeError('Cargo.lock has no client package')
+        lock_path.write_text(lock, encoding='utf-8')
     ET.register_namespace('android', ANDROID_NS)
     path = root / 'clients/android/AndroidManifest.xml'
     manifest = ET.parse(path)
@@ -141,6 +159,40 @@ def linux_verification(staging, version):
     return verification
 
 
+def windows_verification(staging, version):
+    path = staging / 'windows/windows-verification.json'
+    if not path.is_file():
+        raise RuntimeError('Windows builder did not produce its verification report')
+    report = read_json(path)
+    if any(report.get(key) != value for key, value in {'version': version, 'framework': 'tauri', 'architecture': 'x64', 'installer': 'NSIS'}.items()):
+        raise RuntimeError('Windows verification metadata mismatch')
+    if not all(report.get(key) is True for key in ('configurationTestsPassed', 'nativeExecutableVerified', 'clientPayloadVerified', 'installerPayloadExtracted', 'embeddedFrontendVerified')):
+        raise RuntimeError('Windows verification failed')
+    return report
+
+
+def verify_shared_frontend(root, staging, version, windows, linux):
+    manifest_bytes = (root / 'clients/frontend/dist/asset-manifest.json').read_bytes()
+    manifest = json.loads(manifest_bytes)
+    if manifest.get('version') != version or manifest.get('protocolVersion') != 1 or not manifest.get('files'):
+        raise RuntimeError('Shared frontend manifest has invalid version, protocol or file list')
+    digest = hashlib.sha256(manifest_bytes).hexdigest()
+    for platform, actual in (
+        ('windows', windows.get('frontendManifestSha256')),
+        ('ubuntu', linux['ubuntu'].get('localFrontendManifestSha256')),
+        ('fedora', linux['fedora'].get('localFrontendManifestSha256')),
+    ):
+        if actual != digest:
+            raise RuntimeError(f'Shared frontend manifest mismatch: {platform}')
+    with zipfile.ZipFile(staging / f'android/XTYF-Manager-{version}.apk') as apk:
+        if apk.read('assets/frontend/asset-manifest.json') != manifest_bytes:
+            raise RuntimeError('Shared frontend manifest mismatch: android')
+        for name, expected in manifest['files'].items():
+            if hashlib.sha256(apk.read('assets/frontend/' + name)).hexdigest() != expected:
+                raise RuntimeError(f'Android frontend resource mismatch: {name}')
+    return digest
+
+
 def release(root=ROOT, runner=run_command):
     root = Path(root).resolve()
     output = (root / 'dist/clients').resolve()
@@ -152,6 +204,8 @@ def release(root=ROOT, runner=run_command):
         version = config['version']
         # Fail on missing Linux tools before changing versions or building other platforms.
         runner([sys.executable, root / 'clients/build_linux.py', '--check'], root)
+        powershell = shutil.which('pwsh') or shutil.which('powershell') or 'powershell'
+        runner([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', root / 'clients/build_windows.ps1', '-Check'], root)
         rollback_files = (*VERSION_FILES, 'dist/clients/build-report.json', 'dist/clients/SHA256SUMS.txt')
         snapshots = {relative: (root / relative).read_bytes() if (root / relative).exists() else None for relative in rollback_files}
         staging = Path(tempfile.mkdtemp(prefix='.release-', dir=output)).resolve()
@@ -159,9 +213,9 @@ def release(root=ROOT, runner=run_command):
         try:
             sync_versions(root, config)
             print(f'Building version {version}, Android versionCode {config["versionCode"]}', flush=True)
-            powershell = shutil.which('pwsh') or shutil.which('powershell') or 'powershell'
+            runner([sys.executable, root / 'clients/build_frontend.py'], root)
             runner([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', root / 'clients/build_windows.ps1', '-OutputDirectory', staging / 'windows'], root)
-            runner([sys.executable, root / 'clients/build_android.py', '--output-dir', staging / 'android'], root)
+            runner([sys.executable, root / 'clients/build_android.py', '--skip-frontend-build', '--output-dir', staging / 'android'], root)
             runner([sys.executable, root / 'clients/build_linux.py', '--output-dir', staging / 'linux'], root)
             names = [
                 f'windows/XTYF-Manager-Setup-{version}-x64.exe',
@@ -175,12 +229,17 @@ def release(root=ROOT, runner=run_command):
                 if not source.is_file() or source.stat().st_size == 0:
                     raise RuntimeError(f'Builder did not produce a complete installer: {relative}')
                 artifacts.append({'file': relative, 'bytes': source.stat().st_size, 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()})
+            windows = windows_verification(staging, version)
+            linux = linux_verification(staging, version)
+            frontend_digest = verify_shared_frontend(root, staging, version, windows, linux)
             report = {
                 'createdAt': datetime.now(timezone.utc).isoformat(),
                 'version': version, 'serverUrl': config['serverUrl'], 'artifacts': artifacts,
-                'windows': {'architecture': 'x64', 'installer': 'NSIS', 'codeSigned': False, 'configurationTestsPassed': True, 'runtimeUiVerified': False},
-                'android': {'package': 'online.skywalker.manager', 'versionCode': config['versionCode'], 'signatureAndAlignmentVerified': True, 'runtimeUiVerified': False},
-                'linux': linux_verification(staging, version),
+                'windows': windows,
+                'android': {'package': 'online.skywalker.manager', 'versionCode': config['versionCode'], 'signatureAndAlignmentVerified': True, 'localResourcesVerified': True, 'frontendManifestSha256': frontend_digest, 'runtimeUiVerified': False},
+                'linux': linux,
+                'frontend': {'delivery': 'bundled-local-assets', 'protocolVersion': 1,
+                             'manifestSha256': frontend_digest, 'identicalAcrossPackages': True},
                 'githubPushed': False,
             }
             write_json(staging / 'build-report.json', report)

@@ -1,99 +1,98 @@
-# Windows、Android 与 Linux 客户端
+# 本地界面客户端：Tauri 桌面端与 Android
 
-默认服务器为 **http://manager.skywalker-rm.online**。各平台安装包都是已有 Flask 网站的客户端，需要网络和可用的服务器。业务功能与数据取决于服务器当前部署版本；生成客户端安装包不会把本地 Python 源码部署到服务器。
+Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录页、全部业务页面、脚本、样式、字体和 PDF 阅读器随安装包内置。客户端只向配置服务器请求数据和文件；主界面不加载服务器 HTML，也不使用在线 CDN。
 
-## 安装和使用
+默认服务器为 **http://manager.skywalker-rm.online**。断网可以打开本地界面和服务器设置，业务操作需要联网。站外 HTTP/HTTPS 链接在 App 内独立浏览视图打开，具有返回、关闭入口，不调用系统浏览器。图片及 PDF 在 App 内预览，其余附件通过系统保存窗口下载。
 
-- Windows 10/11 x64：运行 `dist/clients/windows/` 下最新的 `XTYF-Manager-Setup-<版本>-x64.exe`。安装器提供开始菜单、桌面入口和卸载程序。应用没有“导航、显示、编辑”菜单，按 Alt 也不会显示；连接失败弹窗提供服务器地址设置入口。
-- Android 8.0 及以上：安装 `dist/clients/android/` 下最新的 `XTYF-Manager-<版本>.apk`。应用没有顶部“返回、首页、刷新、设置”按钮栏，返回使用系统返回键或手势；连接失败页面可修改服务器地址。APK 没有架构专用的原生库。
-- Ubuntu 22.04 ARM64：使用 `dist/clients/linux/XTYF-Manager-<版本>-arm64.deb`，在包所在目录运行 `sudo apt install ./XTYF-Manager-*-arm64.deb`。
-- Fedora 44/45 x86_64：两个版本共用 `dist/clients/linux/XTYF-Manager-<版本>-x86_64.rpm`，在包所在目录运行 `sudo dnf install ./XTYF-Manager-*-x86_64.rpm`。Linux 包提供应用菜单入口，客户端与 Windows 共用 Electron 界面，均没有“导航、显示、编辑”菜单。
-- 使用服务器上原有账号登录。密码和业务权限由服务器校验。
-- 上传通过系统文件选择器，下载通过文件保存窗口。安卓资金 CSV、发票 CSV/ZIP 与附件下载使用原始下载端点适配。
-- EXE 没有 Windows 发布者证书签名。APK 使用本项目持久发布密钥签名；保留包名和同一密钥，配合递增的 `versionCode`，即可覆盖安装。
+## 安装和升级
 
-客户端允许访问用户指定的 HTTP 地址；修改为 HTTPS 地址时仍会校验证书。安装更新后重新打开应用。
+- Windows 10/11 x64：`dist/clients/windows/XTYF-Manager-Setup-<版本>-x64.exe`。NSIS 安装器提供快捷方式和卸载入口；缺少 WebView2 时联网补齐运行时。EXE 未使用发布者证书签名。
+- Android 8.0+：`dist/clients/android/XTYF-Manager-<版本>.apk`。保留包名 `online.skywalker.manager` 和既有发布密钥，递增 versionCode 后覆盖安装。返回使用系统返回键或手势。
+- Ubuntu 22.04 ARM64：`sudo apt install ./XTYF-Manager-<版本>-arm64.deb`。
+- Fedora 44/45 x86_64：`sudo dnf install ./XTYF-Manager-<版本>-x86_64.rpm`。
 
-## 每次版本交付
+桌面升级保留服务器地址，首次从 Electron 迁移需要重新登录。Windows 安装器识别旧版 Electron 的卸载记录，保留用户数据后完成替换；Linux 保持 `xtyf-manager` 包名。Android 保留原服务器地址设置，新的原生会话首次需要登录。
 
-从项目根目录运行统一发布入口：
+服务器地址支持 HTTP/HTTPS 根地址及自定义端口，HTTPS 正常校验证书。切换服务器会取消当前请求、清空页面状态，各服务器会话分别保存。
+
+## 服务器兼容性
+
+客户端需要协议版本 **1**：
+
+- `GET /api/client/bootstrap`：协议版本、登录状态、公开用户信息、权限、主题和业务常量。
+- `POST /api/client/login`、`POST /api/client/logout`：JSON 认证接口，复用原有账号、Cookie、CSRF、限流和审计。
+- 其余功能继续调用既有业务 API。
+
+旧服务器缺少上述接口时，客户端显示本地“服务器需要更新”提示，保留重试和地址设置，不回退为远程网页外壳。现有浏览器网站继续使用原入口。
+
+**构建客户端不会部署服务器。** 服务器上线必须包含本次接口源码；服务器源码包仍通过 `python deploy/package_release.py` 从 Git HEAD 独立生成，未提交的代码不会自动进入该源码包。线上兼容性必须在服务器实际更新后验证。
+
+## 统一版本交付
+
+在项目根目录运行：
 
 ```powershell
-# 只读预览下一版本与配置
 python clients/release.py --dry-run
-
-# 自动递增版本并构建、交付 EXE、APK、DEB、RPM
 python clients/release.py
 ```
 
-每次成功交付按 `1.0.1 → 1.0.2 → 1.0.3` 的规则递增补丁号，同时将 Android `versionCode` 加 1，无需手改版本。当前版本以 `clients/config.json` 为准。
+每次成功发布只递增一次补丁版本和 Android versionCode。先检查构建环境，再构建一次共享前端，四个平台复用同一份资源清单。四个安装包全部构建并检查通过后才替换报告、发布新版和清理旧包；失败恢复版本及原报告，保留旧安装包。
 
-发布流程先在临时目录构建四个安装包。同一次发布共用一个版本号，只有四个产物都成功，才交付新版并清理旧安装包；任一平台构建失败时恢复原版本配置并保留旧安装包，修复问题后重试。单次成功运行就是一次新版本交付。
+版本来源是 `clients/config.json`，发布入口同步 Tauri 配置、Cargo 和 Android Manifest。不要手工修改版本进行正式交付。
 
-交付结果查看：
+交付记录：
 
-- `dist/clients/windows/`：Windows 安装包。
-- `dist/clients/android/`：Android 安装包。
-- `dist/clients/linux/`：Ubuntu ARM64 DEB 和 Fedora x86_64 RPM。
-- `dist/clients/build-report.json`：本次成功构建的版本和产物信息。
-- `dist/clients/SHA256SUMS.txt`：交付文件校验值。
+- `dist/clients/build-report.json`：版本、架构、包检查、构建环境及实际运行验证范围。
+- `dist/clients/SHA256SUMS.txt`：四个安装包的 SHA-256。
+- `clients/frontend/dist/asset-manifest.json`：前端协议、页面和资源哈希；同一次发布的四包使用同一清单。
 
-后续代码或客户端版本交付时，由执行任务的代理主动运行此入口。只读检查、文档整理或用户明确要求不打包时，无需生成新版本。这里的自动化由交付时运行发布命令触发，不会在每次保存文件时打包，也没有后台定时监听；脚本不会推送 GitHub，也不会发布服务器。
+只读检查、纯文档整理或用户明确要求不打包时无需发布。不推送 GitHub、不部署服务器、不设置后台监听或定时打包。
 
-服务器源码包仍由独立的 `python deploy/package_release.py` 生成，内容来自当前 Git `HEAD`；上传与服务器升级沿用[服务器更新流程](../docs/technical/打包与服务器更新.md)。
+## 本地构建环境
 
-## 构建环境与单平台调试
+Python 3.9+（前端构建需要 Jinja2）、Node.js/npm、Visual Studio C++ Build Tools、Rust 1.99.1，以及既有 JDK 17+ / Android platform 36 / build-tools 36。Python 业务回归使用项目 `.venv`。
 
-需要 Node.js/npm、Python 3.9+、JDK 17+，以及 Android platform 36 / build-tools 36。本机工具目录为 `.build-tools/`，不需要安装 Android Studio。首次构建或 Windows 依赖变化后，在 `clients/windows/` 运行 `npm.cmd ci --no-audit --no-fund` 安装锁定依赖，再回到项目根目录运行统一发布命令。
-
-Linux 构建默认使用本机 WSL 的 `Ubuntu-22.04` 发行版。首次设置时，在项目根目录的 Windows PowerShell 中运行：
+Windows Rust 安装在项目 `.build-tools/cargo` 与 `.build-tools/rustup`，构建输出位于 `.build-tools/tauri-target-windows`。Tauri CLI 由 `clients/desktop/package-lock.json` 锁定，Rust 依赖由 Cargo.lock 锁定。
 
 ```powershell
-# 在 WSL 内安装打包和校验工具
-wsl.exe -d Ubuntu-22.04 -u root --exec apt-get update
-wsl.exe -d Ubuntu-22.04 -u root --exec apt-get install -y --no-install-recommends rpm binutils cpio xz-utils curl ca-certificates
+# 设置工具目录后安装固定 Rust 版本，不修改系统 PATH
+$env:CARGO_HOME = Join-Path $PWD '.build-tools/cargo'
+$env:RUSTUP_HOME = Join-Path $PWD '.build-tools/rustup'
+# 首次通过官方 rustup-init.exe 安装；已有 rustup 时：
+& "$env:CARGO_HOME/bin/rustup.exe" toolchain install 1.99.1 --profile minimal
 
-# 下载并按官方 SHA-256 校验 Node.js 24.22.0，安装至 WSL 用户缓存
+# 安装 Windows Tauri CLI
+npm.cmd ci --prefix clients/desktop --no-audit --no-fund
+python clients/verify_windows.py --setup
+
+# 准备本地前端（供应商资源已固定版本并记录校验值）
+python clients/build_frontend.py
+
+# Linux 首次准备：Ubuntu 22.04 WSL 中安装主机开发库和独立 ARM64 sysroot
 python clients/build_linux.py --setup
-
-# 只读检查构建环境
 python clients/build_linux.py --check
 ```
 
-Linux 工具和构建缓存位于 WSL 用户的 `~/.cache/xtyf-manager-build/`。Linux 构建目录及依赖与 Windows 分开，使用锁文件执行 `npm ci`，不会复用 Windows 的 `node_modules` 或 Electron 可执行文件。先解决 `--check` 报告中的缺失工具再发布；已有环境无需每次重复设置。
+Linux 默认使用 `Ubuntu-22.04` WSL 的 root 构建用户，缓存位于 `/root/.cache/xtyf-manager-build`；可通过脚本参数指定发行版和用户。ARM64 开发包提取到独立 sysroot，不修改主机 apt 软件源或外国架构列表。Linux 依赖及输出与 Windows 分开。
 
-以下命令仅用于调试或按当前配置重建单个平台，**不会递增版本，也不代替四个产物的版本交付**：
+单平台命令只用于按当前版本调试，不代替四包正式发布：
 
 ```powershell
-# Windows
-.\clients\build_windows.ps1
-
-# Android
-python clients/build_android.py
-# 指定其他机器上的 JDK / SDK
-python clients/build_android.py --jdk C:\Tools\jdk-21 --sdk C:\Tools\android-sdk
-
-# Linux：同时构建 ARM64 DEB 和 x86_64 RPM
-python clients/build_linux.py
-# 输出到指定临时目录
+.\clients\build_windows.ps1 -Check
+.\clients\build_windows.ps1 -OutputDirectory .build-tools/windows-debug
+python clients/build_android.py --output-dir .build-tools/android-debug
 python clients/build_linux.py --output-dir .build-tools/linux-debug
 ```
 
-Windows 构建使用锁定依赖和 `--publish never`。Android 构建直接调用官方 `aapt2`、`javac`、`D8`、`zipalign` 和 `apksigner`，每次编译前清理 `clients/android/build/` 的临时产物。
+正式发布只构建一次共享前端，Android 使用 `--skip-frontend-build` 复用资源。Android 仍由 aapt2、javac、D8、zipalign、apksigner 构建，不依赖 Android Studio。
 
-Linux 使用相同锁定版本的 Electron 和 electron-builder，分别获取 ARM64、x64 的 Electron 运行资源并生成对应架构安装包。维护者为 `巡天御风 <1546742976@qq.com>`，项目主页为默认服务器网址。Linux 安装包由本地发布流程生成，不上传软件源。
+请独立备份整个 `clients/signing/`，后续覆盖安装需要原密钥和密码文件。密钥、用户数据、数据库、附件和邮件配置不进入客户端安装包。
 
-**请单独备份整个 `clients/signing/` 目录**：其中的 Android 签名密钥及随机密码文件是后续覆盖安装所需凭据。已有密钥不会在重新构建时被替换。签名目录仅供维护者使用；它与构建工具、依赖和产物均被 `.gitignore` 排除。
+## 验证边界
 
-## 实现范围与验收
+- 业务会话由原生网络层管理，保留 CSRF、服务端权限及认证；站外视图没有业务会话或原生接口权限。
+- 安装包检查包含本地资源清单、版本、真实架构、Linux 动态依赖和桌面入口；Ubuntu ARM64 的 GLIBC 上限为 2.35。
+- Windows、Android、Ubuntu ARM64、Fedora 的实际启动、导航、上传下载和业务操作分别记录。包检查、APK 签名与对齐通过不能替代目标系统运行验证。
+- 交付记录中的运行验证仅在确实执行后标记通过。模拟器测试与真机测试分别说明；未部署服务器不等于线上业务已经验收。
 
-- Windows 和 Linux 使用 Electron，远程页面关闭 Node.js，启用沙箱与上下文隔离；只有独立本地设置窗口可以调用设置 IPC。
-- Android 使用系统 WebView，保留服务器 Cookie 和本地存储，不向网页暴露 JavaScript 原生桥；只申请网络权限，使用系统文件选择与保存窗口。
-- 安装包只包含客户端源码和运行资源，不包含 `data.db`、发票、邮件环境文件、成员数据或 Android 签名私钥。
-- Linux 包检查涵盖版本、真实架构、运行依赖、桌面入口及 ARM64 ELF 的 GLIBC 要求；Ubuntu 22.04 的兼容性上限按 GLIBC 2.35 检查。包管理器查询和 ELF 检查不能代替目标系统实际启动。
-- 构建报告和 SHA-256 校验值用于确认本次产物；构建成功、APK 签名与对齐校验不等于真机或全部业务流程验收。交付时分别说明实际完成的 Windows 启动、Android 真机、Ubuntu ARM64、Fedora 桌面及业务检查。未运行的平台明确标记为未验证。
-- 本次新增 Linux 包时（2026-10-16），Fedora 45 仍处于发布前阶段；相关检查应注明使用的预发布版本，不能作为正式版桌面运行通过的证明。发布状态以 [Fedora 发布日历](https://calendar.fedoraproject.org/list/Fedora%20release/) 为准。
-
-构建相关资料：[Electron 安全配置](https://www.electronjs.org/docs/latest/tutorial/security)、[Android 命令行工具](https://developer.android.com/tools)、[electron-builder Linux 构建](https://www.electron.build/v26/docs/linux/)。
-
-RPM 依赖名称按 Fedora 官方软件包索引核对，包括 [gtk3](https://packages.fedoraproject.org/pkgs/gtk3/gtk3/)、[mesa-libgbm](https://packages.fedoraproject.org/pkgs/mesa/mesa-libgbm/)、[cups-libs](https://packages.fedoraproject.org/pkgs/cups/cups-libs/)；索引存在不代表已在目标系统完成安装或运行验证。
+参考：[Tauri 分发](https://v2.tauri.app/distribute/)、[Tauri Linux ARM64 构建](https://v2.tauri.app/distribute/debian/)、[Android 本地内容](https://developer.android.com/develop/ui/views/layout/webapps/load-local-content)。

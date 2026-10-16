@@ -65,6 +65,6 @@ function renderSpecialtyTimeline(tasks) {
     <div class="timeline-axis" aria-hidden="true"><span>任务 / 负责人</span><div>${ticks.map((tick) => `<span style="left:${tick.left}%">${esc(tick.label)}</span>`).join("")}</div></div>
     ${specialtyLanes(tasks).map((lane) => `<section class="timeline-stage"><header class="timeline-stage-head"><h3>${esc(lane.title)}</h3><span>${lane.tasks.length} 项任务</span>${lane.title === "未归类" ? '<small>未指定专业组或待选择阶段</small>' : ""}</header>
       ${lane.tasks.map((task) => timelineTaskRow(task, range)).join("") || '<p class="timeline-empty">暂无匹配任务</p>'}</section>`).join("")}
-    <footer class="timeline-foot">机械 → 电控 → 视觉 · 时间轴展示已保存日期，调整排期请到任务管理。</footer>
+    <footer class="timeline-foot">按专业分组展示 · 时间轴展示已保存日期，依赖排期请到任务管理。</footer>
     </section>`;
 }

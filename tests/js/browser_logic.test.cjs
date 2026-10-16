@@ -92,19 +92,27 @@ test("specialty schedule: owner phases, stable dates and management order agree"
   assert.equal(page.value("specialtyTaskStage")({owner_id:1,owner_stage:null}), null);
 });
 
-test("schedule preview: escaped content, manual stage controls and unchanged rows", () => {
+test("schedule preview: escaped content, dependency cards and protected participation controls", () => {
   const page = browser(["app.js", "task-schedule.js"]);
   const row = {id:1,title:'<img src=x>',owner_name:'<script>',status:'未开始',eligible:true,
-    stage_options:["机械","视觉"],stage:"视觉",note:'<svg>',
+    stage:"视觉",note:'<svg>',selected:false,protected:true,protection_reason:'固定日期',state:'protected',duration_days:3,
+    predecessors:[{id:2,title:'<svg>',external:true,boundary_date:'2026-10-22'}],
     before:{start_date:"2026-10-14",due_date:"2026-10-16"},after:{start_date:"2026-10-22",due_date:"2026-10-24"}};
   const html = page.value("schedulePreviewRows")([row]);
   assert.match(html,/&lt;img src=x&gt;/);
   assert.match(html,/&lt;script&gt;/);
-  assert.match(html,/data-phase-choice="1"/);
-  assert.match(html,/option selected>视觉/);
+  assert.match(html,/data-schedule-task="1"/);
+  assert.match(html,/允许本次调整/);
+  assert.match(html,/受保护/);
+  assert.match(html,/跨车组/);
+  assert.doesNotMatch(html,/data-phase-choice|data-schedule-duration|<select/);
   assert.match(html,/原：2026-10-14/);
   assert.match(html,/新：2026-10-22/);
-  assert.doesNotMatch(page.value("schedulePreviewRows")([{...row,eligible:false}]), /<select/);
+  assert.match(page.value("schedulePreviewRows")([{...row,eligible:false}]), /disabled/);
+  const missing = page.value("schedulePreviewRows")([{...row,eligible:true,selected:true,before:{},needs_duration:true,state:"changed",shift_days:null}],{task_ids:[1],durations:{1:4}});
+  assert.match(missing,/data-schedule-duration="1" value="4"/);
+  assert.match(missing,/补齐日期/);
+  assert.doesNotMatch(missing,/日期保持 \/ 待计算/);
 });
 
 test("frontend money: integer cents, comparisons and large values remain exact", () => {

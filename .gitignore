@@ -33,3 +33,6 @@ data/mail-preview/
 clients/windows/node_modules/
 clients/android/build/
 clients/signing/
+clients/desktop/node_modules/
+clients/desktop/target/
+clients/frontend/dist/

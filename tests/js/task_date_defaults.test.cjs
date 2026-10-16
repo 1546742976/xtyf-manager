@@ -56,7 +56,7 @@ test('saved tasks preserve dates across parent changes and data refresh; explici
   const {helper, form, parent, start, reset, tasks, note} = fixture(true);
   parent.value = '1'; parent.emit('change');
   assert.equal(start.value, '2026-06-01');
-  assert.match(note.textContent, /日期已锁定/);
+  assert.match(note.textContent, /日期已保存，不随前置变更自动更新/);
   reset.emit('click');
   assert.equal(start.value, '2024-02-29');
   assert.equal(helper.payload(form, {}).reset_start_date, true);
@@ -66,6 +66,18 @@ test('saved tasks preserve dates across parent changes and data refresh; explici
   assert.equal(start.value, '2024-02-29');
   assert.equal(helper.payload(form, {}).reset_start_date, undefined);
   assert.equal(helper.payload(form, {}).start_date_origin, 'manual');
+});
+
+test('dependency suggestion respects short-task start and actual completion before planned due', () => {
+  const {helper} = fixture();
+  assert.equal(helper.predecessorDate({start_date:'2026-10-14',due_date:'2026-10-15'}), '2026-10-14');
+  assert.equal(helper.predecessorDate({start_date:'2026-10-14',due_date:'2026-10-14'}), '2026-10-14');
+  assert.equal(helper.predecessorDate({status:'已完成',start_date:'2026-10-01',due_date:'2026-10-30',completed_at:'2026-10-12 08:30:00'}), '2026-10-10');
+  assert.equal(helper.predecessorDate({status:'已完成',start_date:'2026-10-01',due_date:'2026-10-30',completed_at:'invalid'}), '2026-10-28');
+  for (const invalid of ['2026-10-12garbage','2026-10-12 99:00:00','2026-02-30 12:00:00']) {
+    assert.equal(helper.predecessorDate({status:'已完成',due_date:'2026-10-30',completed_at:invalid}), '2026-10-28');
+  }
+  assert.equal(helper.predecessorDate({status:'进行中',start_date:'2026-10-01',due_date:'2026-10-30',completed_at:'2026-10-12'}), '2026-10-28');
 });
 
 test('retry retains customization, form reset clears it, duplicate binding does not replace state', async () => {

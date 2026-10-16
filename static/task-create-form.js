@@ -33,6 +33,7 @@
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(saving||!loaded||!form.reportValidity())return;
     const payload=Object.fromEntries(new FormData(form));payload.participant_ids=selected('participant_ids');payload.predecessor_ids=selected('predecessor_ids');
+    payload.schedule_locked=!!form.querySelector('[name="schedule_locked"]')?.checked;
     if(!payload.owner_id&&payload.participant_ids.length){form.elements.owner_id.setCustomValidity('选择参与成员后必须指定负责人');form.elements.owner_id.reportValidity();return;}
     window.TaskDateDefaults.payload(form,payload);
     saving=true;window.TaskCreateDialog.setBusy(true);

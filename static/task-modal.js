@@ -31,7 +31,7 @@ function taskReadOnly(task) {
       .join("、") || "未指定";
   const predecessors =
     (task.predecessor_ids || []).map((id) => state.tasks.find((item) => Number(item.id) === Number(id))?.title || `任务 #${id}`).join("、") || "无";
-  return `<div class="readonly-settings"><p class="permission-note">你可以查看此任务，但不在编辑参与范围内。</p><dl><div><dt>负责人及参与成员</dt><dd>${esc(participants)}</dd></div><div><dt>造车组别</dt><dd>${esc(taskProjectName(task) || "未选择")}</dd></div><div><dt>优先级 / 状态</dt><dd>${esc(task.priority)} / ${esc(task.status)}</dd></div><div><dt>计划日期</dt><dd>${esc(task.start_date || "未设置")} 至 ${esc(task.due_date || "未设置")}</dd></div><div><dt>前置任务</dt><dd>${esc(predecessors)}</dd></div></dl>${task.detail ? `<div class="task-detail">${esc(task.detail)}</div>` : ""}${task.suggested_start_date ? `<p class="advisory">根据前置任务计划截止日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div>`;
+  return `<div class="readonly-settings"><p class="permission-note">你可以查看此任务，但不在编辑参与范围内。</p><dl><div><dt>负责人及参与成员</dt><dd>${esc(participants)}</dd></div><div><dt>造车组别</dt><dd>${esc(taskProjectName(task) || "未选择")}</dd></div><div><dt>优先级 / 状态</dt><dd>${esc(task.priority)} / ${esc(task.status)}</dd></div><div><dt>计划日期</dt><dd>${esc(task.start_date || "未设置")} 至 ${esc(task.due_date || "未设置")}</dd></div><div><dt>前置任务</dt><dd>${esc(predecessors)}</dd></div></dl>${task.detail ? `<div class="task-detail">${esc(task.detail)}</div>` : ""}${task.suggested_start_date ? `<p class="advisory">根据主前置任务日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}</div>`;
 }
 function taskForm(task) {
   const editable = canEdit(task),
@@ -44,6 +44,7 @@ function taskForm(task) {
     <fieldset><legend>参与成员（可多选）</legend><p class="field-help">负责人和参与成员都可编辑任务设置。</p>${choiceGrid("participant_ids", members.filter((member) => member.role !== "admin"), task.participant_ids || [], memberLabel)}${members.filter((member) => member.role === "admin" && (task.participant_ids || []).includes(Number(member.id))).map((member) => `<input type="hidden" name="legacy_admin_participant" value="${Number(member.id)}">`).join('')}</fieldset>
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
     <div class="grid-2"><label>开始日期<input name="start_date" type="date" value="${esc(task.start_date)}"></label><label>截止日期<input name="due_date" type="date" value="${esc(task.due_date)}"></label></div>
+    <label class="choice-item schedule-lock-choice"><input type="checkbox" name="schedule_locked" ${task.schedule_locked ? "checked" : ""}><span>自动排期时固定日期</span></label>
     ${`<label>主前置任务<select name="parent_id">${options(others.map((item) => ({...item, name: taskLabel(item)})), task.parent_id, "无主前置任务")}</select></label>`}
     <div class="task-date-guidance"><p class="field-help" data-task-date-note aria-live="polite"></p><button class="btn ghost sm" type="button" data-task-date-reset>重置为依赖时间</button></div>
     <fieldset><legend>其他前置任务（支持多选）</legend>${choiceGrid("predecessor_ids", others, task.predecessor_ids || [], taskLabel)}</fieldset>
@@ -76,6 +77,7 @@ function bindTaskForm(task, generation) {
     window.TaskDateDefaults?.payload(form, payload);
     payload.participant_ids = [...checkedValues(form, "participant_ids"), ...[...form.querySelectorAll('[name="legacy_admin_participant"]')].map((input) => Number(input.value))];
     payload.predecessor_ids = checkedValues(form, "predecessor_ids");
+    payload.schedule_locked = !!form.querySelector('[name="schedule_locked"]')?.checked;
     const projectSelect = form.querySelector('[name="project_id"]');
     if (projectSelect) payload.project_id = retainArchivedCatalogSelection(
       projectSelect.value, task.project_id, state.projects, projectSelect.dataset.edited === "1",
@@ -103,9 +105,13 @@ function bindTaskForm(task, generation) {
   form.querySelector('[name="project_id"]')?.addEventListener("change", (event) => { event.target.dataset.edited = "1"; });
 }
 function bindTaskActions(task, generation) {
-  document.querySelector("[data-close]").addEventListener("click", hideModal);
+  // Scope every action to the open modal: the task table renders its own
+  // [data-delete-task] buttons before #modal in document order, so a
+  // document-wide query binds the first table row instead of the modal button.
+  const modal = document.getElementById("modal") || document;
+  modal.querySelector("[data-close]")?.addEventListener("click", hideModal);
   bindTaskProgress(task, generation);
-  document.querySelector("[data-delete-task]")?.addEventListener("click", async (event) => {
+  modal.querySelector("[data-delete-task]")?.addEventListener("click", async (event) => {
     if (!confirm("确定删除该任务？存在子任务或依赖引用时将无法删除。")) return;
     const button = event.currentTarget,
       result = await api(`/api/task/${task.id}/delete`, { version: Number(task.version) });
@@ -171,7 +177,7 @@ async function openTaskModal(id) {
   const task = state.tasks.find((item) => Number(item.id) === Number(id));
   if (!task) return;
   const generation = ++taskModalGeneration;
-  showModal(taskModalShell(task), `任务：${task.title}`);
+  if (showModal(taskModalShell(task), `任务：${task.title}`) === false) return;
   const modal = document.getElementById("modal");
   modal.classList.remove("task-preview");
   modal.dataset.taskId = String(task.id);
@@ -221,7 +227,7 @@ async function openTaskPreview(id) {
   const task = state.tasks.find((item) => Number(item.id) === Number(id));
   if (!task) return;
   const generation = ++taskModalGeneration;
-  showModal(taskPreviewShell(task), `任务状态：${task.title}`);
+  if (showModal(taskPreviewShell(task), `任务状态：${task.title}`) === false) return;
   const modal = document.getElementById("modal");
   modal.classList.add("task-preview");
   modal.dataset.taskId = String(task.id);
