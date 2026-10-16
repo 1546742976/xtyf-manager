@@ -363,6 +363,8 @@ tbody tr:hover td { background: var(--surface-inset); }
 .ws-app.ux-invoices .page-head .actions button.btn-accent { background: var(--primary) !important; color: var(--on-primary) !important; }
 .ws-app.ux-invoices .page-head .actions button.btn-warn { background: var(--orange-soft); color: var(--orange-text); border-color: var(--control-border); }
 .ux-invoices .toolbar .text-btn { color: var(--primary); }
+.ux-invoices .table-wrap .btn-sm { background: var(--card); color: var(--text); border-color: var(--border); }
+.ux-invoices .table-wrap .btn-sm:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--control-border); }
 .ux-invoices .invoice-jobs { padding: 24px; }
 .ux-invoices .batch-bar { border-radius: 14px; background: var(--ux-brand-soft); flex-wrap: wrap; }
 .ux-invoices .pagination button.active { background: var(--primary); border-color: var(--primary); }
