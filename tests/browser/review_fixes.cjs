@@ -167,8 +167,9 @@ async function checkPasswordVisibility(page, base) {
     await api(admin,'/api/member/'+member.id+'/toggle',{});
     await admin.evaluate(()=>refresh());
     assert.equal(await admin.locator('#create-form').evaluate(form=>form.checkValidity()),false);
-    assert.ok((await admin.locator('#create-form .form-message').innerText()).includes('已选项'));
-    await admin.locator('#create-owner').selectOption('1');
+    assert.match(await admin.locator('#create-owner').evaluate(control=>control.validationMessage),/已选项已失效/);
+    // Admins are intentionally excluded from vehicle-task assignees.
+    await admin.locator('#create-owner').selectOption('');
     await admin.locator(`#create-participants input[value="${member.id}"]`).uncheck();
     assert.equal(await admin.locator('#create-form').evaluate(form=>form.checkValidity()),true);
     await admin.goto(base+'/members');

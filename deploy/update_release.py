@@ -8,6 +8,7 @@ import re
 import shutil
 import signal
 import sqlite3
+import tempfile
 import subprocess
 import sys
 import time
@@ -15,9 +16,14 @@ import threading
 import urllib.request
 from contextlib import closing, contextmanager
 from datetime import datetime
+if __package__:
+    from .install_mail import install_mail
+else:
+    from install_mail import install_mail
 
 APP = Path('/opt/rm-progress')
 SERVICE = 'rm-progress'
+WEB_UNIT = Path('/etc/systemd/system/rm-progress.service')
 RELEASE = Path(__file__).resolve().parents[1]
 
 
@@ -104,10 +110,58 @@ def check_release():
         path = RELEASE / name
         if Path(name).is_absolute() or '..' in Path(name).parts or path.is_symlink() or not path.resolve().is_relative_to(RELEASE) or sha(path) != expected:
             raise RuntimeError('Release checksum/path mismatch: ' + name)
-    for name in ('app.py', 'common.py', 'requirements.txt', 'deploy/update_release.py', 'deploy/consistent_snapshot.py'):
+    for name in ('app.py', 'common.py', 'requirements.txt', 'deploy/update_release.py', 'deploy/consistent_snapshot.py', 'deploy/install_mail.py'):
         if name not in manifest['files']:
             raise RuntimeError('Missing release file: ' + name)
     return manifest
+
+
+
+def render_web_unit(template, service_user):
+    """Render only the two supported systemd substitutions from the release."""
+    source = template.read_text(encoding='utf-8')
+    rendered = (source.replace('{{APP_USER}}', service_user)
+                      .replace('{{APP_DIR}}', str(APP)))
+    if '{{' in rendered or '}}' in rendered:
+        raise RuntimeError('Unresolved placeholder in web service template')
+    return rendered.encode('utf-8')
+
+
+def plan_web_unit_update(service_user, *, installed_unit=WEB_UNIT):
+    """Allow a template revision only if the live unit matches the old template.
+
+    An administrator-customized unit must not be overwritten silently.
+    """
+    original = APP / 'deploy/rm-progress.service'
+    replacement = RELEASE / 'deploy/rm-progress.service'
+    if original.read_bytes() == replacement.read_bytes():
+        return None
+    if installed_unit.is_symlink() or not installed_unit.is_file():
+        raise RuntimeError('Web systemd unit is missing or symlinked; review manually: ' + str(installed_unit))
+    existing = installed_unit.read_bytes()
+    if existing != render_web_unit(original, service_user):
+        raise RuntimeError(
+            'Web service template changed but active systemd unit does not match '
+            'the previous generated template; preserve customizations and '
+            'review /etc/systemd/system/rm-progress.service before updating')
+    return existing, render_web_unit(replacement, service_user)
+
+
+def replace_web_unit(path, content):
+    """Atomically install or restore the checked web unit; never follow symlinks."""
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError('Refusing unsafe web systemd unit: ' + str(path))
+    fd, temporary = tempfile.mkstemp(prefix='.rm-progress-unit-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            os.chmod(temporary, 0o644)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def healthy():
@@ -121,6 +175,30 @@ def healthy():
         time.sleep(1)
     raise RuntimeError('Service failed to start or /login did not return HTTP 200')
 
+
+
+def unit_active(name):
+    return subprocess.run(['systemctl', 'is-active', '--quiet', name], check=False,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def suspend_mail():
+    """Stop new timer launches and let an in-flight SMTP batch finish safely."""
+    if unit_active('rm-mail.timer'):
+        run(['systemctl', 'stop', 'rm-mail.timer'])
+    if unit_active('rm-mail.service'):
+        print('Waiting for the current mail batch to finish before backup...', flush=True)
+    for _ in range(600):
+        if not unit_active('rm-mail.service'):
+            return
+        time.sleep(2)
+    raise RuntimeError('Mail worker still active after 20 minutes; backup cancelled')
+
+
+def resume_mail(was_active):
+    """Do not change the timer enable/disable choice made by the operator."""
+    if was_active:
+        run(['systemctl', 'start', 'rm-mail.timer'])
 
 def main():
     if sys.platform != 'linux' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
@@ -146,9 +224,13 @@ def main():
     for key, relative in paths.items():
         if Path(runtime.get(key, str(APP / relative))).resolve() != APP / relative:
             raise RuntimeError('Custom data path requires manual deployment: ' + key)
-    # The service remains unchanged, including its environment and credentials.
-    if (APP / 'deploy/rm-progress.service').read_bytes() != (RELEASE / 'deploy/rm-progress.service').read_bytes():
-        raise RuntimeError('Service template changed; review the service configuration before deploying')
+    # A template revision may update the standard generated unit, but not
+    # administrator-customized systemd units or nonstandard unit locations.
+    if ((APP / 'deploy/rm-progress.service').read_bytes() !=
+            (RELEASE / 'deploy/rm-progress.service').read_bytes() and
+            setting('FragmentPath') != str(WEB_UNIT)):
+        raise RuntimeError('Nonstandard web systemd unit location; review manually before upgrading')
+    unit_plan = plan_web_unit_update(account.pw_name)
     if (APP / 'DEPLOYED_COMMIT').exists() and (APP / 'DEPLOYED_COMMIT').read_text().strip() == manifest['commit']:
         print('Already deployed: ' + manifest['commit'])
         return
@@ -189,8 +271,13 @@ def main():
     (stage / 'venv').symlink_to(environment, target_is_directory=True)
     # Compile before the maintenance window; this does not import the app.
     run([migration_python, '-m', 'compileall', '-q', stage / 'app.py', stage / 'common.py', stage / 'modules'], user=account.pw_uid, group=account.pw_gid)
-    stopped = moved = installed = False
+    stopped = moved = installed = unit_updated = False
+    mail_paused = False
+    timer_was_active = False
     try:
+        timer_was_active = unit_active('rm-mail.timer')
+        mail_paused = True
+        suspend_mail()
         print('Stopping service and creating offline recovery point...', flush=True)
         stopped = True
         run(['systemctl', 'stop', SERVICE])
@@ -204,13 +291,18 @@ def main():
             except (FileNotFoundError, PermissionError, ProcessLookupError):
                 continue
         (backup / 'service.txt').write_text(output(['systemctl', 'cat', SERVICE]))
-        (backup / 'runtime-environment.json').write_text(json.dumps(runtime, indent=2))
+        if unit_plan:
+            (backup / 'rm-progress.service').write_bytes(unit_plan[0])
+        redacted_runtime = {key: ('[REDACTED]' if any(token in key.upper() for token in
+                           ('PASSWORD', 'SECRET', 'TOKEN', 'CREDENTIAL', 'SMTP_')) else value)
+                            for key, value in runtime.items()}
+        (backup / 'runtime-environment.json').write_text(json.dumps(redacted_runtime, indent=2))
         shutil.copytree(APP, backup / 'old-code', ignore=shutil.ignore_patterns('venv', 'data', 'data.db*', 'secret.key', 'backups', '__pycache__', '.git'), symlinks=True)
         create_snapshot(APP, backup / 'full-data.zip', offline_confirmed=True)
         restore_snapshot(backup / 'full-data.zip', backup / 'restored')
         shutil.copytree(backup / 'restored', stage, dirs_exist_ok=True)
         for item in APP.iterdir():
-            if item.is_file() and (item.name.startswith('.env') or item.name in ('index.html', 'initial-admin-password.txt')):
+            if item.is_file() and (item.name.startswith('.env') or item.name in ('index.html', 'initial-admin-password.txt', 'mail.env')):
                 if item.is_symlink():
                     raise RuntimeError('Custom configuration symlink requires manual deployment: ' + str(item))
                 shutil.copy2(item, stage / item.name)
@@ -261,26 +353,41 @@ def main():
             moved = True
             stage.rename(APP)
             installed = True
+        if unit_plan:
+            replace_web_unit(WEB_UNIT, unit_plan[1])
+            unit_updated = True
+            print('Updated reviewed web systemd unit with the new release template.', flush=True)
+        install_mail(APP, account.pw_name)
+        run(['systemctl', 'daemon-reload'])
         run(['systemctl', 'start', SERVICE])
         healthy()
         (backup / 'result.json').write_text(json.dumps({'status': 'success', 'commit': manifest['commit'], 'counts': counts, 'login_http': 200}, indent=2))
         own(backup)
+        resume_mail(timer_was_active)
+        mail_paused = False
         print('DEPLOYMENT_OK ' + manifest['commit'])
         print('BACKUP ' + str(backup))
         print('PREVIOUS_INSTALLATION ' + str(previous))
         print('LOGIN_HTTP 200; records: ' + json.dumps(counts))
     except BaseException:
-        if stopped:
-            with protect_recovery():
-                print('Restoring old service; please wait. Further Ctrl+C is ignored during recovery.', flush=True)
-                run(['systemctl', 'stop', SERVICE])
-                if installed:
-                    APP.rename(failed)
-                if moved:
-                    previous.rename(APP)
-                run(['systemctl', 'start', SERVICE])
-                healthy()
-                print('Old service restored; failed release and recovery files retained.', flush=True)
+        with protect_recovery():
+            try:
+                if stopped:
+                    print('Restoring old service; please wait. Further Ctrl+C is ignored during recovery.', flush=True)
+                    run(['systemctl', 'stop', SERVICE])
+                    if installed:
+                        APP.rename(failed)
+                    if moved:
+                        previous.rename(APP)
+                    if unit_updated:
+                        replace_web_unit(WEB_UNIT, unit_plan[0])
+                        run(['systemctl', 'daemon-reload'])
+                    run(['systemctl', 'start', SERVICE])
+                    healthy()
+                    print('Old service restored; failed release and recovery files retained.', flush=True)
+            finally:
+                if mail_paused:
+                    resume_mail(timer_was_active)
         raise
 
 
