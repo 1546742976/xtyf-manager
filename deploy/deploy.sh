@@ -6,7 +6,7 @@ set -euo pipefail
 #   2) rsync 源目录(~/progress_system) → 运行目录(/opt/rm-progress)
 #      —— 数据(data/)、数据库、secret.key、backups 全部保留，不会被覆盖
 #   3) 更新 venv 依赖（清华 pip 镜像）
-#   4) 安装并重启 systemd 服务 + 本机自检
+#   4) 安装网站与邮件 systemd 服务（默认不开邮件）+ 本机自检
 # 用法：cd ~/progress_system && bash deploy/deploy.sh
 # ============================================================
 
@@ -26,7 +26,7 @@ sudo mkdir -p "$APP_DIR"
 sudo rsync -a --delete \
   --exclude venv --exclude data.db --exclude 'data.db-*' \
   --exclude secret.key --exclude backups --exclude __pycache__ \
-  --exclude data --exclude index.html \
+  --exclude data --exclude mail.env --exclude index.html \
   "$SRC_DIR"/ "$APP_DIR"/
 sudo chmod +x "$APP_DIR"/deploy/*.sh
 
@@ -41,7 +41,9 @@ sudo chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 echo "==> 安装 systemd 服务"
 sed "s/{{APP_USER}}/$APP_USER/; s#{{APP_DIR}}#$APP_DIR#g" \
   "$APP_DIR/deploy/rm-progress.service" | sudo tee /etc/systemd/system/rm-progress.service > /dev/null
+sudo python3 "$APP_DIR/deploy/install_mail.py" --app-dir "$APP_DIR" --app-user "$APP_USER"
 sudo systemctl daemon-reload
+# Mail timer is installed but NEVER auto-enabled on first deployment.
 sudo systemctl enable rm-progress
 sudo systemctl restart rm-progress
 
