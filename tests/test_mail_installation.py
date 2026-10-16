@@ -125,5 +125,85 @@ class MailPauseTests(unittest.TestCase):
 
 
 
+
+class WebUnitUpgradeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="xtyf-web-unit-")
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.app = root / "app"
+        self.release = root / "release"
+        (self.app / "deploy").mkdir(parents=True)
+        (self.release / "deploy").mkdir(parents=True)
+        self.unit = root / "rm-progress.service"
+        self.old = self.app / "deploy/rm-progress.service"
+        self.new = self.release / "deploy/rm-progress.service"
+        self.old.write_text(
+            "[Service]\nUser={{APP_USER}}\nWorkingDirectory={{APP_DIR}}\n"
+            "ExecStart={{APP_DIR}}/venv/bin/gunicorn --timeout 120 app:app\n",
+            encoding="utf-8")
+        self.new.write_text(
+            "[Service]\nUser={{APP_USER}}\nWorkingDirectory={{APP_DIR}}\n"
+            "ExecStart={{APP_DIR}}/venv/bin/gunicorn --timeout 240 app:app\n",
+            encoding="utf-8")
+        self.unit.write_bytes(self.old.read_text(encoding="utf-8")
+                              .replace("{{APP_USER}}", "xtyf")
+                              .replace("{{APP_DIR}}", str(self.app))
+                              .encode("utf-8"))
+        self.original = self.unit.read_bytes()
+        self.patch_app = patch.object(update_release, "APP", self.app)
+        self.patch_release = patch.object(update_release, "RELEASE", self.release)
+        self.patch_app.start()
+        self.patch_release.start()
+        self.addCleanup(self.patch_app.stop)
+        self.addCleanup(self.patch_release.stop)
+
+    def test_known_timeout_upgrade_applies_and_can_rollback(self):
+        planned = update_release.plan_web_unit_update("xtyf", installed_unit=self.unit)
+        self.assertEqual(planned[0], self.original)
+        self.assertIn(b"--timeout 240", planned[1])
+        update_release.replace_web_unit(self.unit, planned[1])
+        self.assertIn(b"--timeout 240", self.unit.read_bytes())
+        update_release.replace_web_unit(self.unit, planned[0])
+        self.assertEqual(self.unit.read_bytes(), self.original)
+
+    def test_locally_modified_unit_must_be_reviewed(self):
+        self.unit.write_bytes(self.original + b"# locally modified\n")
+        with self.assertRaisesRegex(RuntimeError, "preserve customizations"):
+            update_release.plan_web_unit_update("xtyf", installed_unit=self.unit)
+        self.assertIn(b"locally modified", self.unit.read_bytes())
+
+    def test_no_template_change_requires_no_service_reinstall(self):
+        self.new.write_bytes(self.old.read_bytes())
+        self.unit.write_bytes(b"manual configuration")
+        self.assertIsNone(update_release.plan_web_unit_update("xtyf", installed_unit=self.unit))
+
+    def test_rejects_unresolved_template_variables(self):
+        self.new.write_text("[Service]\nUser={{APP_USER}}\nUnknown={{NEW_FIELD}}\n",
+                            encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "Unresolved placeholder"):
+            update_release.plan_web_unit_update("xtyf", installed_unit=self.unit)
+
+    def test_rejects_symlinked_web_unit(self):
+        target = self.unit.with_name("unit-target")
+        target.write_bytes(self.original)
+        self.unit.unlink()
+        try:
+            self.unit.symlink_to(target)
+        except (NotImplementedError, OSError):
+            self.skipTest("filesystem cannot create a symlink")
+        with self.assertRaisesRegex(RuntimeError, "symlinked"):
+            update_release.plan_web_unit_update("xtyf", installed_unit=self.unit)
+        self.assertEqual(target.read_bytes(), self.original)
+
+    def test_upgrade_checks_template_before_stopping_service(self):
+        script = (Path(__file__).resolve().parents[1] / "deploy/update_release.py").read_text(encoding="utf-8")
+        self.assertLess(script.index("unit_plan = plan_web_unit_update(account.pw_name)"),
+                        script.index("suspend_mail()\n        print("))
+        self.assertIn("if unit_updated:\n                        replace_web_unit(WEB_UNIT, unit_plan[0])", script)
+        self.assertIn("(backup / 'rm-progress.service').write_bytes(unit_plan[0])", script)
+
+
+
 if __name__ == "__main__":
     unittest.main()
