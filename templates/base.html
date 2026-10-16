@@ -1,6 +1,6 @@
 <!-- Shared authenticated workspace shell; login keeps its standalone layout. -->
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="{{ me.ui_theme if me else 'light' }}">
+<html lang="zh-CN" {% include "_theme_attributes.html" %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -12,6 +12,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='collaboration.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='apple.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='task-center.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='themes.css') }}">
 </head>
 <body class="{% if me %}ws-app{% endif %}">
   <a href="#main-content" class="ux-skip-link">跳至主内容</a>

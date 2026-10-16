@@ -27,9 +27,9 @@ class TestAccountPreferences(unittest.TestCase):
 
     def test_default_save_other_device_relogin_and_account_isolation(self):
         other_device = self.login_member()
-        self.assertEqual(self.member.get('/api/account/preferences').get_json(), {'ok': True, 'theme': 'light'})
+        self.assertEqual(self.member.get('/api/account/preferences').get_json()['theme'], 'light')
         before = self.member.get('/api/data').get_json()['me']['session_version']
-        self.assertEqual(self.member.post('/api/account/preferences', json={'theme': 'dark'}).get_json(), {'ok': True, 'theme': 'dark'})
+        self.assertEqual(self.member.post('/api/account/preferences', json={'theme': 'dark'}).get_json()['theme'], 'dark')
         self.assertEqual(other_device.get('/api/account/preferences').get_json()['theme'], 'dark')
         self.assertEqual(other_device.get('/api/data').get_json()['me']['session_version'], before)
         self.assertIn('data-theme="dark"', self.login_member().get('/tasks').get_data(as_text=True))

@@ -16,9 +16,13 @@
 | `modules/task_migrations.py` / `task_catalogs.py` | 版本化迁移、两套组别字典及成员关联 |
 | `modules/member_profiles.py` | 个人资料与管理员完整编辑、可恢复成员删除 |
 | `static/task-timeline.js` / `static/task-board.js` | 专业组时间轴、严格日期校验、稳定车组坐标及其他任务视图 |
-| `static/theme.js` / `static/apple.css` | 账户主题选择与保存、银白／黑色语义色彩和响应式组件 |
+| `static/theme-init.js` / `theme.js` / `themes.css` / `apple.css` | 八套主题、跟随系统首屏、账户持久化及共享组件 |
+| `modules/workspace_settings.py` / `static/countdown.js` | 外观迁移、单个首页目标配置与北京时间倒计时 |
+| `modules/task_dates.py` / `static/task-date-defaults.js` | 主前置截止日前两天建议、日期来源与显式重置 |
+| `static/task-center.js` / `task-center.css` / `templates/_daily_projects_content.html` | 统一任务中心双标签与新建弹窗 |
 | `modules/task_attachments.py`、`image_storage.py`、`attachments/` | 截图访问与存储校验 |
-| `modules/discussions.py` | GitHub Issue/Discussion URL 外链 |
+| `modules/discussions.py` | 本地协作话题、消息、未读、撤回与附件接口 |
+| `modules/collaboration_schema.py` / `collaboration_storage.py` | 可重复协作迁移、流式原件存储及安全缩略图 |
 | `modules/funds.py` | 资金、审核资格、统计图表 |
 | `modules/invoices.py` | 发票 PDF/JSON、任务队列、SSE 与权限 |
 | `templates/_workspace_sidebar.html`、`base.html`、`_workspace_top.html` | 统一侧栏及框架 |

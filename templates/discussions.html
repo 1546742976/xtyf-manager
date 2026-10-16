@@ -1,32 +1,47 @@
 {% extends "base.html" %}
-{% block title %}GitHub 协作{% endblock %}
+{% block title %}协作{% endblock %}
 {% block content %}
-<div class="ux-page-head">
-  <div><p class="ux-eyebrow">WORKSPACE / GITHUB</p><h1>GitHub 协作</h1>
-    <p>在工作台同步浏览 GitHub Issues 与 Discussions；创建、评论和回复请在 GitHub 完成。</p></div>
-</div>
-{% if github_urls %}
-<section class="panel github-hub" id="github-hub" data-repository="{{ github_urls.repository }}" data-new-issue="{{ github_urls.new_issue }}" data-new-discussion="{{ github_urls.new_discussion }}">
-  <div class="github-hub-toolbar">
-    <div class="seg" role="tablist" aria-label="GitHub 协作板块">
-      <button type="button" role="tab" class="active" aria-selected="true" data-github-kind="issues">Issues · 问题与建议</button>
-      <button type="button" role="tab" aria-selected="false" data-github-kind="discussions">Discussions · 交流讨论</button>
+<div class="ux-page-head"><div><p class="ux-eyebrow">WORKSPACE / COLLABORATION</p><h1>协作</h1><p>围绕话题交流进展、分享资料；所有登录成员都可参与。</p></div><button class="btn primary" type="button" id="collab-new-topic" aria-haspopup="dialog" aria-controls="collab-topic-dialog">新建话题</button></div>
+<section id="collab-hub" class="panel collab-hub" data-member-id="{{ me.id }}">
+  <section class="collab-list-pane" aria-label="话题列表">
+    <form id="collab-search" class="collab-search"><label for="collab-query">搜索话题</label><div><input id="collab-query" name="q" type="search" maxlength="120" placeholder="输入话题标题"><button type="submit" class="btn">搜索</button></div></form>
+    <p id="collab-list-status" class="collab-status" role="status" aria-live="polite"></p>
+    <div id="collab-topics" class="collab-topics"></div>
+    <div class="collab-pages"><button type="button" id="collab-prev" class="btn" disabled>上一页</button><span id="collab-page">第 1 页</span><button type="button" id="collab-next" class="btn" disabled>下一页</button></div>
+    <button type="button" id="collab-list-retry" class="btn" hidden>重新加载话题</button>
+  </section>
+  <section class="collab-detail-pane" aria-label="话题详情">
+    <div id="collab-empty" class="collab-empty"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ws-discussions"/></svg><h2>从一个话题开始</h2><p>选择话题查看消息，或新建话题与团队交流。</p></div>
+    <div id="collab-thread" class="collab-thread" hidden>
+      <header class="collab-thread-head"><button class="btn collab-back" type="button" id="collab-back">返回列表</button><div><h2 id="collab-title" tabindex="-1"></h2><p id="collab-topic-meta"></p></div><button class="btn" type="button" id="collab-withdraw-topic" hidden>撤回话题</button></header>
+      <p id="collab-thread-status" class="collab-status" role="status" aria-live="polite"></p>
+      <button class="btn" type="button" id="collab-thread-retry" hidden>重新加载消息</button>
+      <div id="collab-messages-scroll" class="collab-messages-scroll" tabindex="0" aria-label="话题消息，可滚动查看历史">
+        <button class="btn collab-older" type="button" id="collab-older" hidden>加载更早消息</button>
+        <p id="collab-read-gap" class="collab-status" hidden>还有较早的未读消息，可加载更早消息继续阅读。</p>
+        <div id="collab-messages" class="collab-messages"></div>
+      </div>
+      <button type="button" class="btn collab-new-messages" id="collab-new-messages" hidden>查看新消息</button>
+      <form id="collab-reply" class="collab-composer">
+        <label for="collab-body">回复话题</label><textarea id="collab-body" name="body" maxlength="5000" rows="3" placeholder="写下进展或想法…"></textarea>
+        <div class="collab-composer-tools"><label class="btn collab-file-button">添加附件<input type="file" multiple id="collab-files" aria-label="添加回复附件"></label><span class="collab-limit">最多 5 个文件，单个 100 MiB、合计 180 MiB</span><button type="submit" class="btn primary">发送</button></div>
+        <ul class="collab-selected-files" data-selected-files></ul><progress data-upload-progress max="100" value="0" hidden aria-label="附件上传进度"></progress>
+        <p class="collab-status" data-send-status role="status" aria-live="polite"></p><button type="button" class="btn" data-send-retry hidden>核对结果并重试</button>
+        <small class="collab-shortcut">Ctrl / ⌘ + Enter 发送；输入法选字时不会发送。</small>
+      </form>
     </div>
-    <a class="btn primary" id="github-new" href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">去 GitHub 创建 Issue ↗</a>
-  </div>
-  <p class="ux-note github-source-note" id="github-source-note" aria-live="polite"></p>
-  <div class="github-hub-grid">
-    <div class="github-topic-list" id="github-topic-list" aria-label="主题列表" aria-live="polite"><p class="empty">正在加载…</p></div>
-    <div class="github-topic-detail" id="github-topic-detail" aria-label="主题详情"><p class="empty">从左侧选择主题查看正文与回复。</p></div>
-  </div>
-  <div class="github-pages"><button type="button" class="btn ghost sm" id="github-prev" disabled>上一页</button><span id="github-page">第 1 页</span><button type="button" class="btn ghost sm" id="github-next">下一页</button></div>
+  </section>
 </section>
-<p class="ux-note">这里展示仓库的近期问题与讨论；连接暂时不可用时，可直接到 GitHub 查看。
-  创建和参与讨论需使用个人 GitHub 账号，前往 <a href="{{ github_urls.discussions }}" target="_blank" rel="noopener noreferrer">GitHub Discussions</a> 或 <a href="{{ github_urls.new_issue }}" target="_blank" rel="noopener noreferrer">新建 Issue</a>。请勿公开敏感信息。</p>
-{% else %}
-<section class="panel"><h2>尚未配置 GitHub 仓库</h2><p class="ux-note">请联系管理员配置 GITHUB_REPOSITORY（格式：owner/repository），然后重新打开此页面。</p></section>
-{% endif %}
+<dialog id="collab-topic-dialog" class="collab-topic-dialog" aria-labelledby="collab-topic-dialog-title">
+  <header><h2 id="collab-topic-dialog-title">新建话题</h2><button class="btn" type="button" data-topic-close aria-label="关闭新建话题">关闭</button></header>
+  <form id="collab-topic-form" class="collab-composer"><div class="collab-topic-fields">
+    <label for="collab-new-title">话题标题<input id="collab-new-title" name="title" required maxlength="120" placeholder="让大家一眼了解讨论内容"></label>
+    <label for="collab-new-body">正文<textarea id="collab-new-body" name="body" maxlength="5000" rows="6" placeholder="说明背景、问题或希望推进的事情…"></textarea></label>
+    <div class="collab-composer-tools"><label class="btn collab-file-button">添加附件<input type="file" multiple id="collab-new-files" aria-label="添加话题附件"></label><span class="collab-limit">最多 5 个文件，单个 100 MiB、合计 180 MiB</span></div>
+    <ul class="collab-selected-files" data-selected-files></ul><progress data-upload-progress max="100" value="0" hidden aria-label="附件上传进度"></progress>
+    <p class="collab-status" data-send-status role="status" aria-live="polite"></p><button type="button" class="btn" data-send-retry hidden>核对结果并重试</button></div>
+    <footer><span class="collab-shortcut">Ctrl / ⌘ + Enter 发布</span><button class="btn" type="button" data-topic-close>取消</button><button class="btn primary" type="submit">发布话题</button></footer>
+  </form>
+</dialog>
 {% endblock %}
-{% block scripts %}
-{% if github_urls %}<script src="{{ url_for('static', filename='discussions.js') }}"></script>{% endif %}
-{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='discussions.js') }}"></script>{% endblock %}

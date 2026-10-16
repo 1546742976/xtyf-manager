@@ -11,7 +11,7 @@
 | 一主责、多参与成员 | 已实现 `owner_id` + `task_participants` |
 | 同时处于多个专业组 | 已实现 `groups` + `member_groups`，默认视觉/电控/机械/硬件/宣传/运营 |
 | 任务按造车组别归档 | 已实现 `projects` + `tasks.project_id`；成员可同时参与多个造车组别 |
-| GitHub Issue/Discussion | 已实现 **外部链接入口**，无自动双向同步、无需将业务数据传给 GitHub |
+| 协作 | 已替换为本地话题、回复和附件，GitHub 旧只读接口停用；见[本地协作](本地协作.md) |
 
 ## 迁移概览
 

@@ -24,18 +24,9 @@
     <section class="panel appearance-panel" aria-labelledby="appearance-title">
       <h2 id="appearance-title">外观</h2>
       <p class="appearance-description">选择适合你的工作界面，主题会随账户同步到其他设备。</p>
-      <fieldset class="theme-options" {% if me.must_change_password %}disabled{% endif %}>
-        <legend class="sr-only">页面主题</legend>
-        {% for theme, label in [('light', '银白'), ('dark', '黑色')] %}
-        <label class="theme-option">
-          <input type="radio" name="workspace-theme" value="{{ theme }}" {% if me.ui_theme == theme %}checked{% endif %}>
-          <span class="theme-swatch theme-swatch-{{ theme }}" aria-hidden="true"><i></i><span><b></b><b></b><b></b></span></span>
-          <span class="theme-option-label">{{ label }}</span>
-        </label>
-        {% endfor %}
-      </fieldset>
-      <p id="theme-result" class="ux-account-result" role="status" aria-live="polite">{% if me.must_change_password %}修改初始密码后即可设置外观。{% endif %}</p>
-      <button id="theme-retry" class="btn hidden" type="button">重试保存主题</button>
+      {% set theme_control_id = "account" %}{% include "_theme_choices.html" %}
+      <p id="theme-result" data-theme-result class="ux-account-result" role="status" aria-live="polite">{% if me.must_change_password %}修改初始密码后即可设置外观。{% endif %}</p>
+      <button id="theme-retry" data-theme-retry class="btn" hidden type="button">重试保存主题</button>
     </section>
   </div>
   <div class="ux-account-settings">

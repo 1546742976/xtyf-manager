@@ -4,8 +4,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import sqlite3
 
-from flask import Blueprint, current_app, jsonify, render_template, request, send_file
-from common import current_user, get_db, login_required, manager_required, ROLE_NAMES
+from flask import Blueprint, current_app, jsonify, redirect, request, send_file, url_for
+from common import current_user, get_db, login_required, manager_required
 from modules.image_storage import (prepare_image, stage_images, finalize_staged, cleanup_staged,
                                   attachment_path, ImageValidationError, StorageWriteError, MAX_FILES)
 
@@ -90,8 +90,7 @@ def dashboard_selection(projects, member_id):
 @bp.get('/daily-projects/<int:pid>')
 @login_required
 def page(pid=None):
-    return render_template('daily_projects.html', me=current_user(), role_names=ROLE_NAMES,
-                           page='daily', project_id=pid, stages=STAGES)
+    return redirect(url_for('tasks', type='daily', **({'project': pid} if pid else {})))
 
 
 @bp.get('/api/daily-projects')
@@ -159,8 +158,11 @@ def clean_project(body, db):
             raise ValueError('每个启用组至少指定一位负责人')
         for mid in owners:
             integer(mid, '负责人 ID')
-            if not db.execute('SELECT 1 FROM members WHERE id=? AND is_active=1 AND deleted_at IS NULL', (mid,)).fetchone():
+            member = db.execute('SELECT role FROM members WHERE id=? AND is_active=1 AND deleted_at IS NULL', (mid,)).fetchone()
+            if not member:
                 raise ValueError('负责人已停用或不存在，请重新选择')
+            if member['role'] == 'admin':
+                raise ValueError('管理员不参与日常项目，请改选非管理员负责人后保存')
     return (title.strip(), detail.strip(), status, priority, *dates), groups
 
 
@@ -184,9 +186,11 @@ def save(pid=None):
             # Closed goals must first be explicitly reopened.
             if old['status'] in TERMINAL and fields[2] in TERMINAL:
                 db.rollback(); return failure('请先重新打开项目', 409)
-            db.execute('UPDATE daily_projects SET title=?,detail=?,status=?,priority=?,start_date=?,due_date=?,version=version+1,updated_at=? WHERE id=?', (*fields, when, pid))
+            completed_at = (when if fields[2] == '已完成' else None) if fields[2] != old['status'] else old['completed_at']
+            db.execute('UPDATE daily_projects SET title=?,detail=?,status=?,priority=?,start_date=?,due_date=?,completed_at=?,version=version+1,updated_at=? WHERE id=?', (*fields, completed_at, when, pid))
         else:
-            pid = db.execute('INSERT INTO daily_projects(title,detail,status,priority,start_date,due_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)', (*fields, when, when)).lastrowid
+            completed_at = when if fields[2] == '已完成' else None
+            pid = db.execute('INSERT INTO daily_projects(title,detail,status,priority,start_date,due_date,completed_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)', (*fields, completed_at, when, when)).lastrowid
         for stage in STAGES:
             old_group = db.execute('SELECT enabled FROM daily_groups WHERE project_id=? AND stage=?', (pid, stage)).fetchone()
             if stage in groups:

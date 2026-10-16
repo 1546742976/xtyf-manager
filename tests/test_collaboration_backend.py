@@ -108,7 +108,7 @@ class TestCollaborationBackend(unittest.TestCase):
         self.assertEqual(cycle.status_code, 400)
         task = next(item for item in self.admin.get("/api/data").get_json()["tasks"]
                     if item["id"] == child["id"])
-        self.assertEqual(task["suggested_start_date"], "2026-11-03")
+        self.assertIsNone(task["suggested_start_date"], "Only the main predecessor supplies a date suggestion")
         self.assertTrue(task["dependency_warnings"])
 
     def test_same_task_can_be_parent_and_predecessor(self):

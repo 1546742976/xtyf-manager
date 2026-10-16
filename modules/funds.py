@@ -44,6 +44,39 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# These are the corresponding text/surface/control/primary tokens in themes.css.
+# The query chooses a known palette, never arbitrary matplotlib color input.
+CHART_PALETTES = {
+    'silver': ('#ffffff', '#1d1d1f', '#62626a', '#b9b9c1', '#0064cc', 'light'),
+    'rm-light': ('#ffffff', '#182947', '#52627a', '#879cb9', '#0752cf', 'light'),
+    'mist': ('#ffffff', '#1d3028', '#52685e', '#9aafa3', '#176b51', 'light'),
+    'paw': ('#fffaf9', '#4b2034', '#785165', '#b8889d', '#edb0c7', 'light'),
+    'space': ('#1d2736', '#ecf1ff', '#afbdd2', '#6a819e', '#90b6ff', 'dark'),
+    'rm-dark': ('#172a3e', '#eff5ff', '#b1c3d8', '#698aaf', '#82bdff', 'dark'),
+    'graphite': ('#27282c', '#f5f0e7', '#c2bbb0', '#8f877b', '#e7c483', 'dark'),
+    'xueli': ('#352730', '#fff0f6', '#d4b4c4', '#ac8297', '#edb0cf', 'dark'),
+}
+
+
+def chart_palette(requested, user):
+    if requested not in CHART_PALETTES:
+        mode = user.get('theme_mode')
+        if mode not in ('light', 'dark'):
+            mode = 'dark' if user.get('ui_theme') == 'dark' else 'light'
+        requested = user.get(mode + '_theme')
+        if requested not in CHART_PALETTES or CHART_PALETTES[requested][5] != mode:
+            requested = 'space' if mode == 'dark' else 'silver'
+    surface, text, muted, border, primary, mode = CHART_PALETTES[requested]
+    return requested, {'surface': surface, 'text': text, 'muted': muted, 'border': border,
+                       'primary': primary, 'income': '#80d99a' if mode == 'dark' else '#248348',
+                       'expense': '#ff6b66' if mode == 'dark' else '#c93432'}
+
+
+def _pie_ink(rgba):
+    channels = [value / 12.92 if value <= .04045 else ((value + .055) / 1.055) ** 2.4 for value in rgba[:3]]
+    luminance = sum(value * weight for value, weight in zip(channels, (.2126, .7152, .0722)))
+    return '#000000' if (luminance + .05) / .05 >= 1.05 / (luminance + .05) else '#ffffff'
+
 # ---- matplotlib 中文字体与负号设置（Windows 命中雅黑，Linux 命中 Noto CJK）----
 plt.rcParams["font.sans-serif"] = [
     "Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "WenQuanYi Zen Hei", "DejaVu Sans",
@@ -508,9 +541,11 @@ def get_stats():
 # ---- 图表：matplotlib（Agg 无界面后端）生成 PNG，base64 返回给前端 <img> ----
 def get_chart():
     chart_type = request.args.get("type", "monthly")
+    palette, colors = chart_palette(request.args.get('palette'), current_user())
     conn = get_funds_db()
 
     try:
+        pie_labels = []
         stats = summarize_records(conn.execute('SELECT * FROM records ORDER BY id').fetchall())
         if chart_type == 'monthly':
             rows = stats['monthly_stats']
@@ -519,8 +554,8 @@ def get_chart():
             inc, exp = [r['income'] / 100 for r in rows], [r['expense'] / 100 for r in rows]
             fig, ax = plt.subplots(figsize=(10, 5))
             x, w = range(len(labels)), 0.35
-            b1 = ax.bar([i - w / 2 for i in x], inc, w, label='Income', color='#52c41a')
-            b2 = ax.bar([i + w / 2 for i in x], exp, w, label='Expense', color='#ff4d4f')
+            b1 = ax.bar([i - w / 2 for i in x], inc, w, label='Income', color=colors['income'])
+            b2 = ax.bar([i + w / 2 for i in x], exp, w, label='Expense', color=colors['expense'])
             ax.set_xticks(list(x))
             ax.set_xticklabels(labels, rotation=45, ha='right')
             ax.legend()
@@ -541,20 +576,22 @@ def get_chart():
             fig, ax = plt.subplots(figsize=(8, 5))
             if chart_type == 'source':
                 if rows:
-                    ax.pie([r['total'] / 100 for r in rows],
+                    wedges, _, percentages = ax.pie([r['total'] / 100 for r in rows],
                            labels=[(r[label] or 'Other') + ' · ' + format_cents(r['total']) for r in rows],
+                           colors=[colors['primary'], colors['expense'], colors['income']],
                            autopct='%1.1f%%', startangle=90)
+                    pie_labels = list(zip(percentages, wedges))
                 else:
                     ax.text(0.5, 0.5, 'No data', ha='center', va='center')
             elif chart_type == 'applicant':
                 rows = rows[::-1]
-                bars = ax.barh([r[label] or 'Unspecified' for r in rows], [r['total'] / 100 for r in rows], color='#597ef7')
+                bars = ax.barh([r[label] or 'Unspecified' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
                 ax.set_xlabel('Amount (CNY)')
                 for bar, row in zip(bars, rows):
                     ax.text(bar.get_width(), bar.get_y() + bar.get_height() / 2,
                             format_cents(row['total']), ha='left', va='center', fontsize=9)
             else:
-                bars = ax.bar([r[label] or 'Other' for r in rows], [r['total'] / 100 for r in rows], color='#ff4d4f')
+                bars = ax.bar([r[label] or 'Other' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
                 ax.set_ylabel('Amount (CNY)')
                 plt.xticks(rotation=45, ha='right')
                 for bar, row in zip(bars, rows):
@@ -564,31 +601,28 @@ def get_chart():
         else:
             return jsonify({'code': 1, 'msg': 'Unknown chart type'})
 
-        # Transparent plot surfaces inherit the page background in either theme.
-        dark = current_user().get('ui_theme') == 'dark'
-        text_color = '#f5f5f7' if dark else '#1d1d1f'
-        muted_color = '#a1a1a6' if dark else '#68686d'
-        border_color = '#73737a' if dark else '#b9b9c1'
+        # The browser supplies its resolved palette for follow-system mode.
         fig.patch.set_alpha(0)
         ax.patch.set_alpha(0)
-        ax.tick_params(colors=muted_color)
+        ax.tick_params(colors=colors['muted'])
         for spine in ax.spines.values():
-            spine.set_color(border_color)
+            spine.set_color(colors['border'])
         for label in (ax.title, ax.xaxis.label, ax.yaxis.label, *ax.texts):
-            label.set_color(text_color)
+            label.set_color(colors['text'])
+        for label, wedge in pie_labels:
+            label.set_color(_pie_ink(wedge.get_facecolor()))
         legend = ax.get_legend()
         if legend is not None:
-            legend.get_frame().set_facecolor('#0b0b0c' if dark else '#f5f5f7')
-            legend.get_frame().set_edgecolor(border_color)
+            legend.get_frame().set_alpha(0)
             for label in legend.get_texts():
-                label.set_color(text_color)
+                label.set_color(colors['text'])
 
         fig.tight_layout()
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", transparent=True)
         buf.seek(0)
         plt.close(fig)
-        return jsonify({"code": 0, "data": f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"})
+        return jsonify({"code": 0, "palette": palette, "data": f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"})
     except Exception as e:
         plt.close("all")
         return jsonify({"code": 1, "msg": str(e)})

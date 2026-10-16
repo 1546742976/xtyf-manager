@@ -1,0 +1,8 @@
+<div id="daily-app" data-member-id="{{ me.id }}" data-manager="{{ '1' if me.role in ('admin','manager') else '0' }}" data-project-id="{{ project_id or '' }}">
+<p class="field-help">每个日常项目围绕一个共同目标，按机械、电控、视觉分别维护负责人和进度。</p>
+<p id="daily-message" role="status" aria-live="polite"></p>
+<section id="daily-detail" class="panel" hidden></section>
+<section id="daily-list-panel">
+<form id="daily-filters" class="toolbar daily-filters"><label>搜索目标<input name="q" type="search" maxlength="200"></label><label>状态<select name="status"><option value="">全部状态</option>{% for status in ['未开始','进行中','已完成','阻塞','已取消'] %}<option>{{ status }}</option>{% endfor %}</select></label><label class="daily-mine-filter"><span>我负责的</span><span class="daily-mine-control"><input name="mine" type="checkbox"></span></label><button class="btn" type="submit">筛选</button><button class="btn" type="button" id="daily-reload">刷新</button></form>
+<div id="daily-list" class="daily-grid"></div><div id="daily-pages" class="daily-actions"></div>
+</section></div>

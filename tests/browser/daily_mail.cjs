@@ -17,12 +17,13 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     page.on('pageerror',error=>errors.push(error.message));page.on('dialog',d=>d.accept());
     await page.goto(base+'/login');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('browser-test-initial');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
     await page.locator('#account-password-form [name=old]').fill('browser-test-initial');await page.locator('#account-password-form [name=new]').fill('daily-browser-password');await page.locator('#account-password-form [name=confirm]').fill('daily-browser-password');await page.locator('#account-password-form button').click();await page.waitForURL(base+'/');
-    await page.goto(base+'/daily-projects');await page.locator('#daily-new').click();
+    const owner=(await api(page,'/api/member',{name:'浏览器负责人',username:'daily_browser_owner',password:'owner-password'})).body;
+    await page.goto(base+'/daily-projects');await page.locator('#new-task-toggle').click();
     await page.locator('#daily-form [name=title]').fill('共同大目标：研发长期可读的机械电控视觉协作方案');
-    await page.locator('#daily-form [name=detail]').fill('一个大目标，不拆分小任务。');
-    for(const stage of ['mechanical','vision']){await page.locator(`[name=enabled][value=${stage}]`).check();await page.locator(`[name=owners-${stage}][value="1"]`).check();}
-    await page.locator('#daily-form [type=submit]').click();await page.waitForURL(/\/daily-projects\/\d+$/);
-    const id=Number(page.url().split('/').pop());await page.locator('[data-progress-form=mechanical]').waitFor();
+    await page.locator('#daily-form [name=detail]').fill('一个大目标，不拆分小任务。');await page.locator('#daily-form [name=status]').selectOption('阻塞');
+    for(const stage of ['mechanical','vision']){await page.locator(`[name=enabled][value=${stage}]`).check();await page.locator(`[name=owners-${stage}][value="${owner.id}"]`).check();}
+    await page.locator('#daily-form [type=submit]').click();await page.waitForURL(/\/tasks\?type=daily&project=\d+$/);
+    const id=Number(new URL(page.url()).searchParams.get('project'));await page.locator('[data-progress-form=mechanical]').waitFor();
     await page.locator('[data-progress-form=vision] [name=note]').fill('尚未提交的视觉草稿');
     await page.locator('[data-progress-form=mechanical] [name=progress]').fill('70');await page.locator('[data-progress-form=mechanical] [name=note]').fill('机械结构完成');await page.locator('[data-progress-form=mechanical] button').click();
     await page.locator('[data-progress-form=mechanical] .form-message').filter({hasText:'进度已保存'}).waitFor();assert.equal(await page.locator('[data-progress-form=vision] [name=note]').inputValue(),'尚未提交的视觉草稿');
@@ -49,7 +50,7 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.goto(base+'/');await page.locator('#daily-dashboard a').filter({hasText:'共同大目标'}).waitFor();
     const task=(await api(page,'/api/task',{title:'邮件链接目标'})).body;
     await page.goto(base+'/tasks?task='+task.id);await page.locator('#modal').filter({hasText:'邮件链接目标'}).waitFor();
-    await api(page,'/logout',{}).catch(()=>{});await page.goto(base+`/daily-projects/${id}`);await page.waitForURL(/\/login\?/);await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('daily-browser-password');await page.locator('#login-form [type=submit]').click();await page.waitForURL(base+`/daily-projects/${id}`);checks.push('separate dashboard and login returns to linked goal');
+    await api(page,'/logout',{}).catch(()=>{});await page.goto(base+`/daily-projects/${id}`);await page.waitForURL(/\/login\?/);await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('daily-browser-password');await page.locator('#login-form [type=submit]').click();await page.waitForURL(base+`/tasks?type=daily&project=${id}`);checks.push('separate dashboard and login returns to linked goal');
     if(process.env.REVIEW_WEBKIT_PATH){
       phoneBrowser=await webkit.launch({headless:true,executablePath:process.env.REVIEW_WEBKIT_PATH});
       const context=await phoneBrowser.newContext({...devices['iPhone 13']});await context.addCookies(await page.context().cookies());const phone=await context.newPage();phone.on('pageerror',e=>errors.push(e.message));

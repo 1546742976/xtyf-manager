@@ -1,13 +1,8 @@
-import io
 import unittest
 from uuid import uuid4
-from unittest.mock import patch
-from urllib.error import HTTPError
-from email.message import Message
 
 from test_tasks import app_module
 from common import get_db
-from modules.discussions import _remote, GitHubError
 
 
 class WorkspaceChanges(unittest.TestCase):
@@ -63,27 +58,11 @@ class WorkspaceChanges(unittest.TestCase):
         self.assertEqual(returned['latest_note'],'')
         self.assertEqual(returned['latest_note_author'],'')
 
-    def test_github_cache_rate_cooldown_and_pagination(self):
-        with self.app.app_context():
-            for key in ('github_read_cache','github_cooldowns'):self.app.extensions.pop(key,None)
-            with patch('modules.discussions._remote_uncached',return_value=[]) as remote:
-                _remote('/issues');_remote('/issues')
-                self.assertEqual(remote.call_count,1)
-            with patch('modules.discussions._remote_uncached',side_effect=GitHubError('限流',503,120)) as remote:
-                for path in ('/first','/second'):
-                    with self.assertRaises(GitHubError):_remote(path)
-                self.assertEqual(remote.call_count,1)
-            for key in ('github_read_cache','github_cooldowns'):self.app.extensions.pop(key,None)
-        fixture=[{'pull_request':{},'number':i} for i in range(30)]
-        with patch('modules.discussions._remote',return_value=fixture):
-            data=self.admin.get('/discussions/api/items?kind=issues').get_json()
-        self.assertTrue(data['has_next']);self.assertEqual(data['items'],[])
-
-    def test_github_rate_limit_classified_from_headers(self):
-        headers=Message();headers['X-RateLimit-Remaining']='0';headers['Retry-After']='90'
-        error=HTTPError('https://api.github.com',403,'Forbidden',headers,io.BytesIO(b'{}'))
-        with self.app.app_context(),patch('modules.discussions.urlopen',side_effect=error):
-            from modules.discussions import _remote_uncached
-            with self.assertRaises(GitHubError) as raised:_remote_uncached('/issues')
-            self.assertEqual(raised.exception.retry_after,90)
-            self.assertIn('额度',str(raised.exception))
+    def test_local_collaboration_is_available_without_task_management_permission(self):
+        for client in (self.admin, self.clients['manager'], self.clients['member']):
+            response = client.post('/discussions/api/topics', json={
+                'submission_id': str(uuid4()), 'title': '协作独立权限', 'body': '所有登录成员可发起交流',
+            })
+            self.assertEqual(response.status_code, 201, response.get_json())
+            detail = self.clients['member'].get(f"/discussions/api/topics/{response.get_json()['topic_id']}/messages")
+            self.assertEqual(detail.status_code, 200, detail.get_json())

@@ -3,15 +3,22 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from common import now_str
+from modules.task_dates import apply_start_date_request
 from modules.task_types import Actor, JsonObject
 from modules.task_validation import active_ids, creates_combined_task_cycle, normalize_ids, parse_id, valid_tasks, validate_dates
 
 STATUSES = ("未开始", "进行中", "已完成", "阻塞", "已取消")
 PRIORITIES = ("高", "中", "低")
-SCALAR_FIELDS = ("title", "detail", "owner_id", "project_id", "parent_id", "priority", "status", "start_date", "due_date")
+SCALAR_FIELDS = ("title", "detail", "owner_id", "project_id", "parent_id", "priority", "status", "start_date", "due_date", "start_date_origin", "completed_at")
 REVISION_FIELDS = SCALAR_FIELDS + ("schedule_stage",)
 RELATION_FIELDS = ("participant_ids", "group_ids", "predecessor_ids")
+
+
+def completion_stamp() -> str:
+    """Persist the completion day in Beijing regardless of the host timezone."""
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _legacy_catalog(db: sqlite3.Connection, table: str, name: str, may_create: bool) -> int | None:
@@ -138,11 +145,13 @@ def create_task(
               "priority": data.get("priority", "中"), "status": data.get("status", "未开始"),
               "start_date": str(data.get("start_date") or "").strip(), "due_date": str(data.get("due_date") or "").strip()}
     relations, error = _resolve_relations(db, data, str(actor["role"]), owner_id)
+    error = error or apply_start_date_request(db, data, values)
     member_ids = relations.get("participant_ids", []) + ([owner_id] if owner_id is not None else [])
     error = error or _validate(db, None, values, relations, member_ids, relations.get("group_ids", []), project_id)
     if error:
         db.rollback(); return None, None, error, 400
     stamp = now_str()
+    values["completed_at"] = completion_stamp() if values["status"] == "已完成" else None
     try:
         columns = ",".join(values)
         placeholders = ",".join("?" for _ in values)
@@ -177,7 +186,7 @@ def update_task(
     values = {key: prior[key] for key in SCALAR_FIELDS}
     touched: set[str] = set()
     for key in SCALAR_FIELDS:
-        if key in data:
+        if key in data and key not in ("start_date_origin", "completed_at"):
             values[key] = data[key]
             touched.add(key)
     for key in ("owner_id", "project_id", "parent_id"):
@@ -193,6 +202,12 @@ def update_task(
         touched.add("project_id")
     for key in ("title", "detail", "start_date", "due_date"):
         values[key] = str(values[key] or "").strip()
+    date_error = apply_start_date_request(db, data, values, prior)
+    if date_error:
+        db.rollback(); return None, date_error, 400
+    for key in ("start_date", "start_date_origin"):
+        if values[key] != prior[key]:
+            touched.add(key)
     relations = _relations(db, task_id)
     supplied_relations, error = _resolve_relations(db, data, str(actor["role"]), values["owner_id"])
     if error:
@@ -211,6 +226,9 @@ def update_task(
     error = _validate(db, task_id, values, relations, active_members, active_groups, active_project)
     if error:
         db.rollback(); return None, error, 400
+    if values["status"] != prior["status"]:
+        values["completed_at"] = completion_stamp() if values["status"] == "已完成" else None
+        touched.add("completed_at")
     before = {key: (prior[key] if key in SCALAR_FIELDS else _relations(db, task_id)[key]) for key in touched}
     after = {key: (values[key] if key in SCALAR_FIELDS else relations[key]) for key in touched}
     changed = {key for key in touched if before[key] != after[key]}

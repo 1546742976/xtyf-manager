@@ -33,8 +33,8 @@ class TestCollaborationMigration(unittest.TestCase):
         db.commit()
         migrate(db)
         migrate(db)
-        self.assertEqual(db.execute('SELECT start_date,due_date,schedule_stage FROM tasks').fetchone(),
-                         ('2026-10-14', '2026-10-22', None))
+        self.assertEqual(db.execute('SELECT start_date,due_date,schedule_stage,start_date_origin FROM tasks').fetchone(),
+                         ('2026-10-14', '2026-10-22', None, 'frozen'))
         db.close()
 
     def _legacy_db(self, factory=sqlite3.Connection):
@@ -109,7 +109,7 @@ class TestCollaborationMigration(unittest.TestCase):
         self.assertIn("新赛季步兵", vehicle_names)
         self.assertNotIn("步兵", vehicle_names)
         self.assertNotIn("飞镖", vehicle_names)
-        self.assertEqual(db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 5)
+        self.assertTrue(set(range(1, 7)).issubset({row[0] for row in db.execute("SELECT version FROM schema_migrations")}))
         db.close()
 
     def test_injected_failure_rolls_back_entire_migration(self):

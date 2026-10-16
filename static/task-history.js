@@ -9,10 +9,12 @@ const FIELD_LABELS = {
   project_id: "项目",
   priority: "优先级",
   status: "状态",
+  completed_at: "完成时间",
   start_date: "开始日期",
+  start_date_origin: "日期来源",
   due_date: "截止日期",
   schedule_stage: "排期阶段",
-  parent_id: "父任务",
+  parent_id: "主前置任务",
   predecessor_ids: "前置任务",
 };
 const REVISION_KIND_LABELS = {
@@ -24,6 +26,7 @@ const REVISION_KIND_LABELS = {
 
 function revisionValue(field, value) {
   if (value == null || value === "") return "未设置";
+  if (field === "start_date_origin") return ({frozen: "已有日期（固定）", manual: "手动设置", dependency: "主前置任务建议（固定）", schedule: "确认应用排期"})[value] || String(value);
   if (field === "owner_id") return memberById(value)?.name || `成员 #${value}`;
   if (field === "participant_ids") {
     return (value || []).map((id) => memberById(id)?.name || `成员 #${id}`).join("、") || "无";

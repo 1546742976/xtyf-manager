@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS daily_projects (
  id INTEGER PRIMARY KEY, title TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
  status TEXT NOT NULL DEFAULT '未开始', priority TEXT NOT NULL DEFAULT '中',
  start_date TEXT, due_date TEXT, version INTEGER NOT NULL DEFAULT 1,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, completed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS daily_groups (
  project_id INTEGER NOT NULL REFERENCES daily_projects(id), stage TEXT NOT NULL,
@@ -50,6 +50,10 @@ def migrate(db):
         for statement in SCHEMA.split(';'):
             if statement.strip():
                 db.execute(statement)
+        columns = {row[1] for row in db.execute('PRAGMA table_info(daily_projects)')}
+        if 'completed_at' not in columns:
+            # Historical updated_at is not evidence of completion.
+            db.execute('ALTER TABLE daily_projects ADD COLUMN completed_at TEXT')
         db.commit()
     except Exception:
         db.rollback()

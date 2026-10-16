@@ -1,0 +1,18 @@
+<fieldset class="theme-mode-options" {% if me.must_change_password %}disabled{% endif %}>
+  <legend>显示模式</legend>
+  {% for mode, label in [('light','亮色'), ('dark','暗色'), ('system','跟随系统')] %}
+  <label><input type="radio" name="{{ theme_control_id }}-mode" data-theme-mode-choice value="{{ mode }}">{{ label }}</label>
+  {% endfor %}
+</fieldset>
+{% for mode, label, palettes in [('light','亮色配色',[('silver','银白蓝'),('rm-light','RM 机甲红蓝'),('mist','云雾绿'),('paw','奶霜猫爪粉')]),('dark','暗色配色',[('space','深空蓝'),('rm-dark','RM 机甲红蓝'),('graphite','石墨灰金'),('xueli','雪梨星语')])] %}
+<fieldset class="palette-options" {% if me.must_change_password %}disabled{% endif %}>
+  <legend>{{ label }}</legend>
+  {% for palette, name in palettes %}
+  <button type="button" class="palette-option" data-palette-choice="{{ palette }}" data-palette-mode="{{ mode }}" aria-pressed="false">
+    <span class="palette-preview" data-preview="{{ palette }}" aria-hidden="true"><i></i><b></b><b></b></span>
+    <span>{{ name }}</span>
+  </button>
+  {% endfor %}
+</fieldset>
+{% endfor %}
+<p class="theme-preference-hint">亮暗配色分别记忆。跟随系统时，自动使用对应配色。</p>

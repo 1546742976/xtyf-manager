@@ -166,7 +166,7 @@ class TestCollaborationAdversarial(unittest.TestCase):
         data = self.admin.get("/api/data").get_json()
         current = next(item for item in data["tasks"] if item["id"] == dependent["id"])
         self.assertTrue(any("已取消" in warning for warning in current["dependency_warnings"]))
-        self.assertEqual(current["suggested_start_date"], "2026-11-03")
+        self.assertIsNone(current["suggested_start_date"], "Additional predecessors do not supply the default date")
 
     def test_delete_is_blocked_by_incoming_dependency(self) -> None:
         predecessor = self._task(title="dependency predecessor")

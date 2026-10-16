@@ -1,4 +1,4 @@
-"""Progress history, multi-parent graph integrity and embedded GitHub gateway contracts."""
+"""Progress history, dependency integrity and retired GitHub endpoint contracts."""
 import io
 import unittest
 from unittest.mock import patch
@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from PIL import Image
 from test_tasks import app_module
-from modules.discussions import GitHubError, _atom_items
 
 
 class TaskProgressTests(unittest.TestCase):
@@ -134,118 +133,30 @@ class TaskProgressTests(unittest.TestCase):
         self.assertIn("循环", response.get_json()["error"])
 
 
-class GitHubGatewayTests(unittest.TestCase):
-    ATOM = """<?xml version="1.0" encoding="utf-8"?>
-    <feed xmlns="http://www.w3.org/2005/Atom">
-      <entry>
-        <title>公开主题 &amp; 建议</title>
-        <updated>2026-10-13T00:00:00Z</updated>
-        <link rel="alternate" href="https://github.com/SHM-white/xtyf-manager/discussions/42" />
-        <author><name>someone</name></author>
-        <content type="html">&lt;p&gt;欢迎&lt;strong&gt;测试&lt;/strong&gt;&lt;/p&gt;&lt;script&gt;alert(1)&lt;/script&gt;</content>
-      </entry>
-      <entry>
-        <title>伪造仓库的主题</title>
-        <link rel="alternate" href="https://github.com/untrusted/repo/discussions/88" />
-      </entry>
-    </feed>""".encode("utf-8")
-
+class RetiredGitHubGatewayTests(unittest.TestCase):
     def setUp(self):
         self.client = app_module.app.test_client()
         self.assertTrue(self.client.post("/login", json={
             "username": "admin", "password": "ci-test-password-only",
         }).get_json()["ok"])
-        self.prev_token = app_module.app.config.get("GITHUB_TOKEN")
-        self.prev_write = app_module.app.config.get("GITHUB_WRITE_ENABLED")
-        self.prev_repo = app_module.app.config.get("GITHUB_REPOSITORY")
-        app_module.app.config["GITHUB_REPOSITORY"] = "SHM-white/xtyf-manager"
-        app_module.app.config["GITHUB_TOKEN"] = ""
-        app_module.app.config["GITHUB_WRITE_ENABLED"] = "1"  # Legacy setting must not enable writing.
 
-    def tearDown(self):
-        for key, value in (("GITHUB_TOKEN", self.prev_token),
-                           ("GITHUB_WRITE_ENABLED", self.prev_write),
-                           ("GITHUB_REPOSITORY", self.prev_repo)):
-            if value is None:
-                app_module.app.config.pop(key, None)
-            else:
-                app_module.app.config[key] = value
+    def test_remote_read_endpoints_return_gone_without_network(self):
+        with patch("urllib.request.urlopen", side_effect=AssertionError("unexpected network")):
+            for path in ("/discussions/api/items?kind=issues",
+                         "/discussions/api/items?kind=discussions",
+                         "/discussions/api/item/issues/17",
+                         "/discussions/api/item/discussions/42"):
+                with self.subTest(path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 410, response.get_data(as_text=True))
 
-    def test_issues_public_read_and_external_only_ui(self):
-        fixture = [{
-            "number": 17, "title": "<b>标题</b>", "body": "问题复现",
-            "user": {"login": "robot"}, "comments": 2,
-            "updated_at": "2026-10-13T00:00:00Z",
-            "html_url": "https://github.com/SHM-white/xtyf-manager/issues/17",
-        }]
-        with patch("modules.discussions._remote", return_value=fixture) as mocked:
-            response = self.client.get("/discussions/api/items?kind=issues")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json()["items"][0]["title"], "<b>标题</b>")
-        self.assertEqual(response.get_json()["source"], "rest")
-        mocked.assert_called_once()
-        self.assertIn("/issues?state=all", mocked.call_args.args[0])
-        page = self.client.get("/discussions/").get_data(as_text=True)
-        self.assertIn('id="github-new"', page)
-        self.assertIn("https://github.com/SHM-white/xtyf-manager/issues/new/choose", page)
-        self.assertIn("https://github.com/SHM-white/xtyf-manager/discussions/new/choose", page)
-        self.assertNotIn("github-compose", page)
-        # The old POST endpoint must remain unavailable even if an operator
-        # has accidentally left GITHUB_WRITE_ENABLED=1 in the environment.
-        self.assertEqual(self.client.post("/discussions/api/post", json={
-            "kind": "issues", "action": "create", "title": "x", "body": "x",
-        }).status_code, 404)
-
-    def test_public_discussions_atom_without_token(self):
-        parsed = _atom_items(self.ATOM, "SHM-white/xtyf-manager")
-        self.assertEqual(len(parsed), 1)
-        self.assertEqual(parsed[0]["number"], 42)
-        self.assertEqual(parsed[0]["title"], "公开主题 & 建议")
-        self.assertIn("欢迎测试", parsed[0]["body"])
-        self.assertNotIn("<script>", parsed[0]["body"])
-        self.assertIsNone(parsed[0]["comments_count"])
-        with patch("modules.discussions._atom_feed", return_value=parsed) as mocked:
-            listed = self.client.get("/discussions/api/items?kind=discussions")
-            self.assertEqual(listed.status_code, 200, listed.get_json())
-            self.assertEqual(listed.get_json()["source"], "atom")
-            self.assertFalse(listed.get_json()["comments_available"])
-            detail = self.client.get("/discussions/api/item/discussions/42")
-            self.assertEqual(detail.status_code, 200, detail.get_json())
-            self.assertEqual(detail.get_json()["item"]["body"], parsed[0]["body"])
-            self.assertEqual(detail.get_json()["comments"], [])
-            self.assertFalse(detail.get_json()["comments_available"])
-            self.assertEqual(mocked.call_count, 2)
-
-    def test_graphql_read_only_and_fallback_to_atom(self):
-        app_module.app.config["GITHUB_TOKEN"] = "read-only-token"
-        discussion = {
-            "number": 42, "title": "GraphQL 全文", "bodyText": "全文",
-            "url": "https://github.com/SHM-white/xtyf-manager/discussions/42",
-            "author": {"login": "someone"}, "comments": {"totalCount": 1},
-        }
-        gql_data = {"repository": {"discussions": {"nodes": [discussion]}}}
-        with patch("modules.discussions._graphql", return_value=gql_data):
-            response = self.client.get("/discussions/api/items?kind=discussions")
-        self.assertEqual(response.status_code, 200, response.get_json())
-        self.assertEqual(response.get_json()["source"], "graphql")
-        self.assertTrue(response.get_json()["comments_available"])
-        with patch("modules.discussions._graphql", side_effect=GitHubError("bad token")), \
-             patch("modules.discussions._atom_feed", return_value=_atom_items(self.ATOM, "SHM-white/xtyf-manager")):
-            response = self.client.get("/discussions/api/items?kind=discussions")
-        self.assertEqual(response.status_code, 200, response.get_json())
-        self.assertEqual(response.get_json()["source"], "atom")
-
-    def test_unavailable_and_invalid_atom_are_not_silently_accepted(self):
-        with self.assertRaises(GitHubError):
-            _atom_items(b"<html/>", "SHM-white/xtyf-manager")
-        with self.assertRaises(GitHubError):
-            _atom_items(b"<feed>", "SHM-white/xtyf-manager")
-        with patch("modules.discussions._atom_feed", side_effect=GitHubError("feed offline")):
-            response = self.client.get("/discussions/api/items?kind=discussions")
-        self.assertEqual(response.status_code, 502, response.get_json())
-        self.assertFalse(response.get_json()["ok"])
-        anonymous = app_module.app.test_client()
-        self.assertEqual(anonymous.get("/discussions/api/items").status_code, 401)
+    def test_legacy_write_setting_cannot_restore_remote_publication(self):
+        with patch.dict(app_module.app.config, {"GITHUB_WRITE_ENABLED": "1"}), \
+             patch("urllib.request.urlopen", side_effect=AssertionError("unexpected network")):
+            response = self.client.post("/discussions/api/post", json={
+                "kind": "issues", "action": "create", "title": "old", "body": "old",
+            })
+        self.assertEqual(response.status_code, 410, response.get_data(as_text=True))
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ function fundsToast(message, kind) {
   box.hidden = false;
 }
 var API = '/funds/api/records', sort = {by:'record_date',order:'DESC'}, edM, ct=null;
+var chartRequest = 0, chartAbort = null, chartPalette = '', chartDirty = false;
 var ME_NAME = window.XTYF_USER.name, ME_USERNAME = window.XTYF_USER.username;
 var CAN_REVIEW = window.XTYF_USER.canReview;
 
@@ -25,11 +26,23 @@ document.addEventListener('DOMContentLoaded', function(){
   if (CAN_REVIEW) { loadPending(); setInterval(loadPending, 30000); }
   reload(); loadStats();
   document.getElementById('mainTab').addEventListener('shown.bs.tab', function(e){
-    if (e.target.dataset.bsTarget === '#t-charts' && !ct) {
-      loadChart('monthly', document.querySelector('#t-charts .btn-group .active'));
+    if (e.target.dataset.bsTarget === '#t-charts' && (!ct || chartDirty)) {
+      loadChart(ct || 'monthly', document.querySelector('#t-charts .btn-group .active'));
       loadStats();
     }
   });
+});
+
+document.addEventListener('workspace-theme-change', function(){
+  if (!ct || chartPalette === document.documentElement.dataset.palette) return;
+  chartDirty = true;
+  if (document.getElementById('t-charts')?.classList.contains('active')) {
+    loadChart(ct, document.querySelector('#t-charts .btn-group .active'));
+  } else {
+    // An old hidden request must not paint an outdated palette when it completes.
+    chartRequest += 1;
+    chartAbort?.abort();
+  }
 });
 
 function toggleF(){
@@ -207,9 +220,18 @@ function loadStats(){
 
 function loadChart(type, btn){
   ct = type;
+  chartDirty = false;
+  chartPalette = document.documentElement.dataset.palette || '';
+  var generation = ++chartRequest;
+  chartAbort?.abort();
+  chartAbort = new AbortController();
   document.querySelectorAll('#t-charts .btn-group .btn').forEach(function(b){ b.classList.remove('active'); });
   if(btn) btn.classList.add('active');
-  BusinessUI.fetch('/funds/api/chart?type='+type).then(function(r){return r.json()}).then(function(j){
+  document.getElementById('chartImg').style.display = 'none';
+  document.getElementById('chartEmp').textContent = '正在生成图表…';
+  document.getElementById('chartEmp').style.display = 'block';
+  return BusinessUI.fetch('/funds/api/chart?'+new URLSearchParams({type:type,palette:chartPalette}), {signal:chartAbort.signal}).then(function(r){return r.json()}).then(function(j){
+    if (generation !== chartRequest) return;
     if(j.code===0){
       document.getElementById('chartImg').src = j.data;
       document.getElementById('chartImg').style.display = 'inline';
@@ -220,6 +242,7 @@ function loadChart(type, btn){
       document.getElementById('chartImg').style.display = 'none';
     }
   }).catch(function(e){
+    if (generation !== chartRequest) return;
     document.getElementById('chartEmp').textContent='图表加载失败：'+e.message;
     document.getElementById('chartEmp').style.display='block';
     document.getElementById('chartImg').style.display='none';

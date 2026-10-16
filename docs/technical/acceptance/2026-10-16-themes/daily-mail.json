@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "checks": [
+    "goal creation, group progress, cross-group draft retention and conflict recovery",
+    "both themes at 375/390/767/768/1280 CSS pixels without body overflow",
+    "email request, confirmation, token removal, admin pause/resume and test queue",
+    "separate dashboard and login returns to linked goal",
+    "iPhone WebKit simulated group update"
+  ],
+  "errors": []
+}

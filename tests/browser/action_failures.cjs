@@ -145,8 +145,8 @@ async function api(page,url,data,method='POST') {
     await page.goto(base+'/admin/security');await page.locator('[data-save-permissions]').first().waitFor();await reject('**/api/admin/permissions/1',403);
     await page.locator('[data-member-id="1"] [data-save-permissions]').click();await page.locator('#permission-result').filter({hasText:'模拟操作失败'}).waitFor();await idle('[data-member-id="1"] [data-save-permissions]');
     await page.unroute('**/api/admin/permissions/1');checks.push('permission-save rejection restores button');
-    await reject('**/discussions/api/items?*',503);await page.goto(base+'/discussions');await page.locator('[data-github-retry]').waitFor();
-    await page.unroute('**/discussions/api/items?*');await page.route('**/discussions/api/items?*',r=>r.fulfill({json:{ok:true,items:[]}}));await page.locator('[data-github-retry]').click();await page.locator('#github-topic-list').filter({hasText:'暂无主题'}).waitFor();checks.push('GitHub loading failure has a working retry');
+    await reject('**/discussions/api/topics?*',503);await page.goto(base+'/discussions');await page.locator('#collab-list-retry').waitFor();
+    await page.unroute('**/discussions/api/topics?*');await page.locator('#collab-list-retry').click();await page.locator('#collab-topics').filter({hasText:'还没有话题'}).waitFor();checks.push('local collaboration loading failure has a working retry');
     await reject('**/logout',500);await page.locator('.ws-signout').click();await page.locator('#business-feedback').filter({hasText:'退出登录失败'}).waitFor();await idle('.ws-signout');assert.equal(page.url(),base+'/discussions');
     await page.unroute('**/logout');await page.locator('.ws-signout').click();await page.waitForURL('**/login');checks.push('logout failure leaves session usable; retry succeeds');
     assert.deepEqual(errors,[]);

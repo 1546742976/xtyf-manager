@@ -14,7 +14,7 @@ function schedulePreviewRows(rows) {
 async function openSchedulePreview(projectId) {
   if (!isManagement() || !projectId) return;
   const context = {choices: {}, result: null};
-  showModal(`<div data-schedule-root><div class="modal-head"><div><p class="ux-eyebrow">TEAM / SCHEDULE</p><h2>整组排期预览</h2></div><button class="btn ghost sm" type="button" data-schedule-close>关闭</button></div><p class="ux-note">仅调整该造车组别的未开始、进行中和阻塞任务。同阶段并行，后一阶段从前一阶段最晚截止日期开始，保持原工期。</p><div id="schedule-body">正在生成预览…</div><p id="schedule-feedback" class="form-message" role="alert"></p><div class="modal-actions"><button class="btn" type="button" id="schedule-repreview">重新预览</button><button class="btn primary" type="button" id="schedule-apply" disabled>确认应用排期</button></div></div>`, "整组排期预览");
+  showModal(`<div data-schedule-root><div class="modal-head"><div><p class="ux-eyebrow">TEAM / SCHEDULE</p><h2>整组排期预览</h2></div><button class="btn ghost sm" type="button" data-schedule-close>关闭</button></div><p class="ux-note">仅调整该造车组别的未开始、进行中和阻塞任务。同阶段并行，后一阶段从前一阶段最晚截止日期开始，保持原工期。确认应用后会按下方预览覆盖已有日期，包括手动设置的日期；不会因前置任务后续修改而自动联动。</p><div id="schedule-body">正在生成预览…</div><p id="schedule-feedback" class="form-message" role="alert"></p><div class="modal-actions"><button class="btn" type="button" id="schedule-repreview">重新预览</button><button class="btn primary" type="button" id="schedule-apply" disabled>确认应用排期</button></div></div>`, "整组排期预览");
   const root = document.querySelector("[data-schedule-root]");
   const alive = () => document.querySelector("[data-schedule-root]") === root;
   const feedback = root.querySelector("#schedule-feedback");

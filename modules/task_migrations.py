@@ -179,6 +179,16 @@ def migrate(db: sqlite3.Connection) -> None:
         if db.execute("SELECT 1 FROM schema_migrations WHERE version=5").fetchone() is None:
             _add_column(db, "members", "ui_theme TEXT NOT NULL DEFAULT 'light' CHECK (ui_theme IN ('light','dark'))")
             db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (5, ?)", (now_str(),))
+        # Existing dates are historical facts. Do not infer customization by
+        # comparing them with a dependency date during the upgrade.
+        if db.execute("SELECT 1 FROM schema_migrations WHERE version=6").fetchone() is None:
+            _add_column(db, "tasks", "start_date_origin TEXT NOT NULL DEFAULT 'frozen' CHECK (start_date_origin IN ('frozen','manual','dependency','schedule'))")
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (6, ?)", (now_str(),))
+        if db.execute("SELECT 1 FROM schema_migrations WHERE version=7").fetchone() is None:
+            # updated_at may reflect an unrelated edit; historical completion
+            # dates are unknown until a real future completion transition.
+            _add_column(db, "tasks", "completed_at TEXT")
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (7, ?)", (now_str(),))
         db.commit()
     except sqlite3.Error:
         db.rollback()

@@ -5,13 +5,13 @@ import unittest
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 from uuid import uuid4
 from test_tasks import app_module
 from common import get_db, DB_PATH
 from modules.daily_projects import TZ
-from modules.mail_service import (verification_token, stale, digest_content, digest_items, enqueue_daily,
+from modules.mail_service import (verification_token, stale, deadline, daily_window, digest_content, digest_items, enqueue_daily,
                                   claim, process_job, DeliveryError, smtp_send, queue, run_once)
 
 
@@ -24,7 +24,7 @@ class DailyMailTest(unittest.TestCase):
         name='mail_'+uuid4().hex[:10]
         self.mid=self.admin.post('/api/member',json={'name':name,'username':name,'password':'mail-password'}).get_json()['id']
         self.member=self.app.test_client();self.member.post('/login',json={'username':name,'password':'mail-password'})
-        self.at=datetime(2026,10,15,9,tzinfo=TZ)
+        self.at=datetime(2026,10,15,22,tzinfo=TZ)
 
     def tearDown(self):
         self.app.config['MAIL_SETTINGS']=self.config;self.ctx.pop()
@@ -41,6 +41,20 @@ class DailyMailTest(unittest.TestCase):
         row=dict(self.db.execute('SELECT * FROM mail_jobs WHERE member_id=? ORDER BY id DESC LIMIT 1',(self.mid,)).fetchone())
         self.db.execute("UPDATE mail_jobs SET state='sending',attempts=1 WHERE id=?",(row['id'],));self.db.commit()
         return row|{'attempts':1}
+
+    def colleague(self):
+        name='digest_'+uuid4().hex[:10]
+        return self.admin.post('/api/member',json={'name':name,'username':name,'password':'mail-password'}).get_json()['id']
+
+    def task(self, **fields):
+        result=self.admin.post('/api/task',json={'title':'团队任务 '+uuid4().hex[:6],**fields})
+        self.assertEqual(result.status_code,200,result.get_json())
+        return result.get_json()['id']
+
+    def project(self, **fields):
+        result=self.admin.post('/api/daily-projects',json={'title':'团队目标 '+uuid4().hex[:6],'groups':{'mechanical':[self.mid]},**fields})
+        self.assertEqual(result.status_code,200,result.get_json())
+        return result.get_json()['id']
 
     def test_verification_expiry_replay_and_wrong_account(self):
         result=self.member.post('/api/account/email/request',json={'email':'member@example.com'});self.assertEqual(result.status_code,202)
@@ -79,28 +93,30 @@ class DailyMailTest(unittest.TestCase):
         self.assertEqual(self.member.post('/api/account/email/request',json={'email':'new@example.com'}).status_code,503)
 
     def test_stale_boundary_and_hundred_percent(self):
-        exact=(self.at-timedelta(hours=72)).strftime('%Y-%m-%d %H:%M:%S')
+        exact=(self.at-timedelta(hours=48)).strftime('%Y-%m-%d %H:%M:%S')
         self.assertFalse(stale(exact,1,self.at));self.assertTrue(stale(exact,1,self.at+timedelta(seconds=1)))
         self.assertFalse(stale(exact,100,self.at+timedelta(days=1)))
 
-    def test_personal_digest_groups_roles_escaping_and_dates(self):
+    def test_team_digest_groups_roles_escaping_and_dates(self):
         task=self.admin.post('/api/task',json={'title':'<script>目标</script>','owner_id':self.mid,'due_date':'2026-10-15'}).get_json()['id']
         colleague=self.admin.post('/api/member',json={'name':'日报同事','username':'digest_'+uuid4().hex[:10],'password':'mail-password'}).get_json()['id']
         other=self.admin.post('/api/task',json={'title':'参与事项','owner_id':colleague,'participant_ids':[self.mid]}).get_json()['id']
-        pid=self.admin.post('/api/daily-projects',json={'title':'日常目标','groups':{'mechanical':[self.mid],'vision':[self.mid],'electrical':[1]}}).get_json()['id']
+        pid=self.project(title='日常目标',groups={'mechanical':[self.mid],'vision':[self.mid],'electrical':[colleague]})
         old=(self.at-timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
         self.db.execute('UPDATE tasks SET created_at=? WHERE id IN (?,?)',(old,task,other))
         self.db.execute('UPDATE daily_groups SET enabled_at=? WHERE project_id=?',(old,pid));self.db.commit()
         tasks,projects=digest_items(self.db,self.mid,self.at)
-        by_title={t['title']:t for t in tasks};self.assertTrue(by_title['<script>目标</script>']['nudge']);self.assertFalse(by_title['参与事项']['nudge'])
-        self.assertEqual(by_title['<script>目标</script>']['remaining'],'今天截止')
-        self.assertEqual(len(projects),1);self.assertEqual(len(projects[0]['groups']),2)
+        by_id={t['id']:t for t in tasks};self.assertTrue(by_id[task]['nudge']);self.assertFalse(by_id[other]['nudge'])
+        self.assertEqual(by_id[task]['remaining'],'今天截止')
+        project=next(p for p in projects if p['id']==pid)
+        self.assertEqual(len(project['groups']),3)
         text,markup=digest_content(self.db,self.mid,self.at)
         self.assertIn('&lt;script&gt;',markup);self.assertNotIn('<script>',markup);self.assertIn('未设置截止日期',text)
-        self.assertNotIn('电控',text)
+        self.assertIn('电控 0%',text)
         self.admin.post(f'/api/daily-projects/{pid}/groups/mechanical/progress',json={'progress':1,'version':1,'project_version':1,'note':'已更新'})
-        groups=digest_items(self.db,self.mid,self.at)[1][0]['groups']
-        self.assertFalse(groups[0]['nudge']);self.assertTrue(groups[1]['nudge'])
+        groups=next(p for p in digest_items(self.db,self.mid,self.at)[1] if p['id']==pid)['groups']
+        by_label={g['label']:g for g in groups}
+        self.assertFalse(by_label['机械']['nudge']);self.assertFalse(by_label['电控']['nudge']);self.assertTrue(by_label['视觉']['nudge'])
 
     def test_scheduler_window_dedup_and_no_past_digest(self):
         self.bind()
@@ -112,6 +128,21 @@ class DailyMailTest(unittest.TestCase):
         claim(self.db,self.at+timedelta(hours=3))
         self.assertEqual(self.db.execute('SELECT state FROM mail_jobs WHERE member_id=?',(self.mid,)).fetchone()[0],'skipped')
 
+    def test_scheduler_excludes_unverified_paused_inactive_and_deleted_accounts(self):
+        self.bind();excluded=[]
+        for field in ('verified','paused','is_active','deleted_at'):
+            mid=self.colleague();excluded.append(mid)
+            self.db.execute('INSERT INTO member_email(member_id,address,verified,generation,requested_at) VALUES(?,?,1,?,?)',
+                            (mid,f'member-{mid}@example.com',uuid4().hex,self.at.timestamp()))
+            if field=='verified':self.db.execute('UPDATE member_email SET verified=0 WHERE member_id=?',(mid,))
+            elif field=='paused':self.db.execute('UPDATE member_email SET paused=1 WHERE member_id=?',(mid,))
+            elif field=='is_active':self.db.execute('UPDATE members SET is_active=0 WHERE id=?',(mid,))
+            else:self.db.execute('UPDATE members SET deleted_at=? WHERE id=?',('2026-10-15 10:00:00',mid))
+            self.db.commit()
+        self.db.commit();enqueue_daily(self.db,self.at)
+        queued={r['member_id'] for r in self.db.execute("SELECT member_id FROM mail_jobs WHERE kind='daily' AND day=?",(self.at.date().isoformat(),))}
+        self.assertIn(self.mid,queued);self.assertFalse(queued.intersection(excluded))
+
     def test_claim_is_atomic_and_interrupted_becomes_unknown(self):
         job=self.job();self.db.execute("UPDATE mail_jobs SET claimed_at=? WHERE id=?",(self.at.timestamp()-1900,job['id']));self.db.commit()
         claim(self.db,self.at)
@@ -120,7 +151,132 @@ class DailyMailTest(unittest.TestCase):
 
     def test_empty_digest_is_skipped_without_transport(self):
         job=self.job('daily');sent=[]
-        self.assertEqual(process_job(self.db,job,self.at,sent.append),'skipped');self.assertEqual(sent,[])
+        # Shared integration fixtures contain other team tasks; empty means both team lists are empty.
+        with patch('modules.mail_service.digest_items',return_value=([],[])):
+            self.assertIsNone(digest_content(self.db,self.mid,self.at))
+            self.assertEqual(process_job(self.db,job,self.at,sent.append),'skipped')
+        self.assertEqual(sent,[])
+
+    def test_team_scope_includes_only_unfinished_and_completed_today(self):
+        cases=[('进行中',None,False,True),('未开始',None,False,True),
+               ('已完成','2026-10-15 00:00:00',False,True),
+               ('已完成','2026-10-15 23:59:59',False,True),
+               ('已完成','2026-10-14 23:59:59',False,False),
+               ('已完成','2026-10-16 00:00:00',False,False),
+               ('已完成',None,False,False),('已取消','2026-10-15 12:00:00',False,False),
+               ('进行中',None,True,False)]
+        fixture_tasks=set();fixture_projects=set();expected_tasks=set();expected_projects=set()
+        for status,completion,deleted,include in cases:
+            tid=self.task(owner_id=self.mid);pid=self.project()
+            values=(status,completion,'2026-10-15 12:00:00' if deleted else None,'2026-10-15 20:00:00')
+            # A title/date edit today must not make an older completion look like today's completion.
+            self.db.execute('UPDATE tasks SET status=?,completed_at=?,deleted_at=?,updated_at=?,created_at=? WHERE id=?',(*values,'2026-10-01 00:00:00',tid))
+            self.db.execute('UPDATE daily_projects SET status=?,completed_at=?,deleted_at=?,updated_at=? WHERE id=?',(*values,pid))
+            self.db.execute('UPDATE daily_groups SET enabled_at=? WHERE project_id=?',('2026-10-01 00:00:00',pid))
+            self.db.commit();fixture_tasks.add(tid);fixture_projects.add(pid)
+            if include:expected_tasks.add(tid);expected_projects.add(pid)
+        tasks,projects=digest_items(self.db,self.mid,self.at)
+        self.assertEqual({t['id'] for t in tasks}&fixture_tasks,expected_tasks)
+        self.assertEqual({p['id'] for p in projects}&fixture_projects,expected_projects)
+        self.assertTrue(all(not t['nudge'] for t in tasks if t['status']=='已完成'))
+        self.assertTrue(all(not g['nudge'] for p in projects if p['status']=='已完成' for g in p['groups']))
+
+    def test_no_personal_assignment_still_receives_team_brief(self):
+        owner=self.colleague()
+        self.task(title='其他成员负责的底盘',owner_id=owner)
+        self.task(title='尚未分配的任务')
+        self.project(title='其他成员的项目',groups={'mechanical':[owner]})
+        job=self.job('daily');sent=[]
+        self.assertEqual(process_job(self.db,job,self.at,sent.append),'sent')
+        message=sent[0];text=message.get_body(preferencelist=('plain',)).get_content()
+        self.assertEqual(message['Subject'],'巡天御风｜团队项目晚报｜2026-10-15')
+        self.assertEqual(message['To'],'member@example.com');self.assertIsNone(message['Cc']);self.assertIsNone(message['Bcc'])
+        for title in ('其他成员负责的底盘','尚未分配的任务','其他成员的项目'):
+            self.assertIn(title,text)
+        self.assertNotIn('请更新进度：',text)
+
+    def test_same_team_items_but_nudges_follow_recipient_responsibility(self):
+        colleague=self.colleague()
+        owned=self.task(title='本人任务',owner_id=self.mid)
+        participated=self.task(title='仅参与任务',owner_id=colleague,participant_ids=[self.mid])
+        pid=self.project(groups={'mechanical':[self.mid,colleague],'vision':[colleague]})
+        old=(self.at-timedelta(hours=49)).strftime('%Y-%m-%d %H:%M:%S')
+        self.db.execute('UPDATE tasks SET created_at=? WHERE id IN (?,?)',(old,owned,participated))
+        self.db.execute('UPDATE daily_groups SET enabled_at=? WHERE project_id=?',(old,pid));self.db.commit()
+        mine=digest_items(self.db,self.mid,self.at);theirs=digest_items(self.db,colleague,self.at)
+        self.assertEqual([t['id'] for t in mine[0]],[t['id'] for t in theirs[0]])
+        self.assertEqual([p['id'] for p in mine[1]],[p['id'] for p in theirs[1]])
+        for items,owner,participant in ((mine,owned,participated),(theirs,participated,owned)):
+            tasks={t['id']:t for t in items[0]}
+            self.assertTrue(tasks[owner]['nudge']);self.assertFalse(tasks[participant]['nudge'])
+        def groups(member):
+            return {g['label']:g for p in digest_items(self.db,member,self.at)[1] if p['id']==pid for g in p['groups']}
+        self.assertTrue(groups(self.mid)['机械']['nudge']);self.assertFalse(groups(self.mid)['视觉']['nudge'])
+        self.assertTrue(groups(colleague)['机械']['nudge']);self.assertTrue(groups(colleague)['视觉']['nudge'])
+        with patch('modules.daily_projects.stamp',return_value=self.at.strftime('%Y-%m-%d %H:%M:%S')):
+            response=self.member.post(f'/api/daily-projects/{pid}/groups/mechanical/progress',json={'progress':20,'note':'共用组更新','version':1,'project_version':1})
+        self.assertEqual(response.status_code,200,response.get_json())
+        self.assertFalse(groups(self.mid)['机械']['nudge']);self.assertFalse(groups(colleague)['机械']['nudge'])
+        self.assertTrue(groups(colleague)['视觉']['nudge'])
+
+    def test_each_team_brief_has_only_its_own_recipient_and_no_private_logs(self):
+        colleague=self.colleague()
+        tid=self.task(title='收件隔离检查',owner_id=self.mid)
+        response=self.admin.post(f'/api/task/{tid}/progress',data={'progress':'10','note':'内部完整日志不应出现在邮件中','version':'1'})
+        self.assertEqual(response.status_code,200,response.get_json())
+        job=self.job('daily');sent=[]
+        generation=uuid4().hex
+        self.db.execute('INSERT INTO member_email(member_id,address,verified,generation,requested_at) VALUES(?,?,1,?,?)',
+                        (colleague,'colleague-private@example.com',generation,self.at.timestamp()))
+        queue(self.db,colleague,'daily',self.at.date().isoformat(),generation,self.at.timestamp(),uuid4().hex);self.db.commit()
+        other=dict(self.db.execute('SELECT * FROM mail_jobs WHERE member_id=? ORDER BY id DESC LIMIT 1',(colleague,)).fetchone())|{'attempts':1}
+        self.assertEqual(process_job(self.db,job,self.at,sent.append),'sent')
+        self.assertEqual(process_job(self.db,other,self.at,sent.append),'sent')
+        self.assertEqual([message['To'] for message in sent],['member@example.com','colleague-private@example.com'])
+        for message in sent:
+            self.assertIsNone(message['Cc']);self.assertIsNone(message['Bcc'])
+            self.assertEqual([p.get_content_type() for p in message.iter_parts()],['text/plain','text/html'])
+            for part in message.iter_parts():
+                content=part.get_content()
+                self.assertIn('收件隔离检查',content)
+                self.assertNotIn('内部完整日志不应出现在邮件中',content)
+                self.assertNotIn('colleague-private@example.com',content)
+                self.assertNotIn('member@example.com',content)
+
+    def test_disabled_groups_and_full_progress_do_not_nudge(self):
+        pid=self.project(groups={'mechanical':[self.mid],'vision':[self.mid]})
+        old=(self.at-timedelta(hours=49)).strftime('%Y-%m-%d %H:%M:%S')
+        self.db.execute('UPDATE daily_groups SET enabled_at=?,progress=100 WHERE project_id=? AND stage=?',(old,pid,'mechanical'))
+        self.db.execute('UPDATE daily_groups SET enabled_at=?,enabled=0 WHERE project_id=? AND stage=?',(old,pid,'vision'));self.db.commit()
+        project=next(p for p in digest_items(self.db,self.mid,self.at)[1] if p['id']==pid)
+        self.assertEqual(project['progress'],100)
+        self.assertEqual(project['groups'],[{'label':'机械','progress':100,'nudge':False}])
+
+    def test_beijing_window_deadlines_and_weekends(self):
+        self.assertFalse(daily_window(self.at-timedelta(seconds=1)))
+        self.assertTrue(daily_window(self.at.astimezone(timezone.utc)))
+        self.assertTrue(daily_window(self.at.replace(hour=23,minute=59,second=59)))
+        self.assertFalse(daily_window(self.at+timedelta(hours=2),self.at.date().isoformat()))
+        weekend=datetime(2026,10,17,14,tzinfo=timezone.utc)
+        self.bind();enqueue_daily(self.db,weekend)
+        self.assertEqual(self.db.execute('SELECT day FROM mail_jobs WHERE member_id=?',(self.mid,)).fetchone()[0],'2026-10-17')
+        self.assertEqual(deadline('2026-10-15',self.at.astimezone(timezone.utc)),'今天截止')
+        self.assertEqual(deadline('2026-10-14',self.at),'已逾期 1 天')
+        self.assertEqual(deadline('2026-10-18',self.at),'剩余 3 天')
+        self.assertEqual(deadline(None,self.at),'未设置截止日期')
+        self.assertFalse(stale((self.at-timedelta(hours=48)).astimezone(timezone.utc).isoformat(),10,self.at))
+
+    def test_daily_retry_never_crosses_midnight_and_claimed_job_rechecks_window(self):
+        self.task(title='午夜重试任务')
+        job=self.job('daily');transport=MagicMock(side_effect=DeliveryError('临时失败',retry=True))
+        late=self.at.replace(hour=23,minute=44)
+        self.assertEqual(process_job(self.db,job,late,transport),'pending')
+        self.assertEqual(self.db.execute('SELECT next_at FROM mail_jobs WHERE id=?',(job['id'],)).fetchone()[0],late.timestamp()+900)
+        self.assertEqual(process_job(self.db,job,late+timedelta(minutes=1),transport),'failed')
+        not_called=MagicMock()
+        self.assertEqual(process_job(self.db,job,self.at+timedelta(hours=2),not_called),'skipped')
+        self.assertEqual(process_job(self.db,job,self.at-timedelta(seconds=1),not_called),'skipped')
+        not_called.assert_not_called()
 
     def test_transient_retry_permanent_unknown_and_limit(self):
         job=self.job();transport=MagicMock(side_effect=DeliveryError('暂时失败',retry=True))
@@ -160,7 +316,7 @@ class DailyMailTest(unittest.TestCase):
         for destination in ('https://evil.example','//evil.example','/tasks?task=1&next=https://evil.example'):
             result=client.post('/login',json={'username':'admin','password':'ci-test-password-only','next':destination})
             self.assertEqual(result.get_json()['redirect'],'/')
-        self.assertEqual(client.post('/login',json={'username':'admin','password':'ci-test-password-only','next':'/daily-projects/1'}).get_json()['redirect'],'/daily-projects/1')
+        self.assertEqual(client.post('/login',json={'username':'admin','password':'ci-test-password-only','next':'/daily-projects/1'}).get_json()['redirect'],'/tasks?type=daily&project=1')
 
     def test_single_recipient_multipart_and_safe_smtp_failure(self):
         job=self.job();sent=[]

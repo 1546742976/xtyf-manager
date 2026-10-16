@@ -1,4 +1,4 @@
-"""Personal digests and a durable SMTP queue. No worker starts on import."""
+"""Team evening briefs and a durable SMTP queue. No worker starts on import."""
 import hashlib
 import hmac
 import html
@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from flask import current_app
-from modules.daily_projects import TZ, STAGES, describe
+from modules.daily_projects import TZ, describe
 
 
 def settings():
@@ -57,51 +57,67 @@ def queue(db, mid, kind, day, generation, at, key):
 
 
 def parsed_time(value):
-    return datetime.fromisoformat(value).replace(tzinfo=TZ)
+    parsed = datetime.fromisoformat(value)
+    return parsed.replace(tzinfo=TZ) if parsed.tzinfo is None else parsed.astimezone(TZ)
+
+
+def beijing_time(at):
+    return at.replace(tzinfo=TZ) if at.tzinfo is None else at.astimezone(TZ)
+
+
+def daily_window(at, day=None):
+    at = beijing_time(at)
+    return at.hour >= 22 and (day is None or day == at.date().isoformat())
 
 
 def stale(last, progress, at):
-    return progress < 100 and (at - parsed_time(last)).total_seconds() > 72 * 3600
+    return progress < 100 and (beijing_time(at) - parsed_time(last)).total_seconds() > 48 * 3600
 
 
 def deadline(due, at):
     if not due:
         return '未设置截止日期'
-    days = (datetime.strptime(due, '%Y-%m-%d').date() - at.date()).days
+    days = (datetime.strptime(due, '%Y-%m-%d').date() - beijing_time(at).date()).days
     return f'已逾期 {-days} 天' if days < 0 else '今天截止' if days == 0 else f'剩余 {days} 天'
 
 
 def digest_items(db, mid, at):
+    at = beijing_time(at)
+    beginning = at.replace(hour=0, minute=0, second=0, microsecond=0)
+    bounds = (beginning.strftime('%Y-%m-%d %H:%M:%S'),
+              (beginning + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S'))
     tasks = []
     for row in db.execute("SELECT t.*, (SELECT max(created_at) FROM task_progress_updates WHERE task_id=t.id) AS last_progress "
-                          "FROM tasks t WHERE t.deleted_at IS NULL AND t.status NOT IN ('已完成','已取消') "
-                          "AND (t.owner_id=? OR EXISTS(SELECT 1 FROM task_participants p WHERE p.task_id=t.id AND p.member_id=?)) "
-                          "ORDER BY CASE WHEN t.due_date IS NULL OR t.due_date='' THEN 1 ELSE 0 END,t.due_date,t.id", (mid, mid)):
+                          "FROM tasks t WHERE t.deleted_at IS NULL AND t.status<>'已取消' "
+                          "AND (t.status<>'已完成' OR (t.completed_at>=? AND t.completed_at<?)) "
+                          "ORDER BY (t.status='已完成'),CASE WHEN t.due_date IS NULL OR t.due_date='' THEN 1 ELSE 0 END,t.due_date,t.id", bounds):
         owner = row['owner_id'] == mid
         last = row['last_progress'] or row['created_at']
-        tasks.append({'title': row['title'], 'status': row['status'], 'role': '负责人' if owner else '参与者',
+        tasks.append({'id': row['id'], 'title': row['title'], 'status': row['status'],
                       'progress': row['progress'], 'due': row['due_date'], 'remaining': deadline(row['due_date'], at),
-                      'last': row['last_progress'] or '尚未提交', 'nudge': owner and stale(last, row['progress'], at),
+                      'nudge': owner and row['status'] != '已完成' and stale(last, row['progress'], at),
                       'url': settings()['base_url'] + f'/tasks?task={row["id"]}'})
     projects = []
-    rows = db.execute("SELECT DISTINCT p.* FROM daily_projects p JOIN daily_groups g ON g.project_id=p.id "
-                      "JOIN daily_owners o ON o.project_id=g.project_id AND o.stage=g.stage "
-                      "WHERE p.deleted_at IS NULL AND p.status NOT IN ('已完成','已取消') AND g.enabled=1 AND o.member_id=? ORDER BY p.id", (mid,))
+    rows = db.execute("SELECT p.* FROM daily_projects p WHERE p.deleted_at IS NULL AND p.status<>'已取消' "
+                      "AND (p.status<>'已完成' OR (p.completed_at>=? AND p.completed_at<?)) "
+                      "ORDER BY (p.status='已完成'),CASE WHEN p.due_date IS NULL OR p.due_date='' THEN 1 ELSE 0 END,p.due_date,p.id", bounds)
     for row in rows:
         project = describe(db, row)
-        own_groups = []
+        groups = []
         for group in project['groups']:
-            if not group['enabled'] or mid not in [o['id'] for o in group['owners']]:
+            if not group['enabled']:
                 continue
             last = group['latest']['created_at'] if group['latest'] else group['enabled_at']
             # Re-enabling a previously inactive group starts a new reminder interval.
             baseline = max(last, group['enabled_at'])
-            own_groups.append({'label': group['label'], 'progress': group['progress'],
-                               'last': group['latest']['created_at'] if group['latest'] else '尚未提交',
-                               'nudge': stale(baseline, group['progress'], at)})
-        projects.append({'title': row['title'], 'status': row['status'], 'groups': own_groups,
+            responsible = any(owner['id'] == mid and owner['is_active'] and not owner['deleted_at']
+                              for owner in group['owners'])
+            groups.append({'label': group['label'], 'progress': group['progress'],
+                           'nudge': responsible and row['status'] != '已完成' and stale(baseline, group['progress'], at)})
+        projects.append({'id': row['id'], 'title': row['title'], 'status': row['status'],
+                         'progress': project['progress'], 'groups': groups,
                          'due': row['due_date'], 'remaining': deadline(row['due_date'], at),
-                         'url': settings()['base_url'] + f'/daily-projects/{row["id"]}'})
+                         'url': settings()['base_url'] + f'/tasks?type=daily&project={row["id"]}'})
     return tasks, projects
 
 
@@ -109,37 +125,42 @@ def digest_content(db, mid, at):
     tasks, projects = digest_items(db, mid, at)
     if not tasks and not projects:
         return None
-    lines = ['个人任务日报', at.strftime('%Y-%m-%d'), '', '造车任务']
-    cards = ['<h1>个人任务日报</h1>', '<h2>造车任务</h2>']
+    lines = ['团队项目晚报', beijing_time(at).strftime('%Y-%m-%d'), '', '造车任务']
+    cards = ['<h1>团队项目晚报</h1>', '<h2>造车任务</h2>']
     def paragraph(text):
         cards.append('<p>' + html.escape(text) + '</p>')
     if not tasks:
-        lines.append('暂无个人未完成造车任务'); paragraph(lines[-1])
+        lines.append('暂无团队未完成或今日完成的造车任务'); paragraph(lines[-1])
     for task in tasks:
-        text = f'{task["title"]}｜{task["role"]}｜{task["status"]}｜{task["progress"]}%\n截止：{task["due"] or "未设置"} · {task["remaining"]}\n最近进度：{task["last"]}'
+        text = f'{task["title"]}｜{task["status"]}｜{task["progress"]}%｜{task["remaining"]}'
+        if task['due']:
+            text += f'（{task["due"]}）'
         if task['nudge']:
-            text += '\n请更新进度：已超过 72 小时没有进度记录。'
+            text += '\n请更新进度：您负责的任务已超过 48 小时未更新。'
         lines.extend([text, task['url'], '']); paragraph(text)
         cards.append(f'<p><a href="{html.escape(task["url"], quote=True)}">登录查看任务</a></p><hr>')
     lines.extend(['', '日常项目']); cards.append('<h2>日常项目</h2>')
     if not projects:
-        lines.append('暂无本人负责的未完成日常项目'); paragraph(lines[-1])
+        lines.append('暂无团队未完成或今日完成的日常项目'); paragraph(lines[-1])
     for project in projects:
-        text = f'{project["title"]}｜{project["status"]}\n截止：{project["due"] or "未设置"} · {project["remaining"]}'
+        text = f'{project["title"]}｜{project["status"]}｜{project["progress"]:g}%｜{project["remaining"]}'
+        if project['due']:
+            text += f'（{project["due"]}）'
+        text += '\n' + ' · '.join(f'{group["label"]} {group["progress"]}%' for group in project['groups'])
         for group in project['groups']:
-            text += f'\n负责组别：{group["label"]} · {group["progress"]}% · 最近进度：{group["last"]}'
             if group['nudge']:
-                text += ' · 请更新进度（超过 72 小时未更新）'
+                text += f'\n请更新进度：您负责的{group["label"]}组已超过 48 小时未更新。'
         lines.extend([text, project['url'], '']); paragraph(text)
         cards.append(f'<p><a href="{html.escape(project["url"], quote=True)}">登录查看项目</a></p><hr>')
-    footer = '发送时的数据快照；每日上午 09:00 汇总。如需暂停每日邮件，请联系管理员。'
+    footer = '截至发送时的全团队未完成事项与北京时间当天完成事项；每日 22:00 汇总。仅对您负责且超过 48 小时未更新的事项提示催更。如需暂停，请联系管理员。'
     lines.append(footer); paragraph(footer)
     markup = '<!doctype html><html lang="zh-CN"><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:20px;background:#f5f5f7;color:#202024;font:16px/1.6 sans-serif"><main style="max-width:640px;margin:auto;background:#fff;padding:20px;overflow-wrap:anywhere;white-space:pre-line">' + ''.join(cards) + '</main></body></html>'
     return '\n'.join(lines), markup
 
 
 def enqueue_daily(db, at):
-    if not 9 <= at.hour < 12:
+    at = beijing_time(at)
+    if not daily_window(at):
         return
     day, epoch = at.date().isoformat(), at.timestamp()
     db.execute('BEGIN IMMEDIATE')
@@ -199,11 +220,12 @@ def smtp_send(message):
 
 
 def claim(db, at):
+    at = beijing_time(at)
     epoch = at.timestamp()
     db.execute('BEGIN IMMEDIATE')
     try:
         db.execute("UPDATE mail_jobs SET state='unknown',error='发送进程中断，结果未知',finished_at=? WHERE state='sending' AND claimed_at<?", (epoch, epoch-1800))
-        db.execute("UPDATE mail_jobs SET state='skipped',error='已超出当日日报窗口',finished_at=? WHERE kind='daily' AND state='pending' AND (day<>? OR ? >= 12 OR ? < 9)", (epoch, at.date().isoformat(), at.hour, at.hour))
+        db.execute("UPDATE mail_jobs SET state='skipped',error='已超出当日晚报窗口',finished_at=? WHERE kind='daily' AND state='pending' AND (day<>? OR ? < 22)", (epoch, at.date().isoformat(), at.hour))
         row = db.execute("SELECT * FROM mail_jobs WHERE state='pending' AND next_at<=? ORDER BY CASE kind WHEN 'verify' THEN 0 ELSE 1 END,id LIMIT 1", (epoch,)).fetchone()
         if row:
             db.execute("UPDATE mail_jobs SET state='sending',claimed_at=?,attempts=attempts+1 WHERE id=?", (epoch, row['id']))
@@ -214,8 +236,11 @@ def claim(db, at):
 
 
 def process_job(db, job, at, transport=None):
+    at = beijing_time(at)
     epoch, state, error, next_at = at.timestamp(), 'sent', '', at.timestamp()
     try:
+        if job['kind'] == 'daily' and not daily_window(at, job['day']):
+            raise DeliveryError('已超出当日晚报窗口', 'skipped')
         member = db.execute('SELECT e.*,m.is_active,m.deleted_at FROM member_email e JOIN members m ON m.id=e.member_id WHERE e.member_id=?', (job['member_id'],)).fetchone()
         if not member or not member['is_active'] or member['deleted_at'] or member['generation'] != job['generation']:
             raise DeliveryError('账户或邮箱已变化', 'skipped')
@@ -229,16 +254,16 @@ def process_job(db, job, at, transport=None):
             token = verification_token(member['generation'])
             url = settings()['base_url'] + '/account/email/verify#token=' + token
             message['Subject'] = '巡天御风｜验证收件邮箱'
-            text = f'请登录对应账户并确认绑定邮箱。链接自申请起 30 分钟有效：\n{url}\n验证后每天 09:00 接收个人任务日报；如非本人操作请忽略。'
-            markup = '<p>请登录对应账户并确认绑定邮箱，链接自申请起 30 分钟有效。</p><p><a href="' + html.escape(url, quote=True) + '">确认绑定邮箱</a></p><p>验证后每天 09:00 接收个人任务日报。如非本人操作请忽略。</p>'
+            text = f'请登录对应账户并确认绑定邮箱。链接自申请起 30 分钟有效：\n{url}\n验证后每天北京时间 22:00 接收团队项目晚报；如非本人操作请忽略。'
+            markup = '<p>请登录对应账户并确认绑定邮箱，链接自申请起 30 分钟有效。</p><p><a href="' + html.escape(url, quote=True) + '">确认绑定邮箱</a></p><p>验证后每天北京时间 22:00 接收团队项目晚报。如非本人操作请忽略。</p>'
         else:
             if not member['verified'] or member['paused']:
                 raise DeliveryError('邮箱未验证或提醒已暂停', 'skipped')
             content = digest_content(db, job['member_id'], at)
             if not content and job['kind'] == 'daily':
-                raise DeliveryError('没有个人未完成事项', 'skipped')
-            text, markup = content or ('测试邮件：当前没有个人未完成事项。', '<p>测试邮件：当前没有个人未完成事项。</p>')
-            message['Subject'] = ('巡天御风｜个人任务日报｜' if job['kind'] == 'daily' else '巡天御风｜测试邮件｜') + job['day']
+                raise DeliveryError('没有团队未完成或今日完成事项', 'skipped')
+            text, markup = content or ('测试邮件：当前没有团队未完成或今日完成事项。', '<p>测试邮件：当前没有团队未完成或今日完成事项。</p>')
+            message['Subject'] = ('巡天御风｜团队项目晚报｜' if job['kind'] == 'daily' else '巡天御风｜测试邮件｜') + job['day']
         message.set_content(text)
         message.add_alternative(markup, subtype='html')
         if transport:
@@ -255,7 +280,7 @@ def process_job(db, job, at, transport=None):
             smtp_send(message)
     except DeliveryError as exc:
         state, error = exc.state, str(exc)
-        if exc.retry and job['attempts'] < 3 and (job['kind'] != 'daily' or (at + timedelta(minutes=15)).hour < 12):
+        if exc.retry and job['attempts'] < 3 and (job['kind'] != 'daily' or daily_window(at + timedelta(minutes=15), job['day'])):
             state, next_at = 'pending', epoch + 900
     except Exception:
         # Do not log exceptions containing message bodies, addresses or tokens.
@@ -269,7 +294,7 @@ def process_job(db, job, at, transport=None):
 def run_once(db, at=None, transport=None):
     if not configured():
         return 0
-    at = at or datetime.now(TZ)
+    at = beijing_time(at) if at is not None else datetime.now(TZ)
     enqueue_daily(db, at)
     count = 0
     while count < 200:
@@ -277,6 +302,6 @@ def run_once(db, at=None, transport=None):
         job = claim(db, current)
         if not job:
             break
-        process_job(db, job, current, transport)
+        process_job(db, job, current if transport else datetime.now(TZ), transport)
         count += 1
     return count

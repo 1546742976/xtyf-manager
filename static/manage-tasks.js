@@ -12,7 +12,8 @@ function renderCreateChoices() {
   const parent = document.getElementById("create-parent");
   refreshDraftChoices(participants, "participant_ids", state.members.filter((member) => member.role !== "admin"), (member) => member.name);
   refreshDraftChoices(dependencies, "predecessor_ids", state.tasks, taskLabel);
-  refreshDraftSelect(parent, state.tasks.map((task) => ({...task, name: taskLabel(task)})), "无父任务");
+  refreshDraftSelect(parent, state.tasks.map((task) => ({...task, name: taskLabel(task)})), "无主前置任务");
+  document.getElementById("create-form")?._taskDates?.refresh();
 }
 
 function fillTaskFilters() {
@@ -76,11 +77,11 @@ function taskPayload(form) {
   const payload = Object.fromEntries(new FormData(form));
   payload.participant_ids = checkedValues(form, "participant_ids");
   payload.predecessor_ids = checkedValues(form, "predecessor_ids");
-  if (state.me?.role !== "admin") delete payload.parent_id;
-  return payload;
+  return window.TaskDateDefaults?.payload(form, payload) || payload;
 }
 
 function bindTaskManagement() {
+  window.TaskDateDefaults?.bind(document.getElementById("create-form"), {saved: false});
   [
     ["t-filter-q", "q", "input"],
     ["t-filter-project", "project", "change"],
@@ -108,6 +109,7 @@ function bindTaskManagement() {
     if (result?.ok) {
       form.reset();
       form.querySelector(".form-message").textContent = "任务已创建";
+      document.dispatchEvent(new CustomEvent("task:created", {detail: {id: result.id}}));
       refresh();
     } else form.querySelector(".form-message").textContent = result?.error || "创建失败";
   });
@@ -167,13 +169,6 @@ addDataListener(() => {
   renderCatalogs();
 });
 document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("new-task-toggle")?.addEventListener("click", (event) => {
-    const panel = document.getElementById("task-create-panel");
-    panel.hidden = !panel.hidden;
-    event.currentTarget.setAttribute("aria-expanded", String(!panel.hidden));
-    event.currentTarget.textContent = panel.hidden ? "新建任务" : "收起新建任务";
-    if (!panel.hidden) document.querySelector('#create-form input[name="title"]')?.focus();
-  });
   bindTaskManagement();
   bindCatalogs();
 });

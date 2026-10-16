@@ -517,6 +517,16 @@ tbody tr:hover td { background: var(--surface-inset); }
 .daily-meter { display:grid; gap:6px; margin-block:12px; }
 .daily-meter span { display:flex; justify-content:space-between; gap:12px; }
 .daily-meter progress { width:100%; height:12px; accent-color:var(--primary); }
+/* Daily goals share the dashboard's right column; narrow screens retain DOM order. */
+.ws-dashboard-aside { min-width:0; grid-template-columns:minmax(0,1fr); }
+.ws-dashboard-daily { min-width:0; }
+.ws-dashboard-daily .ws-section-lead { flex-wrap:wrap; align-items:center; gap:10px 16px; }
+.ws-dashboard-daily .ws-section-lead h2 { flex:1 1 100%; }
+.ws-dashboard-daily .ws-section-lead a { white-space:normal; overflow-wrap:anywhere; padding-top:0; }
+.ws-dashboard-daily .ws-section-lead .btn { margin-left:auto; min-height:44px; }
+.ws-dashboard-daily .daily-grid { grid-template-columns:minmax(0,1fr); margin-bottom:0; }
+.ws-dashboard-daily .daily-card { padding:16px; }
+.ws-dashboard-daily .daily-card h2 { font-size:17px; line-height:1.5; }
 .daily-group form, #daily-form { display:grid; gap:14px; }
 .daily-group label, .daily-filters label, .daily-form-row label { display:grid; gap:6px; min-width:0; }
 .daily-actions, .daily-form-row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
@@ -537,9 +547,6 @@ tbody tr:hover td { background: var(--surface-inset); }
 .ux-account-sidebar > .panel { margin-bottom: 0; }
 .ux-account-sidebar .theme-options { grid-template-columns: repeat(auto-fit,minmax(min(100%,160px),1fr)); }
 .account-password-warning { grid-column: 1 / -1; }
-.github-entry-grid { align-items: stretch; margin-bottom: 24px; }
-.github-entry-grid > .panel { display: flex; flex-direction: column; margin-bottom: 0; }
-.github-entry-grid > .panel > p:last-child { margin-top: auto; margin-bottom: 0; padding-top: 16px; }
 .appearance-description { color: var(--muted); margin: 0 0 20px; }
 .theme-options { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; border: 0; padding: 0; margin: 0 0 16px; }
 .theme-options:disabled { opacity: .6; }
@@ -620,9 +627,5 @@ tbody tr:hover td { background: var(--surface-inset); }
 .lane-actions button { min-width: 44px; min-height: 44px; }
 .lane-actions > span { font-size: .75rem; color: var(--muted); }
 #task-create-panel[hidden] { display: none; }
-.github-hub.is-unavailable .github-hub-grid { display: block; min-height: 0; }
-.github-hub.is-unavailable .github-topic-list { border: 0; padding: 20px 0; }
-.github-hub.is-unavailable .github-topic-detail { display: none; }
-.github-error-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
 .permission-member-filter { display: grid; gap: 8px; min-width: 0; margin-block: 16px; }
 .permission-member-filter > input { width: 100%; min-width: 0; box-sizing: border-box; }

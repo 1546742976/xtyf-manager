@@ -31,7 +31,7 @@ async function login(page, base, username, password, firstLogin=true) {
 (async () => {
   const server = spawn(process.env.REVIEW_PYTHON || 'python', ['-B',path.join(__dirname,'server.py')], {
     cwd:root, env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}, stdio:['ignore','pipe','pipe']});
-  let browser, log='', failGithub=false;
+  let browser, log='';
   const errors=[];
   try {
     const base=await new Promise((resolve,reject)=>{
@@ -42,16 +42,6 @@ async function login(page, base, username, password, firstLogin=true) {
     });
     browser=await chromium.launch({headless:true});
     const context=await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'});
-    await context.route('**/discussions/api/**', async route=>{
-      const url=new URL(route.request().url());
-      const kind=url.searchParams.get('kind') || url.pathname.split('/').at(-2);
-      const item={number:1,title:'模拟主题 <script>',body:'只读正文 <script>unsafe</script>',author:'测试作者',url:'https://github.com/team/repo/issues/1',updated_at:'2026-10-15T00:00:00Z'};
-      if(failGithub){await route.fulfill({status:503,json:{ok:false,error:'模拟 GitHub 暂不可用'}});return;}
-      const payload=url.pathname.includes('/item/')
-        ? {ok:true,item,comments_available:kind==='issues',comments:[{author:'回复人',body:'测试回复',created_at:item.updated_at}]}
-        : {ok:true,source:kind==='discussions'?'atom':'api',items:Array.from({length:kind==='issues' && url.searchParams.get('page')==='1'?30:1},(_,i)=>({...item,number:i+1}))};
-      await route.fulfill({status:200,json:payload});
-    });
     const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
     await login(page,base,'admin','browser-test-initial');
     const groups=(await api(page,'/api/groups')).body.groups;
@@ -90,10 +80,10 @@ async function login(page, base, username, password, firstLogin=true) {
       await page.goto(base+'/account');
       const [saved]=await Promise.all([
         page.waitForResponse(r=>r.url().endsWith('/api/account/preferences') && r.request().method()==='POST'),
-        page.locator(`input[name=workspace-theme][value=${theme}]`).check(),
+        page.locator(`input[name=account-mode][value=${theme}]`).check(),
       ]);
       assert.equal(saved.status(),200);
-      assert.equal(await shortcut.getAttribute('aria-label'),theme==='dark'?'切换为银白主题':'切换为黑色主题');
+      assert.equal(await shortcut.getAttribute('aria-label'),theme==='dark'?'切换为银白蓝':'切换为深空蓝');
       await page.reload();assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
       await page.goto(base+'/tasks');await page.locator('[data-view="status"]').click();await page.locator(`.task[data-task-id="${blocked.id}"]`).waitFor();
       assert.match(await page.locator(`.task[data-task-id="${blocked.id}"]`).getAttribute('class'),/is-blocked.*is-due-soon/);
@@ -101,18 +91,11 @@ async function login(page, base, username, password, firstLogin=true) {
       await page.locator('#f-project').selectOption(String(project));await page.locator('.timeline-row').waitFor();
       assert.equal(await page.locator('.timeline-row.is-blocked').count(),1);
       await page.screenshot({path:path.join(output,theme+'-timeline.png'),fullPage:true});
-      await page.goto(base+'/discussions');await page.locator('.github-topic').first().waitFor();
-      assert.equal(await page.locator('.github-topic').count(),30);
-      await page.locator('#github-next').click();await page.waitForFunction(()=>document.querySelectorAll('.github-topic').length===1);
-      assert.equal(await page.locator('#github-page').innerText(),'第 2 页');
-      await page.locator('.github-topic').first().click();await page.locator('.github-thread').waitFor();
-      assert.match(await page.locator('.github-body').innerText(),/<script>unsafe<\/script>/);
-      assert.equal(await page.locator('#github-topic-detail script').count(),0);
-      await page.locator('[data-github-kind=discussions]').click();await page.locator('#github-source-note').filter({hasText:'订阅源'}).waitFor();
-      await page.locator('.github-topic').first().click();await page.locator('.github-thread').waitFor();
-      assert.match(await page.locator('.github-replies').innerText(),/不提供回复内容/);
-      await page.screenshot({path:path.join(output,theme+'-github.png'),fullPage:true});
-      failGithub=true;await page.locator('[data-github-kind=issues]').click();await page.locator('#github-topic-list [role=alert]').waitFor();failGithub=false;
+      await page.goto(base+'/discussions');await page.locator('#collab-new-topic').waitFor();
+      assert.equal(await page.locator('#collab-topics').count(),1);
+      assert.equal((await api(page,'/discussions/api/topics')).status,200);
+      assert.equal(await page.locator('a[href*="github.com"]').count(),0);
+      await page.screenshot({path:path.join(output,theme+'-collaboration.png'),fullPage:true});
     }
     await page.goto(base+'/tasks');await page.locator('[data-view="status"]').click();await page.locator(`.task[data-task-id="${blocked.id}"]`).click();
     await page.locator('#progress-form [name=progress]').fill('45');
@@ -123,7 +106,7 @@ async function login(page, base, username, password, firstLogin=true) {
     manager.on('pageerror',error=>errors.push(error.message));await login(manager,base,'merge-manager','merge-test-password');
     await manager.goto(base+'/tasks');await manager.locator('#new-task-toggle').click();await manager.locator('#create-parent').waitFor();
     assert.equal(await manager.locator('.task-create-dependencies').count(),1);
-    assert.equal(await manager.locator('.task-create-details').count(),1);
+    assert.equal(await manager.locator('#create-form textarea[name="detail"]').isVisible(),true);
     const child=await api(manager,'/api/task',{title:'项管创建主前置任务',owner_id:member.id,parent_id:blocked.id});assert.equal(child.status,200);
     // A fresh browser session reads the saved preference, independent of browser storage.
     const freshContext=await browser.newContext(), fresh=await freshContext.newPage();
@@ -131,7 +114,7 @@ async function login(page, base, username, password, firstLogin=true) {
     assert.equal(await fresh.locator('html').getAttribute('data-theme'),'light');
     assert.deepEqual(errors,[]);
     fs.writeFileSync(path.join(output,'browser-result.json'),JSON.stringify({ok:true,errors,chromium:browser.version(),node:process.version},null,2));
-    console.log('PR22_MERGE_BROWSER_OK: persisted themes, timeline, overlapping alerts, progress, manager dependency form and mocked GitHub listing/detail/pagination/errors');
+    console.log('PR22_MERGE_BROWSER_OK: persisted themes, timeline, overlapping alerts, progress, manager dependency form and local collaboration shell');
   } catch(error) {console.error(error);console.error(log.slice(-1600));process.exitCode=1;}
   finally {if(browser)await browser.close();server.kill();}
 })();

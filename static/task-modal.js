@@ -44,8 +44,8 @@ function taskForm(task) {
     <fieldset><legend>参与成员（可多选）</legend><p class="field-help">负责人和参与成员都可编辑任务设置。</p>${choiceGrid("participant_ids", members.filter((member) => member.role !== "admin"), task.participant_ids || [], memberLabel)}${members.filter((member) => member.role === "admin" && (task.participant_ids || []).includes(Number(member.id))).map((member) => `<input type="hidden" name="legacy_admin_participant" value="${Number(member.id)}">`).join('')}</fieldset>
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
     <div class="grid-2"><label>开始日期<input name="start_date" type="date" value="${esc(task.start_date)}"></label><label>截止日期<input name="due_date" type="date" value="${esc(task.due_date)}"></label></div>
-    ${task.suggested_start_date ? `<p class="advisory">根据前置任务计划截止日期，建议开始日期：<strong>${esc(task.suggested_start_date)}</strong>（不会自动填写）</p>` : ""}
-    ${`<label>主前置任务（父任务）<select name="parent_id">${options(others.map((item) => ({...item, name: taskLabel(item)})), task.parent_id, "无父任务")}</select></label>`}
+    ${`<label>主前置任务<select name="parent_id">${options(others.map((item) => ({...item, name: taskLabel(item)})), task.parent_id, "无主前置任务")}</select></label>`}
+    <div class="task-date-guidance"><p class="field-help" data-task-date-note aria-live="polite"></p><button class="btn ghost sm" type="button" data-task-date-reset>重置为依赖时间</button></div>
     <fieldset><legend>其他前置任务（支持多选）</legend>${choiceGrid("predecessor_ids", others, task.predecessor_ids || [], taskLabel)}</fieldset>
     ${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}
     <label>说明<textarea name="detail" rows="3">${esc(task.detail)}</textarea></label><label>本次更新备注<input name="note" placeholder="选填，记录本次调整原因"></label>
@@ -69,9 +69,11 @@ function taskModalShell(task) {
 function bindTaskForm(task, generation) {
   const form = document.getElementById("task-form");
   if (!form) return;
+  window.TaskDateDefaults?.bind(form, {saved: true});
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(form));
+    window.TaskDateDefaults?.payload(form, payload);
     payload.participant_ids = [...checkedValues(form, "participant_ids"), ...[...form.querySelectorAll('[name="legacy_admin_participant"]')].map((input) => Number(input.value))];
     payload.predecessor_ids = checkedValues(form, "predecessor_ids");
     const projectSelect = form.querySelector('[name="project_id"]');
