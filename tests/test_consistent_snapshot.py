@@ -79,6 +79,49 @@ class TestConsistentSnapshot(unittest.TestCase):
         with closing(sqlite3.connect(restored / "data.db")) as db, db:
             self.assertEqual(db.execute("SELECT cents FROM entries").fetchone()[0], 30)
 
+    def test_collaboration_snapshot_restores_live_and_withdrawn_records_and_original_files(self):
+        from modules.collaboration_schema import migrate
+
+        files = {
+            'data/task_attachments/collaboration/first.bin': b'original CAD\x00\xff',
+            'data/task_attachments/collaboration/first.thumb.png': b'safe separate thumbnail',
+            'data/task_attachments/collaboration/withdrawn.bin': b'withdrawn original retained',
+        }
+        for relative, data in files.items():
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        tables = ('collaboration_topics', 'collaboration_messages', 'collaboration_attachments',
+                  'collaboration_submissions', 'collaboration_reads', 'collaboration_changes')
+        with closing(sqlite3.connect(self.root / 'data.db')) as db:
+            db.execute('CREATE TABLE members(id INTEGER PRIMARY KEY,name TEXT)')
+            db.execute("INSERT INTO members VALUES(1,'合成成员')")
+            db.commit()
+            migrate(db)
+            db.execute("INSERT INTO collaboration_topics VALUES(1,'备份话题',1,'合成成员','date',1,'date',NULL,NULL)")
+            db.execute("INSERT INTO collaboration_messages VALUES(1,1,1,'合成成员','原正文','date',1,NULL,NULL)")
+            db.execute("INSERT INTO collaboration_messages VALUES(2,1,1,'合成成员','撤回正文','date',2,'withdrawn-date',1)")
+            db.execute("INSERT INTO collaboration_attachments VALUES(1,1,'设计图.cad','first.bin',14,'digest1','first.thumb.png')")
+            db.execute("INSERT INTO collaboration_attachments VALUES(2,2,'撤回资料.zip','withdrawn.bin',27,'digest2',NULL)")
+            db.execute("INSERT INTO collaboration_submissions VALUES(1,'submission-1','fingerprint1',1,1)")
+            db.execute("INSERT INTO collaboration_reads VALUES(1,1,2)")
+            db.execute("INSERT INTO collaboration_changes VALUES(1,1,'message',1,'date')")
+            db.execute("INSERT INTO collaboration_changes VALUES(2,1,'withdraw',2,'date')")
+            db.commit()
+            expected = {table: db.execute(f'SELECT * FROM {table} ORDER BY rowid').fetchall() for table in tables}
+        manifest = self.create()
+        for relative in files:
+            self.assertIn(relative, manifest['files'])
+        restored = Path(self.temp.name) / 'collaboration-restored'
+        restore_snapshot(self.archive, restored)
+        for relative, data in files.items():
+            self.assertEqual((restored / relative).read_bytes(), data)
+        with closing(sqlite3.connect(restored / 'data.db')) as db:
+            self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            for table in tables:
+                self.assertEqual(db.execute(f'SELECT * FROM {table} ORDER BY rowid').fetchall(), expected[table], table)
+            self.assertEqual(db.execute('SELECT withdrawn_at FROM collaboration_messages WHERE id=2').fetchone()[0], 'withdrawn-date')
+
     def test_snapshot_refuses_active_service_missing_ack_and_existing_output(self):
         with self.assertRaisesRegex(SnapshotError, "offline-confirmed"):
             create_snapshot(self.root, self.archive)

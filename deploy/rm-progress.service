@@ -11,7 +11,7 @@ Environment=PYTHONUNBUFFERED=1
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # 默认 1 worker / 8 线程；配置钩子在服务重启后自动接续持久化发票队列
-ExecStart={{APP_DIR}}/venv/bin/gunicorn --config deploy/gunicorn.conf.py --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:80 --access-logfile - app:app
+ExecStart={{APP_DIR}}/venv/bin/gunicorn --config deploy/gunicorn.conf.py --workers 1 --threads 8 --timeout 240 --bind 0.0.0.0:80 --access-logfile - app:app
 Restart=always
 RestartSec=3
 

@@ -22,7 +22,7 @@
     <div class="ws-nav-group">
       <div class="ws-nav-caption">团队协作</div>
       <a href="{{ url_for('tasks') }}" class="ws-nav-link{% if page == 'tasks' %} is-active{% endif %}"{% if page == 'tasks' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-tasks"/></svg>任务中心</a>
-      <a href="{{ url_for('discussions.index') }}" class="ws-nav-link{% if page == 'discussions' %} is-active{% endif %}"{% if page == 'discussions' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-discussions"/></svg>GitHub 协作</a>
+      <a href="{{ url_for('discussions.index') }}" class="ws-nav-link{% if page == 'discussions' %} is-active{% endif %}"{% if page == 'discussions' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-discussions"/></svg>协作<span id="collab-unread" class="nav-badge" style="display:none" hidden aria-label="协作未读消息">0</span></a>
       {% if me.role in ('admin', 'manager') %}
       <a href="{{ url_for('manage') }}" class="ws-nav-link{% if page == 'manage' %} is-active{% endif %}"{% if page == 'manage' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-tasks"/></svg>任务管理</a>
       <a href="{{ url_for('members') }}" class="ws-nav-link{% if page == 'members' %} is-active{% endif %}"{% if page == 'members' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-users"/></svg>成员管理</a>
@@ -41,12 +41,23 @@
       {% if me.role == 'admin' %}<a href="{{ url_for('security.security_page') }}" class="ws-nav-link{% if page == 'security' %} is-active{% endif %}"><svg aria-hidden="true"><use href="#ws-settings"/></svg>权限与审计</a>{% endif %}
     </div>
   </nav>
+  <span class="theme-decor theme-decor-sidebar" aria-hidden="true"></span>
   <div class="ws-sidebar-bottom">
+    <div class="ws-user-row">
     <a class="ws-user-card" href="{{ url_for('account') }}">
       <span class="ws-avatar">{{ me.name[:1] }}</span>
       <span class="ws-user-info"><strong>{{ me.name }}</strong><small>{{ role_names[me.role] }}</small></span>
     </a>
+    <button type="button" class="ws-theme-toggle" data-theme-toggle aria-label="{{ '切换为银白主题' if me.ui_theme == 'dark' else '切换为黑色主题' }}" title="{{ '切换为银白主题' if me.ui_theme == 'dark' else '切换为黑色主题' }}" {% if me.must_change_password %}disabled{% endif %}>
+      <svg class="ws-theme-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.5 13.2A8.5 8.5 0 0 1 10.8 3.5 8.5 8.5 0 1 0 20.5 13.2Z"/></svg>
+      <svg class="ws-theme-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></svg>
+    </button>
+    </div>
+    <p id="sidebar-theme-result" data-theme-result class="ws-theme-result" role="status" aria-live="polite"></p>
+    <button id="sidebar-theme-retry" data-theme-retry class="btn sm" hidden type="button">重试保存主题</button>
     <form action="{{ url_for('logout') }}" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="ws-signout"><svg aria-hidden="true"><use href="#ws-exit"/></svg>退出登录</button></form>
   </div>
 </aside>
 <div class="ws-sidebar-overlay" data-ws-close aria-hidden="true"></div>
+
+{% if not me.must_change_password %}<script src="{{ url_for('static', filename='collaboration-unread.js') }}" defer></script>{% endif %}

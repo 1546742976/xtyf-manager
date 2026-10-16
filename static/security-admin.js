@@ -9,7 +9,7 @@ document.addEventListener("DOMContentLoaded", () => {
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
   async function api(path, data) {
-    const response = await fetch(path, data === undefined ? {} : {
+    const response = await BusinessUI.fetch(path, data === undefined ? {} : {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
     });
     const payload = await response.json();
@@ -36,7 +36,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("permission-search").addEventListener("input", renderMembers);
   memberHost.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-save-permissions]");
-    if (!button) return;
+    if (!button || button.disabled) return;
     const row = button.closest("tr");
     button.disabled = true;
     result.textContent = "正在保存…";
@@ -53,6 +53,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
   async function loadAudit(reset) {
+    if (auditLoading) return;
+    auditLoading=true;
     const status = document.getElementById("audit-result");
     const more = document.getElementById("audit-more");
     more.disabled = true;
@@ -69,8 +71,10 @@ document.addEventListener("DOMContentLoaded", () => {
       status.textContent = error.message;
     } finally {
       more.disabled = false;
+      auditLoading=false;
     }
   }
+  let auditLoading=false;
   document.getElementById("audit-refresh").addEventListener("click", () => loadAudit(true));
   document.getElementById("audit-more").addEventListener("click", () => loadAudit(false));
   loadMembers().catch((error) => { result.textContent = error.message; });

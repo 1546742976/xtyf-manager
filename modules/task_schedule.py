@@ -34,7 +34,7 @@ def _load(db: sqlite3.Connection, project_id: int) -> dict:
     if project is None or project["deleted_at"] is not None:
         raise ScheduleError("造车组别不存在或已删除", 404)
     tasks = [dict(row) for row in db.execute(
-        "SELECT id,title,owner_id,status,start_date,due_date,schedule_stage,version "
+        "SELECT id,title,owner_id,status,start_date,due_date,start_date_origin,schedule_stage,version "
         "FROM tasks WHERE project_id=? AND deleted_at IS NULL ORDER BY id", (project_id,)
     )]
     # Include owner memberships and catalog names in the snapshot: member edits
@@ -174,10 +174,19 @@ def apply_schedule(db: sqlite3.Connection, actor: dict, project_id: int, snapsho
         stamp = now_str()
         for row in result["changes"]:
             changed = [key for key in row["before"] if row["before"][key] != row["after"][key]]
+            # Explicitly accepted scheduling can replace manual/frozen dates.
+            # Record the new origin in the same revision so undo restores both.
+            origin = row["start_date_origin"]
+            if any(key in changed for key in ("start_date", "due_date")):
+                row["before"]["start_date_origin"] = origin
+                row["after"]["start_date_origin"] = "schedule"
+                origin = "schedule"
+                if row["before"]["start_date_origin"] != origin:
+                    changed.append("start_date_origin")
             version = row["version"] + 1
             cur = db.execute(
-                "UPDATE tasks SET start_date=?,due_date=?,schedule_stage=?,updated_at=?,version=? WHERE id=? AND version=?",
-                (row["after"]["start_date"], row["after"]["due_date"], row["after"]["schedule_stage"], stamp, version, row["id"], row["version"]),
+                "UPDATE tasks SET start_date=?,due_date=?,schedule_stage=?,start_date_origin=?,updated_at=?,version=? WHERE id=? AND version=?",
+                (row["after"]["start_date"], row["after"]["due_date"], row["after"]["schedule_stage"], origin, stamp, version, row["id"], row["version"]),
             )
             if cur.rowcount != 1:
                 raise ScheduleError("任务已被其他人修改，请重新预览", 409)

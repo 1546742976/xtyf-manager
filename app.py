@@ -20,6 +20,7 @@ import os
 import hashlib
 import time
 import secrets
+import re
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -34,13 +35,19 @@ from modules.funds import funds_bp, can_review
 from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
 from modules.invoice_jobs import migrate as migrate_invoice_jobs
 from modules.discussions import discussions_bp
+from modules.collaboration_schema import migrate as migrate_collaboration
 from modules.task_api import bp as task_api_bp
 from modules.task_attachments import bp as task_attachments_bp
 from modules.task_progress import bp as task_progress_bp
 from modules.task_catalogs import bp as task_catalogs_bp
 from modules.member_profiles import bp as member_profiles_bp
 from modules.task_migrations import migrate as migrate_tasks
+from modules.daily_schema import migrate as migrate_daily
+from modules.daily_projects import bp as daily_projects_bp
+from modules.email_api import bp as email_bp
+from modules.mail_service import configure as configure_mail
 from modules.security import init_security, migrate_security, write_initial_credentials
+from modules.workspace_settings import bp as workspace_settings_bp, migrate as migrate_workspace, theme_context
 
 # ---- 关键路径与端口（secret.key 用于会话签名，首次运行自动生成）----
 SECRET_PATH = os.environ.get("PROGRESS_SECRET_PATH", os.path.join(BASE_DIR, "secret.key"))
@@ -107,8 +114,8 @@ app.permanent_session_lifetime = timedelta(days=30)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
-app.config.setdefault("GITHUB_REPOSITORY", os.environ.get("GITHUB_REPOSITORY", "SHM-white/xtyf-manager"))
 app.config.setdefault("TASK_ATTACHMENTS_DIR", os.environ.get("TASK_ATTACHMENTS_DIR", os.path.join(BASE_DIR, "data", "task_attachments")))
+configure_mail(app)
 
 # ---- 注册子模块蓝图（三个系统共用同一登录会话与页面风格）----
 app.register_blueprint(funds_bp, url_prefix="/funds")
@@ -119,6 +126,10 @@ app.register_blueprint(member_profiles_bp)
 app.register_blueprint(task_attachments_bp)
 app.register_blueprint(task_progress_bp)
 app.register_blueprint(discussions_bp, url_prefix="/discussions")
+app.register_blueprint(daily_projects_bp)
+app.register_blueprint(email_bp)
+app.register_blueprint(workspace_settings_bp)
+app.context_processor(theme_context)
 init_security(app)
 
 
@@ -214,6 +225,9 @@ def init_db():
         else:
             db.commit()
         migrate_tasks(db)
+        migrate_workspace(db)
+        migrate_daily(db)
+        migrate_collaboration(db)
         migrate_security(db)
         migrate_invoice_owners(db)
         migrate_invoice_jobs(db)
@@ -260,11 +274,25 @@ def _failed_login(db, attempt_key, row, now):
     return locked_until > now
 
 
+def task_login_destination(candidate):
+    """Only supported local task links can survive the login round trip."""
+    if not isinstance(candidate, str):
+        return '/'
+    old_daily = re.fullmatch(r'/daily-projects(?:/([1-9]\d{0,18}))?', candidate)
+    if old_daily:
+        return '/tasks?type=daily' + ('&project=' + old_daily[1] if old_daily[1] else '')
+    if re.fullmatch(r'/tasks(?:\?task=[1-9]\d{0,18}|\?type=vehicle(?:&task=[1-9]\d{0,18})?|\?type=daily(?:&project=[1-9]\d{0,18})?)?', candidate):
+        return candidate
+    return '/'
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    candidate = request.args.get('next', '') if request.method == 'GET' else (request.get_json(silent=True) or request.form).get('next', '')
+    destination = task_login_destination(candidate)
     if request.method == "GET":
         if current_user():
-            return redirect(url_for("index"))
+            return redirect(destination)
         return render_template("login.html", me=None, page="login", role_names=ROLE_NAMES)
     data = request.get_json(silent=True) or request.form
     username = (data.get("username") or "").strip()
@@ -293,7 +321,7 @@ def login():
     session["uid"] = row["id"]
     session["session_version"] = row["session_version"]
     return jsonify(ok=True, must_change_password=bool(row["must_change_password"]),
-                   redirect="/account" if row["must_change_password"] else "/")
+                   redirect="/account" if row["must_change_password"] else destination)
 
 
 @app.route("/logout", methods=["POST"])
@@ -312,7 +340,12 @@ def index():
 @app.route("/tasks")
 @login_required
 def tasks():
-    return render_template("board.html", me=current_user(), page="tasks", role_names=ROLE_NAMES)
+    task_type = 'daily' if request.args.get('type') == 'daily' else 'vehicle'
+    project_id = request.args.get('project', '')
+    project_id = project_id if re.fullmatch(r'[1-9]\d{0,18}', project_id) else ''
+    return render_template("board.html", me=current_user(), page="tasks", role_names=ROLE_NAMES,
+                           statuses=STATUSES, priorities=PRIORITIES, task_type=task_type,
+                           project_id=project_id if task_type == 'daily' else '')
 
 
 @app.route("/account")

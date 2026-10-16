@@ -37,6 +37,10 @@ def revert_revision(
     if target["kind"] not in ("update", "revert"):
         db.rollback(); return None, "该修订不能撤销", 400
     before_target = json.loads(target["before_json"])
+    if "status" in before_target and "completed_at" not in before_target:
+        # Pre-migration revisions do not prove when their completed state
+        # began. Restoring one must not borrow a later completion timestamp.
+        before_target["completed_at"] = None
     touched = set(before_target)
     for row in db.execute(
         "SELECT before_json,after_json FROM task_revisions WHERE task_id=? AND id>? ORDER BY id",

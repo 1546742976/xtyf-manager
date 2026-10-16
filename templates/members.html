@@ -3,26 +3,28 @@
 {% block content %}
 <div class="ux-page-head">
   <div><p class="ux-eyebrow">TEAM / MEMBERS</p><h1>成员管理</h1><p>集中维护成员专业组、造车组别和账号权限；一个人可同时参与多个造车组别。</p></div>
-  <div class="ux-page-actions"><a class="btn" href="{{ url_for('manage') }}">任务管理</a><a class="btn" href="{{ url_for('export_members_csv') }}">导出成员 CSV</a></div>
+  <div class="ux-page-actions"><a class="btn" href="{{ url_for('manage') }}">任务管理</a><a class="btn" data-download-name="members.csv" href="{{ url_for('export_members_csv') }}">导出成员 CSV</a></div>
 </div>
 
 <section class="panel">
   <h2>成员管理 <span class="muted" id="member-count"></span></h2>
   <p class="ux-note">新建或重置的密码只用于首次进入改密页面。随机凭据仅在本次操作结果中显示，请逐人通过可信渠道私下交付，勿发到群聊；遗失后请重新重置。</p>
-  <div class="split">
-    <form id="member-form" class="form-grid">
+  <div class="split member-entry-layout">
+    <form id="member-form" class="form-grid member-create-form" aria-labelledby="member-create-title">
+      <h3 class="span-2 member-form-title" id="member-create-title">添加单个成员</h3>
       <label>姓名<input name="name" required></label>
-      <fieldset class="span-2"><legend>专业组（技能方向，可多选）</legend><div id="member-create-groups" class="choice-host"></div></fieldset>
-      <fieldset class="span-2"><legend>造车组别（可多选）</legend><div id="member-create-projects" class="choice-host"></div></fieldset>
       <label>用户名（默认姓名）<input name="username"></label>
-      <label>初始密码（留空随机生成）<input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位"></label>
+      <label{% if me.role != 'admin' %} class="span-2"{% endif %}>初始密码（留空随机生成）<input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位"></label>
       {% if me.role == 'admin' %}
       <label>角色<select name="role"><option value="member">成员</option><option value="manager">项管</option><option value="admin">管理员</option></select></label>
       {% endif %}
+      <fieldset class="span-2"><legend>专业组（技能方向，可多选）</legend><div id="member-create-groups" class="choice-host"></div></fieldset>
+      <fieldset class="span-2"><legend>造车组别（可多选）</legend><div id="member-create-projects" class="choice-host"></div></fieldset>
       <div class="member-form-actions"><button class="btn primary" type="submit">添加成员</button><p class="form-message" role="alert"></p></div>
     </form>
-    <form id="import-form" class="form-grid">
-      <label class="span-2">批量导入（每行：姓名,专业组1;专业组2[,用户名]）<textarea name="text" rows="5" placeholder="张三,视觉;电控&#10;李四,机械,lisi"></textarea></label>
+    <form id="import-form" class="form-grid member-import-form" aria-labelledby="member-import-title">
+      <h3 class="span-2 member-form-title" id="member-import-title">批量导入</h3>
+      <label class="span-2">每行：姓名,专业组1;专业组2[,用户名]<textarea name="text" rows="8" placeholder="张三,视觉;电控&#10;李四,机械,lisi"></textarea></label>
       <fieldset class="span-2"><legend>为本批次成员选择造车组别（可多选）</legend><div id="member-import-projects" class="choice-host"></div></fieldset>
       <div class="member-form-actions"><button class="btn" type="submit">批量导入</button><p class="form-message" role="alert"></p></div>
     </form>

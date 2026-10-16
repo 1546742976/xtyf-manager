@@ -3,8 +3,27 @@
 {% block content %}
 <div class="ux-page-head">
   <div><p class="ux-eyebrow">WORKSPACE / OVERVIEW</p><h1>工作台</h1><p>查看团队任务进展、待办和常用操作。</p></div>
-  <div class="ux-page-actions"><span id="sync-status" class="sync-status" role="status" aria-live="polite">正在同步…</span><button type="button" class="btn" id="refresh-now">刷新数据</button></div>
+  <div class="ux-page-actions"><span id="sync-status" class="sync-status" role="status" aria-live="polite">正在同步…</span><button type="button" class="btn" id="refresh-now">刷新数据</button>{% if me.role == 'admin' %}<button type="button" class="btn countdown-config" id="countdown-config" aria-haspopup="dialog">设置目标日期</button>{% endif %}</div>
 </div>
+<section id="workspace-countdown" class="countdown-banner" aria-labelledby="countdown-title" hidden>
+  <div class="countdown-copy"><p class="countdown-eyebrow" id="countdown-eyebrow">目标倒计时</p><h2 id="countdown-title"></h2><p class="countdown-date" id="countdown-date"></p></div>
+  <div class="countdown-number" id="countdown-number"><strong id="countdown-value"></strong><span id="countdown-unit">天</span></div>
+  <span class="theme-decor theme-decor-happy" aria-hidden="true"></span>
+</section>
+<div class="countdown-result"><span id="countdown-result" role="status" aria-live="polite">正在读取目标日期…</span> <button type="button" class="btn sm" id="countdown-retry" hidden>重新加载目标</button></div>
+{% if me.role == 'admin' %}
+<dialog class="countdown-dialog" id="countdown-dialog" aria-labelledby="countdown-dialog-title">
+  <form id="countdown-form">
+    <h2 id="countdown-dialog-title">设置目标日期</h2>
+    <p>为全体成员设置一个共同目标，按北京时间计算剩余天数。</p>
+    <label for="countdown-title-input">目标名称<input id="countdown-title-input" name="title" maxlength="80" placeholder="例如：完整形态考核" autocomplete="off"></label>
+    <label for="countdown-date-input">目标日期<input id="countdown-date-input" name="target_date" type="date"></label>
+    <p id="countdown-form-result" role="status" aria-live="polite">同时清空名称和日期可隐藏横幅。</p>
+    <button id="countdown-reload" class="btn" type="button" hidden>加载最新设置（替换当前输入）</button>
+    <div class="dialog-actions"><button type="button" class="btn" id="countdown-cancel">取消</button><button type="submit" class="btn primary" id="countdown-save">保存目标</button></div>
+  </form>
+</dialog>
+{% endif %}
 <div class="ws-dashboard-stats" id="dashboard-stats" aria-label="实时任务概览">
   <div class="ws-dashboard-stat"><span class="ws-label">我的待办</span><strong class="ws-value">—</strong></div>
   <div class="ws-dashboard-stat"><span class="ws-label">进行中任务</span><strong class="ws-value">—</strong></div>
@@ -13,7 +32,7 @@
 </div>
 <div class="ws-dashboard-grid">
   <section class="ws-dashboard-card" aria-label="近期任务">
-    <div class="ws-section-lead"><div><h2>近期任务</h2><p class="ws-subtitle">优先显示逾期、即将到期和进行中的工作</p></div><a href="{{ url_for('tasks') }}">查看全部任务 →</a></div>
+    <div class="ws-section-lead"><div><h2>近期任务</h2><p class="ws-subtitle">优先显示逾期、即将到期和进行中的工作</p></div><span class="theme-decor theme-decor-curious" aria-hidden="true"></span><a href="{{ url_for('tasks') }}">查看全部任务 →</a></div>
     <div class="ws-task-list" id="dashboard-task-list"><p class="empty">加载中…</p></div>
   </section>
   <div class="ws-dashboard-aside">
@@ -22,7 +41,7 @@
       <div class="ws-quick-grid">
         <a href="{{ url_for('tasks') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-tasks"/></svg>任务中心</a>
         {% if me.role in ('admin', 'manager') %}
-        <a href="{{ url_for('manage') }}#create-form" class="ws-quick-link"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>创建任务</a>
+        <a href="{{ url_for('tasks') }}#create" class="ws-quick-link"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>创建任务</a>
         <a href="{{ url_for('members') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-users"/></svg>成员管理</a>
         <a href="/funds/" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-money"/></svg>资金台账</a>
         {% endif %}
@@ -34,7 +53,11 @@
       <h2>工作提示</h2>
       <p class="ws-page-help">任务中心可以按负责人或状态浏览；任务编辑仅对负责人及管理角色开放。发票及资金操作仍按现有权限限制显示。</p>
     </section>
+    <section class="ws-dashboard-card ws-dashboard-daily" aria-labelledby="daily-dashboard-title">
+      <div class="ws-section-lead"><h2 id="daily-dashboard-title">日常项目</h2><a href="/tasks?type=daily">查看全部日常项目</a><button class="btn" type="button" id="daily-dashboard-refresh">刷新</button></div>
+      <div id="daily-dashboard">加载中…</div>
+    </section>
   </div>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='app.js') }}"></script><script src="{{ url_for('static', filename='ui-dialog.js') }}"></script><script src="{{ url_for('static', filename='task-tree.js') }}"></script><script src="{{ url_for('static', filename='task-board.js') }}"></script><script src="{{ url_for('static', filename='task-history.js') }}"></script><script src="{{ url_for('static', filename='task-progress.js') }}"></script><script src="{{ url_for('static', filename='task-modal.js') }}"></script><script src="{{ url_for('static', filename='dashboard.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='app.js') }}"></script><script src="{{ url_for('static', filename='ui-dialog.js') }}"></script><script src="{{ url_for('static', filename='task-tree.js') }}"></script><script src="{{ url_for('static', filename='task-board.js') }}"></script><script src="{{ url_for('static', filename='task-history.js') }}"></script><script src="{{ url_for('static', filename='task-progress.js') }}"></script><script src="{{ url_for('static', filename='task-date-defaults.js') }}"></script><script src="{{ url_for('static', filename='task-modal.js') }}"></script><script src="{{ url_for('static', filename='dashboard.js') }}"></script><script src="{{ url_for('static', filename='daily-projects.js') }}"></script><script src="{{ url_for('static', filename='countdown.js') }}"></script>{% endblock %}

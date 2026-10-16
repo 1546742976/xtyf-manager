@@ -1,0 +1,31 @@
+<form id="create-form" class="task-create-form">
+  <div class="task-create-body">
+    <section class="task-create-section" aria-labelledby="create-basics-heading">
+      <h3 id="create-basics-heading">任务目标</h3>
+      <div class="task-create-grid">
+        <label class="task-create-wide">任务标题<input name="title" required maxlength="200" autofocus></label>
+        <label>造车组别<select name="project_id" id="create-project"><option value="">未选择</option></select></label>
+        <label>优先级<select name="priority">{% for p in priorities %}<option>{{ p }}</option>{% endfor %}</select></label>
+        <label>状态<select name="status">{% for s in statuses %}<option>{{ s }}</option>{% endfor %}</select></label>
+        <label>负责人<select name="owner_id" id="create-owner"><option value="">未指定</option></select></label>
+        <fieldset class="task-create-wide"><legend>参与成员（可多选）</legend><div id="create-participants" class="choice-host"></div></fieldset>
+      </div>
+      <p class="field-help">负责人可暂不指定；选择参与成员后须指定负责人。专业组用于成员技能分类。</p>
+    </section>
+    <section class="task-create-section" aria-labelledby="create-schedule-heading">
+      <h3 id="create-schedule-heading">前置依赖与时间</h3>
+      <div class="task-create-grid">
+        <label class="task-create-wide">主前置任务<select name="parent_id" id="create-parent"><option value="">无主前置任务</option></select></label>
+        <label>开始日期<input name="start_date" type="date"></label>
+        <label>截止日期<input name="due_date" type="date"></label>
+        <div class="task-create-wide task-date-controls"><p class="field-help" data-task-date-note aria-live="polite"></p><button type="button" class="btn ghost sm" data-task-date-reset>重置为依赖时间</button></div>
+        <fieldset class="task-create-wide task-create-dependencies"><legend>其他前置任务（可多选）</legend><p class="field-help">保留依赖连线，不用于计算默认开始日期。</p><div id="create-dependencies" class="choice-host"></div></fieldset>
+      </div>
+    </section>
+    <section class="task-create-section" aria-labelledby="create-detail-heading">
+      <h3 id="create-detail-heading">补充说明</h3>
+      <label>说明<textarea name="detail" rows="3"></textarea></label>
+    </section>
+  </div>
+  <div class="task-create-footer"><p class="form-message" role="status" aria-live="polite"></p><div class="task-create-actions"><button class="btn" type="button" data-task-create-close>取消</button><button class="btn primary" type="submit">创建任务</button></div></div>
+</form>

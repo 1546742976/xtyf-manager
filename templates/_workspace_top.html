@@ -1,5 +1,13 @@
 <header class="workspace-topbar">
   <button type="button" class="ws-menu-toggle" data-ws-menu aria-controls="workspace-sidebar" aria-expanded="false" aria-label="打开主导航"><span></span><span></span><span></span></button>
-  <div class="ws-breadcrumb"><a href="{{ url_for('index') }}">工作空间</a><span class="ws-breadcrumb-sep">/</span><strong>{% if page == 'dashboard' %}工作台{% elif page == 'tasks' %}任务中心{% elif page == 'manage' %}任务管理{% elif page == 'members' %}成员管理{% elif page == 'funds' %}资金台账{% elif page == 'invoices' %}发票中心{% elif page == 'security' %}权限与审计{% elif page == 'discussions' %}讨论与建议{% else %}账户设置{% endif %}</strong></div>
+  <div class="ws-breadcrumb"><a href="{{ url_for('index') }}">工作空间</a><span class="ws-breadcrumb-sep">/</span><strong>{% if page == 'dashboard' %}工作台{% elif page == 'daily' %}日常项目{% elif page == 'mail' %}邮件提醒管理{% elif page == 'tasks' %}任务中心{% elif page == 'manage' %}任务管理{% elif page == 'members' %}成员管理{% elif page == 'funds' %}资金台账{% elif page == 'invoices' %}发票中心{% elif page == 'security' %}权限与审计{% elif page == 'discussions' %}协作{% else %}账户设置{% endif %}</strong></div>
+  <details class="theme-menu" data-theme-menu>
+    <summary aria-label="选择外观主题"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9c0-2-2-2-3-2h-2c-2 0-2-2-1-3 1-2-1-4-3-4Z"/><circle cx="7" cy="11" r="1"/><circle cx="10" cy="7" r="1"/><circle cx="8" cy="16" r="1"/></svg><span data-current-palette>外观</span></summary>
+    <div class="theme-menu-panel"><h2>选择外观</h2>
+      {% set theme_control_id = "topbar" %}{% include "_theme_choices.html" %}
+      <p class="theme-feedback" data-theme-result role="status" aria-live="polite"></p>
+      <button class="btn sm" data-theme-retry hidden type="button">重试保存主题</button>
+    </div>
+  </details>
   <a href="{{ url_for('account') }}" class="ws-top-user" title="账户设置"><span>{{ me.name }}</span><span class="ws-top-avatar">{{ me.name[:1] }}</span></a>
 </header>

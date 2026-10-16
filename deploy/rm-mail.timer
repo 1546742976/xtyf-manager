@@ -1,0 +1,12 @@
+[Unit]
+Description=Check XTYF mail queue every five minutes
+# Personal briefs send 08:00-12:00, team briefs 22:00-midnight Asia/Shanghai.
+# Verification and test mail jobs run all day.
+
+[Timer]
+OnCalendar=*-*-* *:0/5:00
+Persistent=true
+Unit=rm-mail.service
+
+[Install]
+WantedBy=timers.target

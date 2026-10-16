@@ -64,6 +64,14 @@ class TestTaskSchedule(unittest.TestCase):
         self.assertEqual(after[m1]['version'], 1)
         self.assertEqual(after[e1]['version'], 2)
         self.assertEqual(after[e1]['owner_stage'], '电控')
+        self.assertEqual(before[e1]['start_date_origin'], 'manual')
+        self.assertEqual(after[e1]['start_date_origin'], 'schedule')
+        revision = self.admin.get(f'/api/task/{e1}/revisions').get_json()['revisions'][0]
+        self.assertEqual(revision['before']['start_date_origin'], 'manual')
+        reverted = self.admin.post(f"/api/task/{e1}/revisions/{revision['id']}/revert", json={'version': after[e1]['version']})
+        self.assertEqual(reverted.status_code, 200)
+        restored = self.tasks()[e1]
+        self.assertEqual((restored['start_date'], restored['start_date_origin']), ('2026-10-15', 'manual'))
 
     def test_missing_middle_phase_and_zero_day_task(self):
         self.task(self.mechanical)

@@ -1,0 +1,1 @@
+data-theme="{{ me.ui_theme if me else 'light' }}" data-theme-mode="{{ me.theme_mode if me else 'light' }}" data-light-theme="{{ me.light_theme if me else 'silver' }}" data-dark-theme="{{ me.dark_theme if me else 'space' }}" data-palette="{{ (me.dark_theme if me.ui_theme == 'dark' else me.light_theme) if me else 'silver' }}"

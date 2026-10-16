@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" {% include "_theme_attributes.html" %}>
 <head>
 <meta charset="UTF-8">
 {% include "_security_head.html" %}
@@ -9,7 +9,8 @@
 <link rel="stylesheet" href="/static/ui.css">
 <link rel="stylesheet" href="/static/workspace.css">
 <link rel="stylesheet" href="/static/apple.css">
-<meta name="theme-color" content="#f5f5f7">
+  <link rel="stylesheet" href="{{ url_for('static', filename='themes.css') }}">
+<meta name="theme-color" content="{{ '#0b0b0c' if me.ui_theme == 'dark' else '#f5f5f7' }}">
 </head>
 <body class="ux-invoices ws-app{% if not is_finance %} member{% endif %}">
 <script>window.IS_FINANCE={{ is_finance|tojson }};window.ME_NAME={{ me.name|tojson }};window.ME_ID={{ me.id|tojson }};</script>
@@ -22,7 +23,7 @@
 <div class="page-head">
 <div><p class="ux-eyebrow">FINANCE / INVOICES</p><h1>{{ '发票中心' if is_finance else '我的发票' }}</h1><p class="ux-head-sub">上传、查重、整理与追踪每张发票的报销进度。</p></div>
 <div class="actions">
-<button onclick="StatsModal.show()">统计</button>
+<button class="btn-primary" onclick="StatsModal.show()">统计</button>
 <button class="finance-only" onclick="exportCSV()">导出发票 CSV</button>
 <button class="finance-only" onclick="exportZip()">导出压缩包</button>
 <button class="finance-only" onclick="scanDuplicates()">查重</button>

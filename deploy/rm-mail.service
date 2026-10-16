@@ -1,0 +1,13 @@
+[Unit]
+Description=XTYF personal morning, team evening and verification mail queue
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{APP_USER}}
+WorkingDirectory={{APP_DIR}}
+EnvironmentFile={{APP_DIR}}/mail.env
+ExecStart={{APP_DIR}}/venv/bin/python deploy/mail_worker.py
+UMask=0077
+TimeoutStartSec=20min

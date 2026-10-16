@@ -20,7 +20,7 @@ function page(scripts) {
   return { context, evaluate: (src) => vm.runInContext(src, context) };
 }
 
-test("progress card displays percentage, sanitized latest note and attachment thumbnails", () => {
+test("compact progress card displays percentage and escaped note; images stay in details", () => {
   const { evaluate } = page(["app.js", "task-board.js"]);
   const task = {
     id: 11, title: "完成驱动", priority: "高", status: "进行中",
@@ -32,8 +32,44 @@ test("progress card displays percentage, sanitized latest note and attachment th
   assert.match(html, /48%/);
   assert.match(html, /role="progressbar"/);
   assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /<span>成员A<\/span>/);
   assert.doesNotMatch(html, /<script>/);
-  assert.match(html, /\/api\/task\/11\/attachments\/21/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(evaluate("taskCard")({...task, latest_progress:null}), /无备注/);
+});
+
+test("task note label uses the nonempty note author and escapes names", () => {
+  const { evaluate } = page(["app.js", "task-board.js"]);
+  const card = evaluate("taskCard");
+  const task = {
+    id: 12, title: "备注作者", priority: "中", status: "进行中",
+    owner_id: 1, participant_ids: [], latest_note: "保留这条备注",
+    latest_note_author: '<img src=x onerror="alert(1)">',
+    latest_progress: { actor_name: "仅更新进度者", note: "   " },
+  };
+  const html = card(task);
+  assert.ok(html.includes('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;'));
+  assert.match(html, /保留这条备注/);
+  assert.doesNotMatch(html, /<img|仅更新进度者/);
+  const empty = card({ ...task, latest_note: "", latest_note_author: "",
+    latest_progress: { actor_name: "旧备注者", note: "旧备注" } });
+  assert.match(empty, /<span>备注<\/span><p>无备注<\/p>/);
+  assert.doesNotMatch(empty, /旧备注者|旧备注/);
+});
+
+test("person lanes collapse remaining tasks and retain expansion separately from trees", () => {
+  const { evaluate } = page(["app.js", "task-board.js"]);
+  const state = evaluate("state");
+  state.view = 'person';
+  state.members = [{id:2,name:'测试成员',role:'member'}];
+  const tasks = [1,2,3].map(id => ({id,title:'任务'+id,owner_id:2,status:'未开始',priority:'中'}));
+  const render = evaluate('renderLanes');
+  assert.equal((render(tasks).match(/data-task-id=/g)||[]).length,1);
+  assert.match(render(tasks), /展开其余 2 项/);
+  evaluate("expandedPersonLanes.add('m-2')");
+  assert.equal((render(tasks).match(/data-task-id=/g)||[]).length,3);
+  assert.match(render(tasks), /aria-expanded="true"/);
+  assert.equal(state.expanded.size,0);
 });
 
 test("dependency graph draws multiple upstream parents and keeps filtered ancestors", () => {
@@ -73,6 +109,13 @@ test("due-soon border applies only to unfinished tasks due within three days", (
   const task = { id: 10, title: "联调", owner_id: 1, status: "进行中", priority: "中", days_left: 3 };
   assert.equal(evaluate("isDueSoon")(task), true);
   assert.match(evaluate("taskCard")(task), /is-due-soon/);
+  const blocked = evaluate("taskCard")({ ...task, status: "阻塞" });
+  assert.match(blocked, /is-blocked/);
+  assert.match(blocked, /is-due-soon/);
+  const overdue = evaluate("taskCard")({ ...task, status: "阻塞", days_left: -1 });
+  assert.match(overdue, /is-blocked/);
+  assert.match(overdue, /overdue/);
+  assert.doesNotMatch(overdue, /is-due-soon/);
   for (const changed of [{ days_left: -1 }, { days_left: 4 }, { days_left: null }, { status: "已完成" }, { status: "已取消" }]) {
     assert.equal(evaluate("isDueSoon")({ ...task, ...changed }), false);
   }

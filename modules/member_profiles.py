@@ -13,6 +13,7 @@ from werkzeug.security import generate_password_hash
 from common import current_user, get_db, login_required
 from modules.task_catalogs import _set_member_groups, _set_member_projects
 from modules.task_validation import MAX_SQLITE_INTEGER, active_ids, normalize_ids
+from modules.workspace_settings import DARK_THEMES, LIGHT_THEMES, THEME_MODES, preferences
 
 bp = Blueprint("member_profiles", __name__)
 SELF_FIELDS = frozenset({"username", "group_ids", "project_ids"})
@@ -173,6 +174,39 @@ def account_profile():
     if request.method == "GET":
         return jsonify(ok=True, profile=_profile(get_db(), actor["id"]))
     return _save(actor["id"], as_admin=False)
+
+
+@bp.route("/api/account/preferences", methods=["GET", "POST"])
+@login_required
+def account_preferences():
+    actor = current_user()
+    if request.method == "GET":
+        return jsonify(ok=True, **preferences(actor))
+    data = request.get_json(silent=True)
+    saved = preferences(actor)
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error="外观设置格式不正确"), 400
+    if set(data) == {"theme"}:
+        # Existing two-mode clients may still switch without losing a palette.
+        if not isinstance(data["theme"], str) or data["theme"] not in {"light", "dark"}:
+            return jsonify(ok=False, error="请选择亮色或暗色主题"), 400
+        saved.update(mode=data["theme"], theme=data["theme"])
+    elif set(data) == {"mode", "light_theme", "dark_theme"}:
+        if (not isinstance(data["mode"], str) or data["mode"] not in THEME_MODES
+                or not isinstance(data["light_theme"], str) or data["light_theme"] not in LIGHT_THEMES
+                or not isinstance(data["dark_theme"], str) or data["dark_theme"] not in DARK_THEMES):
+            return jsonify(ok=False, error="请选择有效的主题模式及亮色、暗色配色"), 400
+        saved.update(data)
+        if saved["mode"] != "system":
+            saved["theme"] = saved["mode"]
+    else:
+        return jsonify(ok=False, error="外观设置包含缺失或不允许修改的字段"), 400
+    db = get_db()
+    # Preferences never change session_version or another member's settings.
+    with db:
+        db.execute("UPDATE members SET ui_theme=?,theme_mode=?,light_theme=?,dark_theme=? WHERE id=?",
+                   (saved["theme"], saved["mode"], saved["light_theme"], saved["dark_theme"], actor["id"]))
+    return jsonify(ok=True, **saved)
 
 
 @bp.route("/api/member/<int:member_id>/profile", methods=["POST"])

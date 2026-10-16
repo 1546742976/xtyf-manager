@@ -6,6 +6,7 @@ from datetime import datetime
 
 from modules.task_types import JsonObject
 from modules.task_schedule import resolve_stage
+from modules.task_dates import dependency_start_date
 
 
 def _relation_map(
@@ -65,6 +66,10 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
     predecessor_map = _relation_map(db, "task_dependencies", "predecessor_id", task_ids)
     # Most recent progress event and its live screenshots are included in board data.
     latest_progress: dict[int, JsonObject] = {}
+    latest_notes = {int(row['task_id']): (row['note'], row['actor_name']) for row in db.execute(
+        "SELECT task_id,note,actor_name FROM task_progress_updates WHERE id IN "
+        "(SELECT MAX(id) FROM task_progress_updates WHERE TRIM(note) <> '' GROUP BY task_id)"
+    )}
     if task_ids:
         placeholders = ",".join("?" for _ in task_ids)
         updates = db.execute(
@@ -106,28 +111,27 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
         task["participant_ids"] = participant_map[task_id]
         task["predecessor_ids"] = predecessor_map[task_id]
         task["latest_progress"] = latest_progress.get(task_id)
+        task["latest_note"], task["latest_note_author"] = latest_notes.get(task_id, ('', ''))
         warnings: list[str] = []
-        predecessor_dates: list[str] = []
-        dates_complete = bool(predecessor_map[task_id])
-        for predecessor_id in predecessor_map[task_id]:
+        parent_id = task.get("parent_id")
+        refs = list(dict.fromkeys(([int(parent_id)] if parent_id else []) + predecessor_map[task_id]))
+        for predecessor_id in refs:
             predecessor = by_id.get(predecessor_id)
             if predecessor is None:
-                dates_complete = False
                 warnings.append("前置任务不存在或已删除")
                 continue
+            # Overlapping schedules are normal: successor preparation may start
+            # before the predecessor finishes; a pending task is not a blocker.
             if predecessor["status"] == "已取消":
                 warnings.append(f"前置任务“{predecessor['title']}”已取消")
-            elif predecessor["status"] != "已完成":
+            elif predecessor["status"] == "阻塞":
+                warnings.append(f"前置任务“{predecessor['title']}”已阻塞")
+            elif task["status"] == "已完成" and predecessor["status"] != "已完成":
                 warnings.append(f"前置任务“{predecessor['title']}”尚未完成")
-            pred_due = str(predecessor.get("due_date") or "")
-            if pred_due:
-                predecessor_dates.append(pred_due)
-                if task.get("start_date") and str(task["start_date"]) < pred_due:
-                    warnings.append(f"开始日期早于前置任务“{predecessor['title']}”截止日期")
-            else:
-                dates_complete = False
+            if not predecessor.get("due_date"):
                 warnings.append(f"前置任务“{predecessor['title']}”未设置截止日期")
-        task["suggested_start_date"] = max(predecessor_dates) if dates_complete and predecessor_dates else None
+        parent = by_id.get(parent_id)
+        task["suggested_start_date"] = dependency_start_date(parent.get("due_date")) if parent else None
         task["dependency_warnings"] = warnings
         tasks.append(task)
     return members, all_members, groups, projects, tasks

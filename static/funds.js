@@ -10,10 +10,12 @@ function fundsToast(message, kind) {
   box.textContent = message;
   box.className = 'ux-toast ' + (kind || '');
   clearTimeout(window.__fundsToastTimeout);
-  window.__fundsToastTimeout = setTimeout(function() { box.hidden = true; }, 4200);
+  if(kind!=='error')window.__fundsToastTimeout = setTimeout(function() { box.hidden = true; }, 4200);
+  box.setAttribute('role',kind==='error'?'alert':'status');
   box.hidden = false;
 }
 var API = '/funds/api/records', sort = {by:'record_date',order:'DESC'}, edM, ct=null;
+var chartRequest = 0, chartAbort = null, chartPalette = '', chartDirty = false;
 var ME_NAME = window.XTYF_USER.name, ME_USERNAME = window.XTYF_USER.username;
 var CAN_REVIEW = window.XTYF_USER.canReview;
 
@@ -24,11 +26,23 @@ document.addEventListener('DOMContentLoaded', function(){
   if (CAN_REVIEW) { loadPending(); setInterval(loadPending, 30000); }
   reload(); loadStats();
   document.getElementById('mainTab').addEventListener('shown.bs.tab', function(e){
-    if (e.target.dataset.bsTarget === '#t-charts' && !ct) {
-      loadChart('monthly', document.querySelector('#t-charts .btn-group .active'));
+    if (e.target.dataset.bsTarget === '#t-charts' && (!ct || chartDirty)) {
+      loadChart(ct || 'monthly', document.querySelector('#t-charts .btn-group .active'));
       loadStats();
     }
   });
+});
+
+document.addEventListener('workspace-theme-change', function(){
+  if (!ct || chartPalette === document.documentElement.dataset.palette) return;
+  chartDirty = true;
+  if (document.getElementById('t-charts')?.classList.contains('active')) {
+    loadChart(ct, document.querySelector('#t-charts .btn-group .active'));
+  } else {
+    // An old hidden request must not paint an outdated palette when it completes.
+    chartRequest += 1;
+    chartAbort?.abort();
+  }
 });
 
 function toggleF(){
@@ -65,7 +79,7 @@ function reload(){
     var v = document.getElementById(x.id).value.trim(); if(v) p.append(x.key,v);
   });
   p.append('sort_by',sort.by); p.append('sort_order',sort.order);
-  fetch(API+'?'+p).then(function(r){return r.json()}).then(function(j){
+  BusinessUI.fetch(API+'?'+p).then(function(r){return r.json()}).then(function(j){
     if (!j || j.code !== 0) throw new Error((j && j.msg) || '服务端响应异常');
     var rows = j.data||[];
     document.getElementById('rcnt').textContent = rows.length + ' 条记录';
@@ -105,7 +119,7 @@ async function handleAdd(e){
     d.handler = document.getElementById('aHandler').value.trim();
   }
   try {
-    var r = await fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+    var r = await BusinessUI.fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
     var j = await r.json();
     if(j.code===0){ fundsToast(j.review_status==='待审核' ? '记录已提交，等待财务审核' : '记录已添加','success'); clearF(); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
     else fundsToast(j.msg || '操作失败','error');
@@ -114,7 +128,7 @@ async function handleAdd(e){
 
 async function edR(id){
   try {
-    var r = await fetch(API+'?sort_by=id&sort_order=DESC'), j = await r.json();
+    var r = await BusinessUI.fetch(API+'?sort_by=id&sort_order=DESC'), j = await r.json();
     var d = j.data.find(function(x){return x.id===id});
     if(!d) return fundsToast('记录不存在','error');
     document.getElementById('eId').value=d.id; document.getElementById('eT').value=d.record_type;
@@ -123,7 +137,7 @@ async function edR(id){
     document.getElementById('eInv').value=d.invoice_count||0; document.getElementById('eApl').value=d.applicant||'';
     document.getElementById('eHdl').value=d.handler||''; document.getElementById('eNts').value=d.notes||'';
     edM.show();
-  } catch(e){ fundsToast('记录加载失败','error'); }
+  } catch(e){ fundsToast('记录加载失败：'+e.message,'error'); }
 }
 
 async function saveE(){
@@ -139,17 +153,17 @@ async function saveE(){
     notes: document.getElementById('eNts').value.trim()
   };
   try {
-    var r = await fetch(API+'/'+document.getElementById('eId').value,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+    var r = await BusinessUI.fetch(API+'/'+document.getElementById('eId').value,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
     var j = await r.json();
     if(j.code===0){ edM.hide(); fundsToast('记录已更新，审核状态可能需要重新确认','success'); reload(); loadStats(); }
     else fundsToast(j.msg || '操作失败','error');
-  } catch(e){ fundsToast('保存失败','error'); }
+  } catch(e){ fundsToast('保存失败：'+e.message,'error'); }
 }
 
 async function delR(id){
   if(!confirm('确定永久删除此资金记录？此操作不可撤销。')) return;
   try {
-    var response = await fetch(API+'/'+id,{method:'DELETE'});
+    var response = await BusinessUI.fetch(API+'/'+id,{method:'DELETE'});
     var result = await response.json();
     if (!response.ok || result.code !== 0) throw new Error(result.msg || '服务端拒绝删除');
     fundsToast('记录已删除','success');
@@ -160,17 +174,17 @@ async function delR(id){
 async function reviewRecord(id,version){
   if(!CAN_REVIEW || !confirm('确认审核通过该记录？')) return;
   try{
-    var r = await fetch(API+'/'+id+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:version})});
+    var r = await BusinessUI.fetch(API+'/'+id+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:version})});
     var j = await r.json();
     if(r.status===409){fundsToast(j.msg,'error');reload();return}
     if(j.code===0){ fundsToast('已审核通过','success'); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
     else fundsToast(j.msg||'操作失败','error');
-  }catch(e){ fundsToast('操作失败','error'); }
+  }catch(e){ fundsToast('操作失败：'+e.message,'error'); }
 }
 
 async function loadPending(){
   try{
-    var r = await fetch('/funds/api/pending_review');
+    var r = await BusinessUI.fetch('/funds/api/pending_review');
     var j = await r.json();
     var badge = document.getElementById('fundsPendingBadge');
     if(badge && j.code===0 && j.count>0){ badge.textContent=j.count; badge.style.display=''; }
@@ -179,7 +193,7 @@ async function loadPending(){
 }
 
 function loadStats(){
-  fetch('/funds/api/stats').then(function(response){return response.json()}).then(function(result){
+  BusinessUI.fetch('/funds/api/stats').then(function(response){return response.json()}).then(function(result){
     if(result.code!==0)throw new Error(result.msg||'统计加载失败');
     var d = result.data, cnt = d.record_count;
     document.getElementById('sIn').textContent = '¥'+Money.format(d.total_in);
@@ -201,24 +215,38 @@ function loadStats(){
     if(!d.category_stats.length) h += '<tr><td colspan="2" class="text-muted">暂无数据</td></tr>';
     h += '</table>';
     document.getElementById('sumC').innerHTML = h;
-  }).catch(function(e){ console.error(e); });
+  }).catch(function(e){ fundsToast('统计加载失败：'+e.message,'error'); });
 }
 
 function loadChart(type, btn){
   ct = type;
+  chartDirty = false;
+  chartPalette = document.documentElement.dataset.palette || '';
+  var generation = ++chartRequest;
+  chartAbort?.abort();
+  chartAbort = new AbortController();
   document.querySelectorAll('#t-charts .btn-group .btn').forEach(function(b){ b.classList.remove('active'); });
   if(btn) btn.classList.add('active');
-  fetch('/funds/api/chart?type='+type).then(function(r){return r.json()}).then(function(j){
+  document.getElementById('chartImg').style.display = 'none';
+  document.getElementById('chartEmp').textContent = '正在生成图表…';
+  document.getElementById('chartEmp').style.display = 'block';
+  return BusinessUI.fetch('/funds/api/chart?'+new URLSearchParams({type:type,palette:chartPalette}), {signal:chartAbort.signal}).then(function(r){return r.json()}).then(function(j){
+    if (generation !== chartRequest) return;
     if(j.code===0){
       document.getElementById('chartImg').src = j.data;
       document.getElementById('chartImg').style.display = 'inline';
       document.getElementById('chartEmp').style.display = 'none';
     } else {
-      document.getElementById('chartEmp').innerHTML = '<p>暂无数据或图表生成失败</p>';
+      document.getElementById('chartEmp').textContent = j.msg || '图表加载失败，请重新点击图表类型重试';
       document.getElementById('chartEmp').style.display = 'block';
       document.getElementById('chartImg').style.display = 'none';
     }
-  }).catch(function(e){ console.error(e); });
+  }).catch(function(e){
+    if (generation !== chartRequest) return;
+    document.getElementById('chartEmp').textContent='图表加载失败：'+e.message;
+    document.getElementById('chartEmp').style.display='block';
+    document.getElementById('chartImg').style.display='none';
+  });
 }
 
 function doExport(){
@@ -226,5 +254,12 @@ function doExport(){
   var t = document.getElementById('ft').value, k = document.getElementById('fkw').value.trim();
   if(t) u += 'record_type='+t+'&';
   if(k) u += 'keyword='+encodeURIComponent(k);
-  window.location.href = u;
+  return BusinessUI.download(u, 'funds.csv');
 }
+
+// One in-flight operation per record; restore controls even when transport fails.
+handleAdd = BusinessUI.guard(handleAdd, 'funds-add', '#addF button', text=>fundsToast(text,'error'));
+saveE = BusinessUI.guard(saveE, 'funds-save', '#editMd button', text=>fundsToast(text,'error'));
+delR = BusinessUI.guard(delR, id=>'funds-delete:'+id, id=>document.querySelectorAll(`#tbody button[onclick="delR(${id})"]`), text=>fundsToast(text,'error'));
+reviewRecord = BusinessUI.guard(reviewRecord, id=>'funds-review:'+id, id=>document.querySelectorAll(`#tbody button[onclick^="reviewRecord(${id},"]`), text=>fundsToast(text,'error'));
+edR = BusinessUI.guard(edR, id=>'funds-edit:'+id, id=>document.querySelectorAll(`#tbody button[onclick="edR(${id})"]`), text=>fundsToast(text,'error'));

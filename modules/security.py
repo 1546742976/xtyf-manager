@@ -208,7 +208,7 @@ def init_security(app):
                     item.get("status") == "error" for item in payload["results"] if isinstance(item, dict)
                 ):
                     outcome = "partial"
-                summary = {key: payload[key] for key in ("id", "rel_path", "job_id", "count", "moved", "review_required", "amount", "amount_cents") if key in payload}
+                summary = {key: payload[key] for key in ("id", "topic_id", "message_id", "rel_path", "job_id", "count", "moved", "review_required", "amount", "amount_cents") if key in payload}
                 if isinstance(payload.get("created"), list):
                     summary["created_count"] = len(payload["created"])
                 if summary:

@@ -44,7 +44,8 @@ def current_user():
     if not uid:
         return None
     row = get_db().execute(
-        "SELECT id, name, username, role, group_name, session_version, must_change_password "
+        "SELECT id, name, username, role, group_name, session_version, must_change_password, ui_theme, "
+        "theme_mode, light_theme, dark_theme "
         "FROM members WHERE id = ? AND is_active = 1 AND deleted_at IS NULL",
         (uid,),
     ).fetchone()
@@ -60,7 +61,7 @@ def login_required(view):
         if current_user() is None:
             if "/api/" in request.path:
                 return jsonify(ok=False, error="未登录"), 401
-            return redirect(url_for("login"))
+            return redirect(url_for("login", next=request.full_path.rstrip('?')))
         return view(*args, **kwargs)
     return wrapper
 

@@ -7,14 +7,22 @@
 | `app.py` | Flask 初始化、入口页、登录/退出、初始数据库、导出及基础成员接口 |
 | `common.py` | `PROGRESS_DB`、请求级数据库连接、用户会话与权限装饰器 |
 | `modules/task_api.py` | 任务 API 路由 |
+| `modules/daily_projects.py` / `daily_schema.py` / `static/daily-projects.js` | 独立日常目标、组负责人、组别进度、迁移及工作台摘要 |
+| `modules/email_api.py` / `mail_service.py` / `deploy/mail_worker.py` | 邮箱验证、08:00 个人早报、22:00 团队晚报、持久队列、SMTP 与模拟发送 |
 | `modules/task_schedule.py` / `static/task-schedule.js` | 专业阶段判定、排期预览、快照冲突校验、原子保存及预览交互 |
 | `modules/task_mutations.py` / `task_validation.py` | 任务新增、更新及输入合法性校验 |
 | `modules/task_queries.py` / `task_types.py` | 看板数据组织与共享类型 |
 | `modules/task_delete.py` / `task_revisions.py` | 逻辑删除、字段修订与撤销 |
 | `modules/task_migrations.py` / `task_catalogs.py` | 版本化迁移、两套组别字典及成员关联 |
 | `modules/member_profiles.py` | 个人资料与管理员完整编辑、可恢复成员删除 |
+| `static/task-timeline.js` / `static/task-board.js` | 专业组时间轴、严格日期校验、稳定车组坐标及其他任务视图 |
+| `static/theme-init.js` / `theme.js` / `themes.css` / `apple.css` | 八套主题、跟随系统首屏、账户持久化及共享组件 |
+| `modules/workspace_settings.py` / `static/countdown.js` | 外观迁移、单个首页目标配置与北京时间倒计时 |
+| `modules/task_dates.py` / `static/task-date-defaults.js` | 主前置截止日前两天建议、日期来源与显式重置 |
+| `static/task-center.js` / `task-center.css` / `templates/_daily_projects_content.html` | 统一任务中心双标签与新建弹窗 |
 | `modules/task_attachments.py`、`image_storage.py`、`attachments/` | 截图访问与存储校验 |
-| `modules/discussions.py` | GitHub Issue/Discussion URL 外链 |
+| `modules/discussions.py` | 本地协作话题、消息、未读、撤回与附件接口 |
+| `modules/collaboration_schema.py` / `collaboration_storage.py` | 可重复协作迁移、流式原件存储及安全缩略图 |
 | `modules/funds.py` | 资金、审核资格、统计图表 |
 | `modules/invoices.py` | 发票 PDF/JSON、任务队列、SSE 与权限 |
 | `templates/_workspace_sidebar.html`、`base.html`、`_workspace_top.html` | 统一侧栏及框架 |
