@@ -137,7 +137,7 @@ function toggleOne(id,checked){if(checked)App.selected[id]=true;else delete App.
 function toggleSelectAll(){var c=document.getElementById('selectAll').checked,cbs=document.querySelectorAll('#invoiceTableBody input[type=checkbox]');cbs.forEach(function(cb){var tr=cb.closest('tr');if(!tr)return;var id=tr.getAttribute('data-id');if(!id)return;if(c)App.selected[id]=true;else delete App.selected[id];cb.checked=c});updateBatchBar()}
 function updateBatchBar(){var b=document.getElementById('batchBar'),n=Object.keys(App.selected).length;if(n>0){b.classList.add('show');document.getElementById('batchCount').textContent='已选 '+n+' 张'}else{b.classList.remove('show')}}
 function clearSelection(){App.selected={};updateBatchBar();loadInvoices(App.currentPage)}
-function escHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function escHtml(s){return BusinessUI.escape(s)}
 
 async function doBatchUpdate(){
 var ids=Object.keys(App.selected);if(!ids.length)return;

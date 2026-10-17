@@ -2,7 +2,7 @@
 (() => {
   const host=document.getElementById('daily-editor');if(!host)return;
   const forms=new Map();
-  const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const escape=value=>BusinessUI.escape(value);
   const options=(values,current)=>values.map(value=>`<option ${value===current?'selected':''}>${escape(value)}</option>`).join('');
   function build(project,catalog) {
     const members=catalog.members.filter(member=>member.is_active!==0);

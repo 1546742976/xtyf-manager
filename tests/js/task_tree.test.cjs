@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const root = path.resolve(__dirname, "../..");
 
 function fixture(tasks = []) {
-  const context = { console, setInterval() {}, document: { addEventListener() {} }, location: { href: "" } };
+  const context = { BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, console, setInterval() {}, document: { addEventListener() {} }, location: { href: "" } };
   context.window = context;
   vm.createContext(context);
   for (const script of ["app.js", "task-board.js", "task-tree.js"]) {
@@ -193,7 +193,7 @@ test("rendering a cycle preserves all task identities and warns without hanging"
 });
 
 test("zoom limits remain usable and pointer anchors preserve the same graph coordinate", () => {
-  const context = { console };
+  const context = { BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, console };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(root, "static/task-tree-interactions.js"), "utf8"), context);
   const clamp = vm.runInContext("treeClampZoom", context);

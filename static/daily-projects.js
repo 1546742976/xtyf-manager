@@ -1,6 +1,6 @@
 "use strict";
 (() => {
-  const escape = value => String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const escape = value => BusinessUI.escape(value);
   async function request(url, data) {
     const options = data === undefined ? {} : data instanceof FormData ? {method:'POST',body:data} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)};
     const response = await BusinessUI.fetch(url,options), body = await response.json();

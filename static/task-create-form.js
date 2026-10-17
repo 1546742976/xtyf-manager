@@ -1,7 +1,7 @@
 "use strict";
 (() => {
   const form=document.getElementById('create-form');if(!form)return;
-  const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const escape=value=>BusinessUI.escape(value);
   const selected=name=>[...form.querySelectorAll(`[name="${name}"]:checked`)].map(input=>Number(input.value));
   let data={members:[],projects:[],tasks:[]},loaded=false,saving=false;
   const validateOwner=()=>form.elements.owner_id.setCustomValidity(!form.elements.owner_id.value&&selected('participant_ids').length?'选择参与成员后必须指定负责人':'');

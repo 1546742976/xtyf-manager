@@ -325,6 +325,17 @@ def get_records():
     return jsonify({"code": 0, "data": records})
 
 
+@funds_bp.route("/api/records/<int:rid>", methods=["GET"])
+# ---- 单条记录：编辑时按 ID 取一条，不再整表下载 ----
+def get_record(rid):
+    conn = get_funds_db()
+    row = conn.execute("SELECT * FROM records WHERE id=?", (rid,)).fetchone()
+    conn.close()
+    if row is None:
+        return jsonify({"code": 1, "msg": "记录不存在"}), 404
+    return jsonify({"code": 0, "data": record_payload(row)})
+
+
 @funds_bp.route("/api/records", methods=["POST"])
 # ---- 新增记录：申请人自动填当前登录人；未获审核授权的人添加 → 待审核（审核人自动已审核）----
 def add_record():

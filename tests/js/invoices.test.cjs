@@ -20,7 +20,7 @@ function invoicePage(invoice) {
     return elements.get(id);
   };
   const context = {
-    console, URLSearchParams, encodeURIComponent,
+    BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, console, URLSearchParams, encodeURIComponent,
     setTimeout() {}, clearTimeout() {},
     IS_FINANCE: false, ME_ID: 1, ME_NAME: "测试成员",
     Money: { compare() { return 1; }, format(value) { return value; } },
@@ -30,7 +30,7 @@ function invoicePage(invoice) {
     }) }),
   };
   context.window = context;
-  context.BusinessUI = {fetch: context.fetch};
+  context.BusinessUI = {fetch: context.fetch, escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))};
   vm.createContext(context);
   // Skip app startup (which triggers unrelated stats queries); keep all
   // actual rendering, escaping and openFile functions under test.

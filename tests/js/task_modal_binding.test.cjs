@@ -26,7 +26,7 @@ function fixture() {
   };
   const calls = [];
   const context = {
-    document: {
+    BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, document: {
       getElementById: (id) => (id === 'modal' ? modal : null),
       querySelector(selector) {
         if (selector === '[data-close]') return modalClose;

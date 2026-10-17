@@ -68,7 +68,10 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
     latest_progress: dict[int, JsonObject] = {}
     latest_notes = {int(row['task_id']): (row['note'], row['actor_name']) for row in db.execute(
         "SELECT task_id,note,actor_name FROM task_progress_updates WHERE id IN "
-        "(SELECT MAX(id) FROM task_progress_updates WHERE TRIM(note) <> '' GROUP BY task_id)"
+        "(SELECT MAX(id) FROM task_progress_updates WHERE TRIM(note) <> '' "
+        + ("AND task_id IN (" + ",".join("?" for _ in task_ids) + ") " if task_ids else "")
+        + "GROUP BY task_id)",
+        task_ids,
     )}
     if task_ids:
         placeholders = ",".join("?" for _ in task_ids)
@@ -84,14 +87,15 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
         if updates:
             update_ids = [int(update["id"]) for update in updates]
             image_placeholders = ",".join("?" for _ in update_ids)
+            events_by_id = {int(event["id"]): event for event in latest_progress.values()}
             for image in db.execute(
                 "SELECT progress_update_id,id FROM task_attachments "
                 "WHERE progress_update_id IN (" + image_placeholders + ") AND deleted_at IS NULL "
                 "ORDER BY id", update_ids,
             ).fetchall():
-                for event in latest_progress.values():
-                    if int(event["id"]) == int(image["progress_update_id"]):
-                        event["image_ids"].append(int(image["id"]))
+                event = events_by_id.get(int(image["progress_update_id"]))
+                if event is not None:
+                    event["image_ids"].append(int(image["id"]))
     by_id = {int(row["id"]): dict(row) for row in rows}
     today = datetime.now(timezone(timedelta(hours=8))).date()
     tasks: list[JsonObject] = []

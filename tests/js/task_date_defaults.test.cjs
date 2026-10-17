@@ -7,7 +7,7 @@ const test = require('node:test');
 
 function fixture(saved = false) {
   const tasks = [{id: 1, due_date: '2024-03-02'}, {id: 2, due_date: '2026-01-01'}, {id: 3, due_date: ''}];
-  const context = {queueMicrotask, state: {tasks}};
+  const context = {BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, queueMicrotask, state: {tasks}};
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../static/task-date-defaults.js'), 'utf8'), context);
   const helper = context.TaskDateDefaults;

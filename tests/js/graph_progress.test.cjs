@@ -8,7 +8,7 @@ const root = path.resolve(__dirname, "../..");
 
 function page(scripts) {
   const context = {
-    console, setInterval() {}, document: { addEventListener() {} },
+    BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, console, setInterval() {}, document: { addEventListener() {} },
     location: { href: "" },
   };
   context.window = context;

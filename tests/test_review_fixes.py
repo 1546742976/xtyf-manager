@@ -353,3 +353,15 @@ class TestReviewFixes(unittest.TestCase):
             'tmp_path': admin_tmp, 'month': '2026.10', 'amount': '1.00',
             'allow_duplicate': True})
         self.assertTrue(allowed.get_json()['success'], allowed.get_json())
+
+    def test_single_record_endpoint_returns_money_fields_and_404s(self):
+        record = self.record()
+        rid = record['id']
+        response = self.admin.get(f'/funds/api/records/{rid}')
+        self.assertEqual(response.status_code, 200, response.get_json())
+        data = response.get_json()['data']
+        self.assertEqual(data['id'], rid)
+        self.assertEqual(data['amount'], '5.00')
+        self.assertEqual(data['amount_cents'], '500')
+        self.assertEqual(data['version'], record['version'])
+        self.assertEqual(self.admin.get('/funds/api/records/99999999').status_code, 404)

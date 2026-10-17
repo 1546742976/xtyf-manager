@@ -865,6 +865,43 @@ def _existing_file_hashes():
     return hashes
 
 
+_DEDUPE_CACHE = {'signature': None, 'index': {}, 'hashes': {}}
+
+
+def _invoice_tree_signature():
+    """廉价指纹：元数据文件的 mtime/size 加 PDF 相对路径集合。
+
+    任何上传、移动或整理都会改写元数据，因此签名随之变化；只有原地覆盖文件
+    这种不经过应用的改动不会被发现（正常流程不会发生）。
+    """
+    try:
+        stat = os.stat(META_FILE)
+        meta_part = (int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        meta_part = (0, 0)
+    paths = []
+    for entry in os.listdir(BASE_DIR):
+        entry_path = os.path.join(BASE_DIR, entry)
+        if not os.path.isdir(entry_path) or is_skipped(entry):
+            continue
+        for root, dirs, files in os.walk(entry_path):
+            dirs[:] = [d for d in dirs if not is_skipped(d)]
+            for name in files:
+                if name.lower().endswith('.pdf'):
+                    paths.append(os.path.relpath(os.path.join(root, name), BASE_DIR))
+    return (meta_part, tuple(sorted(paths)))
+
+
+def invoice_dedupe_indexes():
+    """单张上传复用查重索引：命中缓存时不再逐张解析全库 PDF、重算全部 MD5。"""
+    signature = _invoice_tree_signature()
+    if _DEDUPE_CACHE['signature'] != signature:
+        _DEDUPE_CACHE['index'] = _build_invoice_number_index()
+        _DEDUPE_CACHE['hashes'] = _existing_file_hashes()
+        _DEDUPE_CACHE['signature'] = signature
+    return _DEDUPE_CACHE['index'], _DEDUPE_CACHE['hashes']
+
+
 # ---- 查重：按发票号索引 + 文件内容 MD5 双重校验 ----
 def check_duplicates(rel_path, index=None, hashes=None):
     """检查单个文件是否与已有文件重复；可传入预建索引供批量复用。"""
@@ -906,6 +943,10 @@ def duplicate_guard(data, rel_path, index=None, hashes=None):
     allow = data.get('allow_duplicate', False)
     if type(allow) is not bool:
         return jsonify(success=False, error='allow_duplicate 必须是布尔值'), 400
+    if index is None or hashes is None:
+        cached_index, cached_hashes = invoice_dedupe_indexes()
+        index = cached_index if index is None else index
+        hashes = cached_hashes if hashes is None else hashes
     duplicates = check_duplicates(rel_path, index=index, hashes=hashes) or []
     if not duplicates:
         return None
@@ -1523,7 +1564,7 @@ def _organize_impl(progress_cb=None):
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
 
     entries = [e for e in sorted(os.listdir(BASE_DIR))
-               if os.path.isdir(ep := os.path.join(BASE_DIR, e)) and not is_skipped(e)]
+               if os.path.isdir(os.path.join(BASE_DIR, e)) and not is_skipped(e)]
     total_entries = len(entries)
     for idx, entry in enumerate(entries):
         if progress_cb: progress_cb(idx, total_entries, entry)
@@ -1627,7 +1668,6 @@ def _do_delete_dups(jid):
         _update_job(jid, pct, f'处理重复组 {gi + 1}/{total_groups}...')
 
         # 保留第一个，删除其余
-        keep = paths[0]
         for dup_path in paths[1:]:
             fp = os.path.join(BASE_DIR, dup_path)
             try:
@@ -1806,7 +1846,6 @@ def api_upload_confirm():
     if amount is None:
         return jsonify({'success': False, 'error': '金额必须是范围内的非负数，按分四舍五入'}), 400
     vendor = data.get('vendor', '')
-    original_name = data.get('original_name', '')
     invoice_number = data.get('invoice_number', '')
 
     if not tmp_path or not os.path.isfile(tmp_path):

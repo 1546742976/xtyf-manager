@@ -7,7 +7,7 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 const result = (snapshot = "one") => ({ok:true,algorithm_version:2,base_date:"2026-10-16",project:{id:3,name:"哨兵"},
   rows:[{id:1,eligible:true,needs_duration:true},{id:2,eligible:true,needs_duration:true}],task_ids:[1],durations:{1:3},can_apply:true,changed_count:1,errors:[],warnings:[],snapshot});
 function sessions() {
-  const context = {document:{addEventListener(){}}};
+  const context = {BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, document:{addEventListener(){}}};
   vm.createContext(context); vm.runInContext(source("task-schedule.js"), context);
   return context.createScheduleSession;
 }
@@ -100,7 +100,7 @@ test("dialog retries an initial failed preview without a date, but validates a s
     return controls.get(selector);
   }
   const root={querySelector:control,querySelectorAll:()=>[],setAttribute(){}};
-  const context={document:{addEventListener(){},querySelector:()=>root},isManagement:()=>true,
+  const context={BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, document:{addEventListener(){},querySelector:()=>root},isManagement:()=>true,
     showModal:()=>true,hideModal(){},refresh:async()=>{},
     apiRequest:async(url,body)=>{requests.push({url,body});return requests.length===1
       ? {ok:false,error:"offline"} : {...result(),rows:[],task_ids:[],durations:{},can_apply:false,changed_count:0};}};
@@ -120,7 +120,7 @@ function modalFixture() {
   const events={},mask={classList:classes(["hidden"]),events:{},addEventListener(name,fn){this.events[name]=fn;}},button={focus(){}};
   const modal={innerHTML:"",classList:classes(),setAttribute(){},querySelector(){return button;},replaceChildren(){this.innerHTML="";}};
   const document={body:{classList:classes()},activeElement:button,getElementById(id){return {modal,"modal-mask":mask}[id]||null;},addEventListener(name,fn){events[name]=fn;}};
-  const context={document};vm.createContext(context);vm.runInContext(source("ui-dialog.js"),context);events.DOMContentLoaded();
+  const context={BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, document};vm.createContext(context);vm.runInContext(source("ui-dialog.js"),context);events.DOMContentLoaded();
   return {context,modal,mask,events};
 }
 

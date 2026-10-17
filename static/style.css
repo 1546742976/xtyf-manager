@@ -29,23 +29,6 @@ body {
 
 a { color: var(--primary); text-decoration: none; }
 
-/* ===== 顶栏（三个系统统一：品牌 + 导航 + 用户区）===== */
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 18px;
-  background: #0f172a;
-  color: #e2e8f0;
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  flex-wrap: wrap;
-}
-
-.brand { font-weight: 700; font-size: 16px; letter-spacing: .5px; }
-.brand span { color: #7dd3fc; font-weight: 400; }
-
 .nav { display: flex; gap: 4px; flex: 1; }
 .nav a {
   color: #cbd5e1;
@@ -66,11 +49,6 @@ a { color: var(--primary); text-decoration: none; }
   line-height: 1.7;
   vertical-align: middle;
 }
-
-.userbox { display: flex; align-items: center; gap: 8px; }
-.userbox .who { color: #94a3b8; font-size: 13px; }
-.userbox .btn.ghost { color: #fff; border-color: rgba(255, 255, 255, .45); }
-.userbox .btn.ghost:hover { background: rgba(255, 255, 255, .12); border-color: #fff; color: #fff; }
 
 .container { max-width: 1280px; margin: 0 auto; padding: 18px; }
 
@@ -407,15 +385,12 @@ tbody tr:hover { background: #f8fafc; }
   .form-grid { grid-template-columns: 1fr 1fr; }
   .split { grid-template-columns: 1fr; }
   .board { grid-template-columns: 1fr; }
-  .topbar { gap: 10px; padding: 10px 12px; }
   .nav { order: 3; width: 100%; }
-  .userbox { margin-left: auto; }
   .hint { display: none; }
 }
 
 /* UI: 信息层级、键盘焦点、移动端 */
 :root{--bg:#f5f7fc;--border:#dfe7f3;--shadow:0 8px 30px rgba(31,54,91,.06)}
-.topbar{padding:12px clamp(14px,3vw,32px);box-shadow:0 6px 22px rgba(15,23,42,.12)}
 .container{max-width:1480px;padding:clamp(12px,2.5vw,30px)}
 .stat{border-radius:14px;box-shadow:var(--shadow)}
 .task{cursor:pointer;transition:transform .16s,box-shadow .16s}

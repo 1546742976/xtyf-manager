@@ -120,5 +120,11 @@ window.BusinessUI = (() => {
       });
     }));
   });
-  return {fetch:request, action, guard, download, notify, message};
+  // 唯一实现：页面脚本通过 window.BusinessUI.escape 共用。
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (char) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]
+    ));
+  }
+  return {fetch:request, action, guard, download, notify, message, escape: escapeHtml};
 })();

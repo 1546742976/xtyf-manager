@@ -35,7 +35,7 @@ function harness(responses = []) {
     elements.set(id, element);
   }
   const context = {document, Date, console, setInterval(fn) { intervals.push(fn); },
-    BusinessUI:{fetch:async (url, options) => {
+    BusinessUI:{escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])), fetch:async (url, options) => {
       calls.push({url, options});
       const next = responses.shift();
       if (next instanceof Error) throw next;

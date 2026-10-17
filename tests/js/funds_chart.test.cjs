@@ -16,7 +16,7 @@ function setup() {
       addEventListener(name, callback) { listeners[name] = callback; },
       querySelectorAll() { return [button]; }, querySelector() { return button; },
       getElementById(id) { return nodes[id]; }},
-    BusinessUI: {guard(fn) { return fn; }, fetch(url, options) { return new Promise((resolve, reject) => requests.push({url, options, resolve, reject})); }}};
+    BusinessUI: {escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])), guard(fn) { return fn; }, fetch(url, options) { return new Promise((resolve, reject) => requests.push({url, options, resolve, reject})); }}};
   context.window = context;
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../static/funds.js'), 'utf8'), context);

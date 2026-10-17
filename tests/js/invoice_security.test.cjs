@@ -15,13 +15,13 @@ test('invoice row delegates raw paths safely and preview encodes exactly once', 
     status: '未报销', source: '人工确认', submitter: 'member', submitter_id: 2,
     vendor: '<vendor>', invoice_number: '', date: '', category: 'other'};
   let requested, opened;
-  const ctx = {console, URLSearchParams, encodeURIComponent, setTimeout() {}, clearTimeout() {},
+  const ctx = {BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, console, URLSearchParams, encodeURIComponent, setTimeout() {}, clearTimeout() {},
     IS_FINANCE: true, Money: {compare: () => 1, format: value => value},
     document: {getElementById: element}, fetch: async url => {
       requested = url; return {ok: true, json: async () => url.includes('open_file')
         ? {success: false} : {data: [invoice], total: 1, per_page: 50}};
     }};
-  ctx.BusinessUI = {fetch: ctx.fetch};
+  ctx.BusinessUI = {fetch: ctx.fetch, escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))};
   vm.createContext(ctx);
   vm.runInContext(source.slice(0, source.indexOf('// ====== 拖入')), ctx);
   ctx.renderPagination = () => {}; ctx.updateBatchBar = () => {};

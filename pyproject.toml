@@ -1,0 +1,8 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# 正确性基线：语法错误、未定义名称、未使用的导入/变量。先保证这两类，
+# 再逐步扩展到更严格的规则集。
+select = ["E9", "F"]

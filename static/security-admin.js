@@ -5,9 +5,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let nextBefore = null;
   const memberHost = document.getElementById("permission-members");
   const result = document.getElementById("permission-result");
-  const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
+  const escape = (value) => BusinessUI.escape(value);
   async function api(path, data) {
     const response = await BusinessUI.fetch(path, data === undefined ? {} : {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),

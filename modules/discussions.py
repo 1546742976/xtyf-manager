@@ -63,6 +63,23 @@ def snapshot(db):
         raise
 
 
+def topic_rows(db, ids, uid):
+    """一次取回整页话题（含已读位置与未读数），避免每个话题单独查询。"""
+    values = [int(value) for value in ids]
+    if not values:
+        return []
+    placeholders = ','.join('?' for _ in values)
+    return db.execute('''SELECT t.*,
+      COALESCE(r.message_id, 0) AS read_message_id,
+      (SELECT count(*) FROM collaboration_messages m WHERE m.topic_id=t.id) AS message_count,
+      (SELECT count(*) FROM collaboration_messages m WHERE m.topic_id=t.id AND m.withdrawn_at IS NULL
+       AND m.author_id<>? AND m.id>COALESCE(r.message_id,0)) AS unread_count
+      FROM collaboration_topics t
+      LEFT JOIN collaboration_reads r ON r.topic_id=t.id AND r.member_id=?
+      WHERE t.id IN (''' + placeholders + ''')
+      ORDER BY t.last_activity_at DESC, t.id DESC''', (uid, uid, *values)).fetchall()
+
+
 def topic_row(db, tid, uid):
     integer(tid, '话题 ID')
     return db.execute('''SELECT t.*,
@@ -92,17 +109,32 @@ def topic_payload(row, user, now):
                 can_withdraw=can_withdraw(row, user, now, topic=True))
 
 
-def message_payload(db, row, topic, user, now):
+def _attachments_by_message(db, message_ids):
+    """一次取回整页消息的附件，避免每条消息单独查询（列表页曾因此产生 50+ 次查询）。"""
+    grouped = {}
+    ids = [int(value) for value in message_ids]
+    if not ids:
+        return grouped
+    placeholders = ','.join('?' for _ in ids)
+    for row in db.execute('SELECT * FROM collaboration_attachments WHERE message_id IN ('
+                          + placeholders + ') ORDER BY id', ids):
+        grouped.setdefault(int(row['message_id']), []).append(row)
+    return grouped
+
+
+def message_payload(db, row, topic, user, now, attachments=None):
     withdrawn = bool(row['withdrawn_at'] or topic['withdrawn_at'])
-    attachments = []
+    files = []
     if not withdrawn:
-        attachments = [dict(id=a['id'], name=a['original_name'], size=a['size_bytes'],
-                            download_url=f'/discussions/api/attachments/{a["id"]}/download',
-                            thumbnail_url=f'/discussions/api/attachments/{a["id"]}/thumbnail' if a['thumbnail_name'] else None)
-                       for a in db.execute('SELECT * FROM collaboration_attachments WHERE message_id=? ORDER BY id', (row['id'],))]
+        rows = (attachments.get(int(row['id']), []) if attachments is not None
+                else db.execute('SELECT * FROM collaboration_attachments WHERE message_id=? ORDER BY id', (row['id'],)))
+        files = [dict(id=a['id'], name=a['original_name'], size=a['size_bytes'],
+                      download_url=f'/discussions/api/attachments/{a["id"]}/download',
+                      thumbnail_url=f'/discussions/api/attachments/{a["id"]}/thumbnail' if a['thumbnail_name'] else None)
+                 for a in rows]
     return dict(id=row['id'], topic_id=row['topic_id'], author_id=row['author_id'], author_name=row['author_name'],
                 created_at=row['created_at'], body='' if withdrawn else row['body'], withdrawn=withdrawn,
-                can_withdraw=not withdrawn and can_withdraw(row, user, now), attachments=attachments)
+                can_withdraw=not withdrawn and can_withdraw(row, user, now), attachments=files)
 
 
 def committed_payload(db, tid, mid, user, now, duplicate=False):
@@ -152,7 +184,8 @@ def topics():
         total = db.execute('SELECT count(*) FROM collaboration_topics' + condition, params).fetchone()[0]
         ids = db.execute('SELECT id FROM collaboration_topics' + condition + ' ORDER BY last_activity_at DESC,id DESC LIMIT ? OFFSET ?',
                          (*params, TOPIC_PAGE_SIZE, (page - 1) * TOPIC_PAGE_SIZE)).fetchall()
-        result = [topic_payload(topic_row(db, row['id'], user['id']), user, now) for row in ids]
+        result = [topic_payload(row, user, now)
+                  for row in topic_rows(db, [row['id'] for row in ids], user['id'])]
     return jsonify(ok=True, topics=result, total=total, page=page, has_more=page * TOPIC_PAGE_SIZE < total)
 
 
@@ -266,7 +299,8 @@ def messages(tid):
         rows = db.execute('SELECT * FROM collaboration_messages WHERE topic_id=? AND (?=0 OR id<?) ORDER BY id DESC LIMIT ?',
                           (tid, before, before, MESSAGE_PAGE_SIZE + 1)).fetchall()
         selected = list(reversed(rows[:MESSAGE_PAGE_SIZE]))
-        result = [message_payload(db, row, topic, user, now) for row in selected]
+        files = _attachments_by_message(db, [row['id'] for row in selected])
+        result = [message_payload(db, row, topic, user, now, attachments=files) for row in selected]
         cursor = db.execute('SELECT COALESCE(max(id),0) FROM collaboration_changes WHERE topic_id=?', (tid,)).fetchone()[0]
         payload = topic_payload(topic, user, now)
     return jsonify(ok=True, topic=payload, messages=result, has_more=len(rows) > MESSAGE_PAGE_SIZE,
@@ -284,11 +318,20 @@ def changes(tid):
             return fail('话题不存在', 404)
         rows = db.execute('SELECT * FROM collaboration_changes WHERE topic_id=? AND id>? ORDER BY id LIMIT ?',
                           (tid, after, MESSAGE_PAGE_SIZE + 1)).fetchall()
+        page = rows[:MESSAGE_PAGE_SIZE]
+        message_ids = [int(row['message_id']) for row in page if row['message_id']]
+        messages_by_id = {}
+        if message_ids:
+            placeholders = ','.join('?' for _ in message_ids)
+            for message in db.execute('SELECT * FROM collaboration_messages WHERE id IN ('
+                                      + placeholders + ')', message_ids):
+                messages_by_id[int(message['id'])] = message
+        files = _attachments_by_message(db, message_ids)
         events = []
-        for row in rows[:MESSAGE_PAGE_SIZE]:
-            message = db.execute('SELECT * FROM collaboration_messages WHERE id=?', (row['message_id'],)).fetchone() if row['message_id'] else None
+        for row in page:
+            message = messages_by_id.get(int(row['message_id'])) if row['message_id'] else None
             events.append(dict(id=row['id'], kind=row['kind'], message_id=row['message_id'],
-                               message=message_payload(db, message, topic, user, now) if message else None))
+                               message=message_payload(db, message, topic, user, now, attachments=files) if message else None))
         payload = topic_payload(topic, user, now)
     return jsonify(ok=True, topic=payload, events=events, has_more=len(rows) > MESSAGE_PAGE_SIZE,
                    cursor=events[-1]['id'] if events else after)

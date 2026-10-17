@@ -45,7 +45,7 @@ test("timeline axis ignores row filters and other vehicle groups; missing dates 
 });
 function browser(scripts) {
   const context = {
-    console,
+    BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, console,
     setTimeout() {},
     setInterval() {},
     clearTimeout() {},
@@ -359,7 +359,7 @@ test("shared modal afterClose runs only after hide cleanup and restores the curr
   const mask = {classList:classes(['hidden'])};
   const modal = {innerHTML:'',classList:classes(),setAttribute(){},querySelector(){return first;},replaceChildren(){this.innerHTML='';}};
   const document = {activeElement:first,body:{classList:classes()},getElementById:id=>id==='modal'?modal:mask,addEventListener(){}};
-  const context = {document}; vm.createContext(context);
+  const context = {BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, document}; vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(ROOT,'static/ui-dialog.js'),'utf8'),context);
   context.showModal('list','任务',{onClose:()=>cleanup++,afterClose:()=>after++});
   context.showModal('detail','详情',{returnFocus:()=>rebuilt,afterClose:()=>{

@@ -7,7 +7,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from werkzeug.exceptions import BadRequest
-from test_tasks import app_module  # noqa: F401; initializes isolated app/test paths
+from test_tasks import app_module  # noqa: F401  (initializes isolated app/test paths)
 from modules.csv_security import safe_csv_cell
 from modules.funds import (_validated_count, summarize_records, stats_payload,
                            valid_record_date, validate_expense_fields)

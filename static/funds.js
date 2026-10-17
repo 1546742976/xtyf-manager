@@ -1,8 +1,6 @@
 
 function escText(value) {
-  return String(value == null ? '' : value).replace(/[&<>"']/g, function(c) {
-    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-  });
+  return BusinessUI.escape(value);
 }
 function fundsToast(message, kind) {
   var box = document.getElementById('funds-feedback');
@@ -128,9 +126,9 @@ async function handleAdd(e){
 
 async function edR(id){
   try {
-    var r = await BusinessUI.fetch(API+'?sort_by=id&sort_order=DESC'), j = await r.json();
-    var d = j.data.find(function(x){return x.id===id});
-    if(!d) return fundsToast('记录不存在','error');
+    var r = await BusinessUI.fetch(API+'/'+id), j = await r.json();
+    var d = j.code===0 ? j.data : null;
+    if(!d) return fundsToast(j.msg||'记录不存在','error');
     document.getElementById('eId').value=d.id; document.getElementById('eId').dataset.version=d.version; document.getElementById('eT').value=d.record_type;
     document.getElementById('eAmt').value=d.amount; document.getElementById('eCat').value=d.category||'';
     document.getElementById('eSD').value=d.source_dest||''; document.getElementById('eDt').value=d.record_date;

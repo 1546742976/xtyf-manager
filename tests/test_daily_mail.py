@@ -1,7 +1,5 @@
 """Mail tests never contact SMTP; cover binding, content and queue transitions."""
-import hashlib
 import re
-import smtplib
 import unittest
 import sqlite3
 import threading
