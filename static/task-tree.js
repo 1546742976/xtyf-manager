@@ -168,8 +168,8 @@ function treeEdgeLabel(from, to, byId) {
   const parent = byId.get(from), child = byId.get(to);
   const isParent = Number(child.parent_id) === from;
   const isPredecessor = (child.predecessor_ids || []).some((id) => Number(id) === from);
-  if (isParent) return `${parent.title}（父） → ${child.title}（子）${isPredecessor ? "（父子／前置关系）" : ""}`;
-  return `${parent.title}（前置） → ${child.title}（后续）`;
+  if (isParent) return `${parent.title}（主前置） → ${child.title}（后续）${isPredecessor ? "（同时列为其他前置）" : ""}`;
+  return `${parent.title}（其他前置） → ${child.title}（后续）`;
 }
 
 function renderTree(tasks, availableWidth = 1000) {

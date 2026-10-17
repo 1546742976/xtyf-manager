@@ -30,7 +30,7 @@ def delete_task(
     ).fetchone()
     if child or dependent:
         db.rollback()
-        return None, "任务仍有子任务或被其他任务依赖", 409
+        return None, "任务仍被后续任务作为主前置或其他前置依赖", 409
     version = expected + 1
     stamp = now_str()
     try:

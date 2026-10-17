@@ -167,7 +167,7 @@ test("parallel parent/dependency relationships produce one accessible labeled ed
   assert.match(hit, /data-edge-to="2"/);
   assert.match(hit, /data-edge-key=/);
   assert.match(hit, /data-edge-label="[^"]*哨兵[^"]*哨兵视觉/);
-  assert.match(hit, /父子[／/]前置/);
+  assert.match(hit, /同时列为其他前置/);
   assert.match(hit, /tabindex="0"/);
 });
 
@@ -176,9 +176,8 @@ test("edge labels distinguish parenthood from prerequisite relationships and esc
   const tasks = [task(1, { title: dangerous }), task(2, { title: "视觉", parent_id: 1 }), task(3, { title: "联调", predecessor_ids: [2] })];
   const { get } = fixture(tasks);
   const html = get("renderTree")(tasks, 1000);
-  assert.match(html, /（父）/);
-  assert.match(html, /（子）/);
-  assert.match(html, /（前置）/);
+  assert.match(html, /（主前置）/);
+  assert.match(html, /（其他前置）/);
   assert.match(html, /（后续）/);
   assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/);
   assert.doesNotMatch(html, /<img|<script/);
