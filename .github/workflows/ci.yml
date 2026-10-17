@@ -109,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           failures=0
-          for suite in review_fixes pr22_merge task_center daily_mail action_failures login_mobile palette_workspace local_collaboration account_invoice_ui task_schedule; do
+          for suite in review_fixes pr22_merge task_center daily_mail action_failures login_mobile palette_workspace local_collaboration account_invoice_ui task_schedule seven_repairs seven_repairs_review; do
             echo "::group::Browser test: ${suite}"
             if ! node "tests/browser/${suite}.cjs"; then
               echo "::error::Browser suite ${suite} failed"
