@@ -1,6 +1,6 @@
 {
   "name": "巡天御风管理系统",
-  "version": "1.0.9",
-  "versionCode": 11,
+  "version": "1.0.10",
+  "versionCode": 12,
   "serverUrl": "http://manager.skywalker-rm.online"
 }
