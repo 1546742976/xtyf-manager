@@ -7,27 +7,26 @@
   }
   const form=document.getElementById('email-form'),result=document.getElementById('email-result');
   if(form){
+    const codeForm=document.getElementById('email-code-form'),codeResult=document.getElementById('email-code-result');
     let loaded=false;
     const load=async()=>{
       const data=await api('/api/account/email'),email=data.email;
       document.getElementById('email-state').textContent=!data.available?'邮件服务尚未配置，请联系管理员':`${data.mode==='preview'?'模拟模式 · ':''}${email?.address||'尚未绑定邮箱'} · ${email?.verified?'已验证':'未验证'}${email?.paused?' · 管理员已暂停每日提醒':''}`;
+      codeForm.hidden=!email?.pending;
+      document.getElementById('email-code-address').textContent=email?.pending?`验证码已申请发送至 ${email.address}，30 分钟内有效；可在上方重新发送。`:'';
       if(!loaded){form.elements.email.value=email?.address||'';loaded=true;}
     };
     const refresh=()=>BusinessUI.action('email-load',[document.getElementById('email-refresh')],load,text=>{result.textContent=text;});
     document.getElementById('email-refresh').addEventListener('click',refresh);
     form.addEventListener('submit',event=>{event.preventDefault();BusinessUI.action('email-request',form.querySelectorAll('button'),async()=>{
-      const data=await api('/api/account/email/request',{email:form.elements.email.value});result.textContent=data.message;await load();
-    },text=>{result.textContent=text;});});refresh();
-  }
-  const confirm=document.getElementById('email-confirm');
-  if(confirm){
-    const token=new URLSearchParams(location.hash.slice(1)).get('token');
-    confirm.addEventListener('click',()=>BusinessUI.action('email-verify',[confirm],async()=>{
-      // Refresh CSRF after logging in in another tab, without losing the token.
-      await api('/api/csrf');
-      const data=await api('/api/account/email/verify',{token});document.getElementById('email-confirm-result').textContent=data.message;
-      history.replaceState(null,'',location.pathname);confirm.hidden=true;
-    },text=>{document.getElementById('email-confirm-result').textContent=text;}));
+      const data=await api('/api/account/email/request',{email:form.elements.email.value});
+      result.textContent=data.message;codeResult.textContent='';codeForm.elements.code.value='';await load();
+    },text=>{result.textContent=text;});});
+    codeForm.addEventListener('submit',event=>{event.preventDefault();BusinessUI.action('email-verify',codeForm.querySelectorAll('button'),async()=>{
+      const data=await api('/api/account/email/verify',{code:codeForm.elements.code.value.trim()});
+      result.textContent=data.message;codeResult.textContent='';codeForm.elements.code.value='';await load();
+    },text=>{codeResult.textContent=text;});});
+    refresh();
   }
   if(document.getElementById('mail-admin')){
     const result=document.getElementById('mail-result');let page=1;

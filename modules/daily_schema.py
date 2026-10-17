@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS daily_attachments (
 CREATE TABLE IF NOT EXISTS member_email (
  member_id INTEGER PRIMARY KEY REFERENCES members(id), address TEXT NOT NULL,
  verified INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0,
- generation TEXT NOT NULL, token_hash TEXT, expires_at REAL, requested_at REAL NOT NULL
+ generation TEXT NOT NULL, token_hash TEXT, expires_at REAL, requested_at REAL NOT NULL,
+  verify_attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS mail_jobs (
  id INTEGER PRIMARY KEY, member_id INTEGER NOT NULL REFERENCES members(id), kind TEXT NOT NULL,
@@ -54,6 +55,11 @@ def migrate(db):
         if 'completed_at' not in columns:
             # Historical updated_at is not evidence of completion.
             db.execute('ALTER TABLE daily_projects ADD COLUMN completed_at TEXT')
+        email_columns = {row[1] for row in db.execute('PRAGMA table_info(member_email)')}
+        if 'verify_attempts' not in email_columns:
+            db.execute('ALTER TABLE member_email ADD COLUMN verify_attempts INTEGER NOT NULL DEFAULT 0')
+            # Invalidate existing link-based challenges when switching to numeric codes.
+            db.execute('UPDATE member_email SET token_hash=NULL,expires_at=0 WHERE verified=0 AND token_hash IS NOT NULL')
         db.commit()
     except Exception:
         db.rollback()

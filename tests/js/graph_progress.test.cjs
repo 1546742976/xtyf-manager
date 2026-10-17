@@ -35,7 +35,9 @@ test("compact progress card displays percentage and escaped note; images stay in
   assert.match(html, /<span>成员A<\/span>/);
   assert.doesNotMatch(html, /<script>/);
   assert.doesNotMatch(html, /<img/);
-  assert.match(evaluate("taskCard")({...task, latest_progress:null}), /无备注/);
+  const withoutNote = evaluate("taskCard")({...task, latest_progress:null});
+  assert.doesNotMatch(withoutNote, /task-note|无备注/);
+  assert.match(withoutNote, /role="progressbar"/);
 });
 
 test("task note label uses the nonempty note author and escapes names", () => {
@@ -53,7 +55,7 @@ test("task note label uses the nonempty note author and escapes names", () => {
   assert.doesNotMatch(html, /<img|仅更新进度者/);
   const empty = card({ ...task, latest_note: "", latest_note_author: "",
     latest_progress: { actor_name: "旧备注者", note: "旧备注" } });
-  assert.match(empty, /<span>备注<\/span><p>无备注<\/p>/);
+  assert.doesNotMatch(empty, /task-note|无备注/);
   assert.doesNotMatch(empty, /旧备注者|旧备注/);
 });
 

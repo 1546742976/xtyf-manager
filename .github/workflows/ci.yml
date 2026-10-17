@@ -2,9 +2,7 @@ name: CI
 
 on:
   pull_request:
-  push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,6 +31,16 @@ jobs:
             requirements-dev.txt
       - name: Install test dependencies
         run: python -m pip install -r requirements-dev.txt
+      - name: Checkout exact main commit before PR changes
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-main-baseline
+          persist-credentials: false
+      - name: Test migration from main commit with populated SQLite data
+        env:
+          XTYF_UPGRADE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python tests/upgrade_from_main.py
       - name: Python syntax check
         run: python -m compileall -q app.py common.py modules tests deploy
       - name: Invoice correction and PDF preview regression

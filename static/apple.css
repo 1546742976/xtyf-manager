@@ -675,10 +675,12 @@ tbody tr:hover td { background: var(--surface-inset); }
 .task-note { margin: .75rem 0; padding: .6rem .75rem; background: var(--surface-hover); border-radius: 8px; min-width: 0; }
 .task-note > span { display: block; font-size: .75rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .task-note p { margin: .25rem 0 0; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.task-note.is-empty p { color: var(--muted); }
 .lane-actions { display: flex; justify-content: flex-end; align-items: center; padding: 0 12px 12px; min-height: 56px; }
 .lane-actions button { min-width: 44px; min-height: 44px; }
 .lane-actions > span { font-size: .75rem; color: var(--muted); }
+.person-lane .lane-actions { gap: 8px; flex-wrap: wrap; }
+.person-lane .person-finished { border-top: 1px solid var(--border); background: var(--surface-inset); }
+.person-lane .person-finished[hidden] { display: none; }
 #task-create-panel[hidden] { display: none; }
 .permission-member-filter { display: grid; gap: 8px; min-width: 0; margin-block: 16px; }
 .permission-member-filter > input { width: 100%; min-width: 0; box-sizing: border-box; }

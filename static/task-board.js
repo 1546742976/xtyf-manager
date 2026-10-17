@@ -67,7 +67,7 @@ function renderStats() {
       .map(([label, value, cls]) => `<div class="stat ${cls}"><div class="stat-value">${value}</div><div class="stat-label">${label}</div></div>`)
       .join("");
 }
-function taskCard(task, extraClass = "") {
+function taskCard(task, extraClass = "", memberId = null) {
   const note = String(task.latest_note ?? task.latest_progress?.note ?? '').trim();
   const noteAuthor = task.latest_note != null ? task.latest_note_author : task.latest_progress?.actor_name;
   const lead = memberById(task.owner_id);
@@ -76,21 +76,22 @@ function taskCard(task, extraClass = "") {
   const meta = [taskProjectName(task), participants.join("、")].filter(Boolean);
   return `<article class="task ${task.status === "阻塞" ? "is-blocked" : ""} ${isOverdue(task) ? "overdue" : ""} ${isDueSoon(task) ? "is-due-soon" : ""} ${warnings.length ? "has-warning" : ""} ${extraClass}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
     <div class="task-head"><h3>${esc(task.title)}</h3>${badge(task.status, STATUS_CLASS[task.status] || "gray")}</div>
-    <div class="task-meta">${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}${meta.map((value) => `<span>${esc(value)}</span>`).join("")}</div>
+    <div class="task-meta">${memberId == null ? "" : badge(Number(task.owner_id) === Number(memberId) ? "总负责" : "参与任务", Number(task.owner_id) === Number(memberId) ? "blue" : "gray")}${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}${meta.map((value) => `<span>${esc(value)}</span>`).join("")}</div>
     ${warnings.length ? `<p class="task-warning">依赖提醒：${esc(warnings.join("；"))}</p>` : ""}
     ${state.view === "specialty" ? `<p class="task-plan-dates">计划：${esc(task.start_date || "未设开始")} → ${esc(task.due_date || "未设截止")}</p>` : ""}
     <div class="task-progress-heading"><span>任务进度</span><strong>${Math.max(0, Math.min(100, Number(task.progress) || 0))}%</strong></div>
     <div class="progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(task.progress) || 0))}"><div class="progress-inner blue" style="width:${Math.max(0, Math.min(100, Number(task.progress) || 0))}%"></div></div>
-    <div class="task-note ${!note ? 'is-empty' : ''}"><span>${esc(note ? (noteAuthor || '成员') : '备注')}</span><p>${esc(note || '无备注')}</p></div>
+    ${note ? `<div class="task-note"><span>${esc(noteAuthor || "成员")}</span><p>${esc(note)}</p></div>` : ""}
     <div class="task-foot"><span>${badge(daysLeftText(task), daysLeftClass(task))}</span><span>更新 ${esc(task.updated_at)}</span></div>
   </article>`;
 }
 function participantLanes(tasks) {
-  const active = state.members.filter((member) => member.role !== "admin").map((member) => ({
+  const active = state.members.map((member) => ({
     key: `m-${member.id}`,
     title: member.name,
     sub: (member.group_names || [member.group_name]).filter(Boolean).join("、"),
-    tasks: tasks.filter((task) => taskParticipants(task).includes(Number(member.id))),
+    memberId: Number(member.id),
+    tasks: tasks.filter((task) => taskParticipants(task).includes(Number(member.id))).sort((a, b) => compareTaskUrgency(a, b, member.id)),
   }));
   const known = new Set(state.members.map((member) => Number(member.id)));
   const historical = [];
@@ -101,12 +102,12 @@ function participantLanes(tasks) {
   );
   historical.forEach((id) => {
     const member = memberById(id);
-    if (member?.role === "admin") return;
     active.push({
       key: `m-${id}`,
       title: member?.name || `成员 #${id}`,
       sub: "历史成员",
-      tasks: tasks.filter((task) => taskParticipants(task).includes(id)),
+      memberId: id,
+      tasks: tasks.filter((task) => taskParticipants(task).includes(id)).sort((a, b) => compareTaskUrgency(a, b, id)),
     });
   });
   const unassigned = tasks.filter((task) => !taskParticipants(task).length);
@@ -115,32 +116,42 @@ function participantLanes(tasks) {
       key: "unassigned",
       title: "未分配",
       sub: "",
-      tasks: unassigned,
+      memberId: null,
+      tasks: [...unassigned].sort((a, b) => compareTaskUrgency(a, b)),
     });
   return active;
 }
 const expandedPersonLanes = new Set();
+const expandedFinishedLanes = new Set();
+function renderPersonLane(lane) {
+  const closedFilter = state.filters.status === "已完成" || state.filters.status === "已取消";
+  const active = closedFilter ? lane.tasks : lane.tasks.filter((task) => !isFinishedTask(task));
+  const finished = closedFilter ? [] : lane.tasks.filter(isFinishedTask);
+  const expanded = expandedPersonLanes.has(lane.key);
+  const finishedExpanded = expandedFinishedLanes.has(lane.key);
+  const shown = expanded ? active : active.slice(0, 1);
+  const primaryCards = shown.map((task) => taskCard(task, "", lane.memberId)).join("") ||
+    `<p class="empty">${lane.tasks.length ? "暂无未完成任务" : "暂无任务"}</p>`;
+  const additional = active.length > 1 ?
+    `<button class="btn ghost sm" type="button" data-lane-toggle="${esc(lane.key)}" aria-expanded="${expanded}" aria-controls="lane-${esc(lane.key)}">${expanded ? "收起其他任务" : `展开其余 ${active.length - 1} 项`}</button>` : "";
+  const finishedButton = finished.length ?
+    `<button class="btn ghost sm" type="button" data-lane-finished-toggle="${esc(lane.key)}" aria-expanded="${finishedExpanded}" aria-controls="lane-finished-${esc(lane.key)}">${finishedExpanded ? "收起已完成/取消任务" : `查看已完成/取消 ${finished.length} 项`}</button>` : "";
+  return `<section class="lane person-lane ${lane.key === "unassigned" ? "unassigned-lane" : ""}"><header class="lane-head"><h2>${esc(lane.title)}</h2>${lane.sub ? `<span class="lane-sub">${esc(lane.sub)}</span>` : ""}<span class="lane-count">${new Set(lane.tasks.map((task) => task.id)).size}</span></header><div class="lane-body" id="lane-${esc(lane.key)}">${primaryCards}</div>${finished.length ? `<div class="lane-body person-finished" id="lane-finished-${esc(lane.key)}" ${finishedExpanded ? "" : "hidden"}>${finishedExpanded ? finished.map((task) => taskCard(task, "", lane.memberId)).join("") : ""}</div>` : ""}<footer class="lane-actions">${additional}${finishedButton}${!additional && !finishedButton ? "<span>已显示全部任务</span>" : ""}</footer></section>`;
+}
 function renderLanes(tasks) {
-  const lanes =
-    state.view === "specialty" ? specialtyLanes(tasks) : state.view === "person"
-      ? participantLanes(tasks)
-      : state.statuses.map((status) => ({
-          key: `s-${status}`,
-          title: status,
-          sub: "",
-          tasks: tasks.filter((task) => task.status === status),
-        }));
+  const lanes = state.view === "specialty" ? specialtyLanes(tasks) : state.view === "person"
+    ? participantLanes(tasks)
+    : state.statuses.map((status) => ({
+        key: `s-${status}`,
+        title: status,
+        sub: "",
+        tasks: tasks.filter((task) => task.status === status),
+      }));
   const filtering = Object.values(state.filters).some(Boolean);
   const visible = filtering && state.view !== "specialty" ? lanes.filter((lane) => lane.tasks.length) : lanes;
-  return (
-    visible.map((lane) => {
-      const person = state.view === 'person';
-      const expanded = expandedPersonLanes.has(lane.key);
-      const shown = person && !expanded ? lane.tasks.slice(0, 1) : lane.tasks;
-      return `<section class="lane ${person ? 'person-lane' : ''} ${lane.key === "unassigned" ? "unassigned-lane" : ""}"><header class="lane-head"><h2>${esc(lane.title)}</h2>${lane.sub ? `<span class="lane-sub">${esc(lane.sub)}</span>` : ""}<span class="lane-count">${new Set(lane.tasks.map((task) => task.id)).size}</span></header><div class="lane-body" id="lane-${esc(lane.key)}">${shown.map((task) => taskCard(task)).join("") || '<p class="empty">暂无任务</p>'}</div>${person ? `<footer class="lane-actions">${lane.tasks.length > 1 ? `<button class="btn ghost sm" type="button" data-lane-toggle="${esc(lane.key)}" aria-expanded="${expanded}" aria-controls="lane-${esc(lane.key)}">${expanded ? '收起任务' : `展开其余 ${lane.tasks.length - 1} 项`}</button>` : '<span>已显示全部任务</span>'}</footer>` : ''}</section>`;
-    })
-      .join("") || '<p class="empty">没有符合条件的任务</p>'
-  );
+  return visible.map((lane) => state.view === "person" ? renderPersonLane(lane) :
+    `<section class="lane"><header class="lane-head"><h2>${esc(lane.title)}</h2><span class="lane-count">${new Set(lane.tasks.map((task) => task.id)).size}</span></header><div class="lane-body" id="lane-${esc(lane.key)}">${lane.tasks.map((task) => taskCard(task)).join("") || '<p class="empty">暂无任务</p>'}</div></section>`).join("") ||
+    '<p class="empty">没有符合条件的任务</p>';
 }
 function fillBoardFilters() {
   state.filters.project = activeCatalogFilter(state.projects, state.filters.project);
@@ -170,10 +181,12 @@ function renderBoard() {
   target.classList.toggle("timeline-board", state.view === "specialty");
   const focused = target.contains(document.activeElement) ? document.activeElement : null;
   const focusLane = focused?.dataset.laneToggle;
+  const focusFinished = focused?.dataset.laneFinishedToggle;
   const focusTask = focused?.dataset.taskId;
   target.innerHTML = state.view === "tree" ? renderTree(tasks)
     : state.view === "specialty" ? renderSpecialtyTimeline(tasks) : renderLanes(tasks);
   if (focusLane) target.querySelector(`[data-lane-toggle="${CSS.escape(focusLane)}"]`)?.focus({preventScroll: true});
+  else if (focusFinished) target.querySelector(`[data-lane-finished-toggle="${CSS.escape(focusFinished)}"]`)?.focus({preventScroll: true});
   else if (focusTask) target.querySelector(`[data-task-id="${Number(focusTask)}"]`)?.focus({preventScroll: true});
   document.getElementById("match-count").textContent = `${new Set(tasks.map((task) => task.id)).size} 个匹配任务`;
 }
@@ -210,6 +223,13 @@ function bindBoard() {
     if (laneToggle) {
       const key = laneToggle.dataset.laneToggle;
       expandedPersonLanes.has(key) ? expandedPersonLanes.delete(key) : expandedPersonLanes.add(key);
+      renderBoard();
+      return;
+    }
+    const finishedToggle = event.target.closest("[data-lane-finished-toggle]");
+    if (finishedToggle) {
+      const key = finishedToggle.dataset.laneFinishedToggle;
+      expandedFinishedLanes.has(key) ? expandedFinishedLanes.delete(key) : expandedFinishedLanes.add(key);
       renderBoard();
       return;
     }

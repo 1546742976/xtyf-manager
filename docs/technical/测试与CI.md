@@ -17,10 +17,19 @@ node --test tests/js/*.test.cjs
 
 ## 自动检查
 
-.github/workflows/ci.yml 在提交任意 PR、向 main 推送及手工 workflow_dispatch 时运行。
+.github/workflows/ci.yml **仅在目标分支为 main 的 PR 创建或更新时运行**；直接推送、提交或合并到 main 不会触发该工作流，也不再自动响应 workflow_dispatch。
 Python 使用 Ubuntu/Windows 双平台矩阵，JavaScript 使用独立 job，任何 job 失败即 CI 失败。
 Python 使用分支覆盖率统计，结果写入 Actions Summary，并上传 coverage.xml Artifact。
 Artifact 名称按系统区分，覆盖率门槛继续保持 65%。
+
+### PR 中的真实旧版本升级测试
+
+Python 两个平台都会额外在 `.ci-main-baseline/` 检出 **`github.event.pull_request.base.sha`**（PR 提交时 main 的精确 commit，而非当前开发分支的模拟结构），再执行 `python tests/upgrade_from_main.py`。
+
+测试先在该 main 快照中真正导入旧 `app.py` 初始化隔离的 SQLite 数据库，写入已验证且暂停的邮箱、未验证且有待处理验证码/旧链接的邮箱、发送中队列及既有团队项目；之后切换到当前 PR 的 `app.py`，在**同一数据库文件和密钥**上升级。核查 schema、收件人状态、已发送去重记录、未完成挑战、老验证链接失效（升级到六位码时）、新验证码 API 操作、数据库完整性和重复启动迁移的幂等性。
+
+如果 main 已经支持六位数字验证码，测试改为验证旧有效验证码在升级后继续保留；这使得测试可以用于以后的 PR，不必一直假定 main 是链接验证时代的旧版本。整个过程不会发送真实 SMTP 邮件，也不会触碰线上服务器或生产数据库。此步骤只在 PR 检查中执行，不会在本地常规 unittest discover 时自行运行。
+
 
 ## 本轮缺陷回归与浏览器检查
 

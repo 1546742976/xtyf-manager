@@ -30,13 +30,20 @@ class WorkspaceChanges(unittest.TestCase):
             self.assertEqual(client.get('/manage').status_code,200)
             self.assertNotIn('id="create-form"',client.get('/manage').get_data(as_text=True))
 
-    def test_admin_cannot_be_new_owner_or_participant(self):
-        for body in ({'owner_id':1},{'owner_id':self.ids['member'],'participant_ids':[1]}):
-            response=self.admin.post('/api/task',json={'title':'invalid',**body})
-            self.assertEqual(response.status_code,400)
-        task=self.admin.post('/api/task',json={'title':'valid','owner_id':self.ids['member']}).get_json()
-        response=self.admin.post(f"/api/task/{task['id']}",json={'version':task['version'],'participant_ids':[1]})
-        self.assertEqual(response.status_code,400)
+    def test_admin_can_be_new_owner_or_participant(self):
+        admin_id = self.admin.get('/api/account/profile').get_json()['profile']['id']
+        for body in ({'owner_id': admin_id},
+                     {'owner_id': self.ids['member'], 'participant_ids': [admin_id]}):
+            response = self.admin.post('/api/task', json={'title': 'assigned', **body})
+            self.assertEqual(response.status_code, 200, response.get_json())
+        task = self.admin.post('/api/task', json={
+            'title': 'editable', 'owner_id': self.ids['member']}).get_json()
+        response = self.admin.post(f"/api/task/{task['id']}", json={
+            'version': task['version'], 'participant_ids': [admin_id]})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        updated = next(item for item in self.admin.get('/api/data').get_json()['tasks']
+                       if item['id'] == task['id'])
+        self.assertIn(admin_id, updated['participant_ids'])
 
     def test_latest_note_ignores_blank_progress_events(self):
         task=self.admin.post('/api/task',json={'title':'notes','owner_id':self.ids['member']}).get_json()
