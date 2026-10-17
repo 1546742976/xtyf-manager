@@ -35,4 +35,5 @@ clients/android/build/
 clients/signing/
 clients/desktop/node_modules/
 clients/desktop/target/
+clients/desktop/gen/schemas/
 clients/frontend/dist/
