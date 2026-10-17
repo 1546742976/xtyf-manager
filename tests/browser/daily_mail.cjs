@@ -43,6 +43,8 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.setViewportSize({width:1280,height:900});await page.goto(base+'/account');
     const mailPanel=page.locator('section').filter({has:page.locator('#email-form')});
     assert.match(await mailPanel.textContent(),/08:00.*个人未完成任务早报.*22:00/);
+    // Initial account loading populates the input; wait before entering a new address.
+    await page.locator('#email-state').filter({hasText:'模拟模式'}).waitFor();
     await page.locator('#email-address').fill('browser@example.com');await page.locator('#email-form button').click();await page.locator('#email-result').filter({hasText:'模拟模式'}).waitFor();
     const query=spawnSync(python,['-c',"import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); print(db.execute('SELECT generation FROM member_email WHERE member_id=1').fetchone()[0])",path.join(testRoot,'data.db')],{encoding:'utf8'});assert.equal(query.status,0,query.stderr);
     const digest=crypto.createHmac('sha256',fs.readFileSync(path.join(testRoot,'secret.key'),'utf8').trim()).update('email-code:'+query.stdout.trim()).digest();

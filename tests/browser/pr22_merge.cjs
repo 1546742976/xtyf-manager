@@ -57,7 +57,7 @@ async function login(page, base, username, password, firstLogin=true) {
     assert.equal(blocked.ok,true);assert.equal(overdue.ok,true);
     // The sidebar shortcut works away from account settings and rolls back failed saves.
     await page.goto(base+'/manage');
-    const shortcut=page.locator('[data-theme-toggle]');
+    const shortcut=page.locator('#workspace-sidebar [data-theme-toggle]');
     await page.route('**/api/account/preferences',route=>route.fulfill({status:503,json:{ok:false,error:'模拟保存失败'}}));
     await shortcut.click();
     await page.locator('#sidebar-theme-result').filter({hasText:'已恢复原主题'}).waitFor();

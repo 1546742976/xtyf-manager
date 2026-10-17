@@ -267,8 +267,8 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     }
     checks.push('dashboard daily block below work hints on right at 1280/1606; no overflow at seven widths');
 
-    // The homepage must sort team-wide work (not just "my tasks" first), using the
-    // same deadline/status/priority weights but a +4 team responsibility baseline.
+    // The homepage puts owned and participating tasks first, then sorts each group
+    // by urgency with the same weights and a +4 team responsibility baseline.
     const homeRanking = await page.evaluate(() => {
       const self = Number(state.me.id);
       state.tasks = [
@@ -291,12 +291,12 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
         ownScore: taskUrgencyScore(state.tasks[0],self,DASHBOARD_TEAM_TASK_WEIGHT),
       };
     });
-    assert.deepEqual(homeRanking.ids,[8107,8105,8106,8102,8104,8103,8101]);
+    assert.deepEqual(homeRanking.ids,[8105,8106,8102,8101,8107,8104,8103]);
     assert.match(homeRanking.summary,/团队任务/);
     assert.equal(homeRanking.teamScore,64);
     assert.equal(homeRanking.participantScore,68);
     assert.equal(homeRanking.ownScore,56);
-    checks.push('homepage ranks team tasks +4 vs participant +8, owner +28; excludes completed work');
+    checks.push('homepage puts personal tasks first, ranks each group by urgency (+4 team, +8 participant, +28 owner); excludes completed work');
 
     if(process.env.REVIEW_WEBKIT_PATH) {
       phoneBrowser=await webkit.launch({headless:true,executablePath:process.env.REVIEW_WEBKIT_PATH});
