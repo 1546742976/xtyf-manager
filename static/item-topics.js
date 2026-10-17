@@ -1,6 +1,6 @@
 "use strict";
 (() => {
-  const mounts=new Set(), safe=value=>BusinessUI.escape(value);
+  const mounts=new Set(), safe=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   async function request(url,body){
     const response=await BusinessUI.fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'读取失败');return data;

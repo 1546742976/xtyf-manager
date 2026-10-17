@@ -1,7 +1,7 @@
 "use strict";
 (() => {
   const form=document.getElementById('alert-filters');if(!form)return;
-  const labels={blocked:'阻塞',overdue:'已逾期',unassigned:'缺少负责人',stale:'超过48小时未更新'},escape=BusinessUI.escape;
+  const labels={blocked:'阻塞',overdue:'已逾期',unassigned:'缺少负责人',stale:'超过48小时未更新'},escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const feedback=document.getElementById('alert-feedback'), prev=document.getElementById('alert-prev'), next=document.getElementById('alert-next');
   let page=1,busy=false;
   async function get(url){const response=await BusinessUI.fetch(url),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'读取失败');return data;}

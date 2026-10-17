@@ -37,6 +37,9 @@ async function login(page,base,first){
       await page.locator('#task-topic-links [data-conclusion-choice]').selectOption(String(topic.message_id));await page.locator('#task-topic-links [data-save-conclusion]').click();
       await page.locator('#task-topic-links [data-conclusion]').filter({hasText:'结论 <img'}).waitFor();
       assert.equal(await page.locator('#task-topic-links img').count(),0);
+      const linkedVersion=(await api(page,'/api/task/'+task.id+'/topics')).body.version;
+      assert.equal(Number(await page.locator('#progress-form [name=version]').inputValue()),linkedVersion);
+      assert.equal(Number(await page.locator('#task-form [name=version]').inputValue()),linkedVersion);
       await post(page,`/discussions/api/messages/${topic.message_id}/withdraw`,{});
       await page.locator('#task-topic-links [data-conclusion]').filter({hasText:'结论已撤回'}).waitFor();
       await page.goto(base+'/discussions?topic='+topic.topic_id);await page.locator('#topic-backlinks a').filter({hasText:name+' 阻塞任务'}).waitFor();
