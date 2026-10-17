@@ -130,7 +130,11 @@ function schedulePreviewRows(rows, draft = {}) {
 function scheduleProblemList(items, title, warning = false) {
   if (!items?.length) return "";
   return '<section class="warning-box schedule-problems ' + (warning ? "schedule-warnings" : "") + '" aria-label="' + title + '"><strong>' + title + '</strong><ul>' +
-    items.map((item) => '<li>' + (item.task_id ? '<button class="schedule-problem-link" type="button" data-schedule-focus="' + Number(item.task_id) + '">任务 #' + Number(item.task_id) + '</button>：' : "") + esc(item.message || item) + '</li>').join("") + '</ul></section>';
+    items.map((item) => {
+      const external = (item.related_tasks || []).filter(task => task.external).map(task =>
+        '<div>外部参考：<a href="/tasks?task=' + Number(task.id) + '" target="_blank" rel="noopener">#' + Number(task.id) + ' ' + esc(task.title) + '</a> · ' + esc(task.project_name) + ' · ' + esc(task.start_date) + ' 至 ' + esc(task.due_date) + '（不在本次调整范围）</div>').join("");
+      return '<li>' + (item.task_id ? '<button class="schedule-problem-link" type="button" data-schedule-focus="' + Number(item.task_id) + '">任务 #' + Number(item.task_id) + '</button>：' : "") + esc(item.message || item) + external + '</li>';
+    }).join("") + '</ul></section>';
 }
 
 async function openSchedulePreview(projectId) {
@@ -143,7 +147,7 @@ async function openSchedulePreview(projectId) {
   let root;
   const session = createScheduleSession(projectKey, apiRequest, update, refresh);
   const opened = showModal('<div data-schedule-root class="schedule-shell"><header class="modal-head schedule-head"><div><p class="ux-eyebrow">TEAM / SCHEDULE</p><h2>整组排期预览</h2></div><button class="btn ghost sm" type="button" data-schedule-close>关闭</button></header>' +
-    '<div class="schedule-scroll"><p class="ux-note">按所有前置依赖计算，允许提前 2 个日历日衔接，且不早于前置开始日；默认只顺延。范围包含整组任务，不受列表筛选影响。进行中和固定日期的任务默认受保护；确认后保存日期，不持续自动联动。</p>' +
+    '<div class="schedule-scroll"><p class="ux-note">按所有前置依赖计算，允许提前 2 个日历日衔接，且不早于前置开始日；默认只顺延。范围包含整组任务，不受列表筛选影响。进行中和固定日期的任务默认受保护；确认后保存日期，不持续自动联动。同一负责人跨车组及未归属车组任务的日期重叠仅提醒，外部任务不在本次调整范围。</p>' +
     '<div class="schedule-controls"><label>基准日期<input type="date" id="schedule-base-date" required></label><p id="schedule-summary" class="schedule-summary" role="status">正在读取整组任务…</p></div>' +
     '<p id="schedule-stale" class="schedule-stale hidden" role="status">选项已修改，下方仍为上次预览；请更新预览。</p><div id="schedule-body"><p class="empty">正在生成预览…</p></div></div>' +
     '<footer class="schedule-footer"><p id="schedule-feedback" class="form-message" role="status" aria-live="polite"></p><div class="modal-actions"><button class="btn" type="button" id="schedule-repreview">更新预览</button><button class="btn primary" type="button" id="schedule-apply" disabled>确认应用排期</button></div></footer></div>', "整组排期预览", {

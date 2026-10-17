@@ -121,7 +121,7 @@ class TestTaskSchedule(unittest.TestCase):
     def test_fixed_and_in_progress_are_protected_but_explicitly_adjustable(self):
         fixed = self.task(self.mechanical, schedule_locked=True)
         active = self.task(self.electrical, status='进行中')
-        ordinary = self.task(self.vision, status='阻塞')
+        ordinary = self.task(self.vision, status='阻塞', blocker_reason='等待联调设备', blocker_next_action='借用设备后继续联调')
         completed = self.task(status='已完成')
         cancelled = self.task(status='已取消')
         preview = self.preview(base_date='2026-10-20')

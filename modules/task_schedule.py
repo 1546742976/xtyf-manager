@@ -50,7 +50,7 @@ def _load(db: sqlite3.Connection, project_id: int) -> dict:
     catalog = {row["id"]: dict(row) for row in db.execute(
         "SELECT t.id,t.title,t.owner_id,t.project_id,t.parent_id,t.status,t.start_date,t.due_date,"
         "t.completed_at,t.start_date_origin,t.schedule_stage,t.schedule_locked,t.version,t.deleted_at,"
-        "p.deleted_at AS project_deleted_at FROM tasks t LEFT JOIN projects p ON p.id=t.project_id ORDER BY t.id"
+        "p.name AS project_name,p.deleted_at AS project_deleted_at FROM tasks t LEFT JOIN projects p ON p.id=t.project_id ORDER BY t.id"
     )}
     edges: dict[int, set[int]] = {}
     for task_id, predecessor_id in db.execute("SELECT task_id,predecessor_id FROM task_dependencies ORDER BY task_id,predecessor_id"):
@@ -66,6 +66,14 @@ def _load(db: sqlite3.Connection, project_id: int) -> dict:
             relevant.add(task_id)
             pending.extend(edges.get(task_id, ()))
     tasks = [catalog[tid] for tid in sorted(relevant) if tid in catalog]
+    local_owners = {catalog[tid]["owner_id"] for tid in local_ids
+                    if catalog[tid]["status"] in SCHEDULE_STATUSES and catalog[tid]["owner_id"] is not None}
+    # Include every active external task for these owners, even if it does not
+    # overlap yet. A new assignment or changed date must invalidate the preview.
+    # Keep these separate from ancestors: they supply workload warnings only.
+    owner_tasks = [task for task in catalog.values()
+                   if task["project_id"] != project_id and task["deleted_at"] is None
+                   and task["status"] in SCHEDULE_STATUSES and task["owner_id"] in local_owners]
     owners = [dict(row) for row in db.execute(
         "SELECT DISTINCT m.id,m.name,m.is_active,m.deleted_at FROM members m "
         "JOIN tasks t ON t.owner_id=m.id WHERE t.project_id=? AND t.deleted_at IS NULL ORDER BY m.id", (project_id,)
@@ -77,7 +85,7 @@ def _load(db: sqlite3.Connection, project_id: int) -> dict:
     )]
     return {"project": dict(project), "tasks": tasks, "local_ids": local_ids,
             "dependencies": {str(tid): sorted(edges.get(tid, ())) for tid in sorted(relevant)},
-            "owners": owners, "memberships": memberships}
+            "owners": owners, "memberships": memberships, "owner_tasks": owner_tasks}
 
 
 def _digest(source: dict) -> str:
@@ -274,16 +282,28 @@ def _plan(source: dict, request: object) -> dict:
     for row in rows.values():
         if row["eligible"] and row["owner_id"] is not None:
             owner_rows.setdefault(row["owner_id"], []).append(row)
+    for task in source["owner_tasks"]:
+        owner_rows.setdefault(task["owner_id"], []).append({**task,
+            "after": {key: task[key] for key in ("start_date", "due_date")}})
     for peers in owner_rows.values():
         for index, left in enumerate(peers):
+            if left["id"] not in rows:
+                continue
             a, b = (_date(left["after"][key]) for key in ("start_date", "due_date"))
             if a is None or b is None or a > b:
                 continue
             for right in peers[index + 1:]:
                 c, d = (_date(right["after"][key]) for key in ("start_date", "due_date"))
                 if c and d and c <= d and max(a, c) <= min(b, d):
-                    warning(left["id"], f"同一负责人任务 #{left['id']} 与 #{right['id']} 日期重叠，请核对工作量",
-                            related_task_ids=[left["id"], right["id"]])
+                    overlap_start, overlap_end = max(a, c).isoformat(), min(b, d).isoformat()
+                    related = [{"id": item["id"], "title": item["title"], "project_id": item["project_id"],
+                                "project_name": item["project_name"] or "未归属造车组别",
+                                "external": item["id"] not in rows, **item["after"]} for item in (left, right)]
+                    warning(left["id"], f"同一负责人任务 #{left['id']} 与 #{right['id']} 日期重叠"
+                            f"（{overlap_start} 至 {overlap_end}，含首尾），请核对工作量",
+                            kind="owner_overlap", owner_id=left["owner_id"],
+                            related_task_ids=[left["id"], right["id"]], related_tasks=related,
+                            overlap_start=overlap_start, overlap_end=overlap_end)
     result_rows = [rows[tid] for tid in ordered if tid in rows] + [rows[tid] for tid in sorted(rows) if indegrees[tid]]
     changed = sum(row["before"] != row["after"] for row in rows.values() if row["selected"])
     return {"algorithm_version": ALGORITHM_VERSION,
@@ -321,7 +341,7 @@ def apply_schedule(db: sqlite3.Connection, actor: dict, project_id: int, snapsho
     try:
         source = _load(db, project_id)
         if expected.get("digest") != _digest(source):
-            raise ScheduleError("任务、前置或负责人信息已变化，请重新预览；本次未保存任何调整", 409)
+            raise ScheduleError("任务、前置或负责人跨车组任务信息已变化，请重新预览；本次未保存任何调整", 409)
         result = _plan(source, expected.get("parameters"))
         if not result["can_apply"]:
             raise ScheduleError("排期条件不完整，请重新预览")
