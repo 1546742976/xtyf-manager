@@ -39,7 +39,7 @@ from datetime import datetime
 from decimal import Decimal
 from functools import wraps
 from flask import (Blueprint, Response, g, has_request_context, jsonify, redirect, request, render_template,
-                   send_file, send_from_directory, stream_with_context)
+                   send_file, stream_with_context)
 from urllib.parse import quote
 
 from common import ROLE_NAMES, current_user, get_db
@@ -620,14 +620,6 @@ def resolve_amount(inv, use_cache=True):
 
 
 # ===================== 文件夹管理 =====================
-
-def get_month_folder(month):
-    return os.path.join(BASE_DIR, month)
-
-
-def get_status_folder(month, status):
-    return os.path.join(BASE_DIR, month, status)
-
 
 # ---- 预创建 月份/状态 目录骨架 ----
 def build_folder_structure():
@@ -2131,18 +2123,6 @@ def api_export_zip():
     except BaseException:
         out.close()
         raise
-
-
-# ===================== 前端 HTML =====================
-
-# ==================== 前端整页 HTML（内嵌 CSS/JS；/*__APP_CONFIG__*/ 为角色注入点）====================
-def create_index_html():
-    """从独立 HTML 文件读取前端，保留角色配置注入。"""
-    html_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                             "templates", "invoices.html")
-    with open(html_path, encoding="utf-8") as file:
-        return file.read()
-
 
 
 # ===================== 集成适配 =====================

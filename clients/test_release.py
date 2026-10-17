@@ -1,7 +1,6 @@
 """Release lifecycle tests use fake builders and isolated files, never production artifacts."""
 import importlib.util
 import hashlib
-import json
 from pathlib import Path
 import subprocess
 import tempfile

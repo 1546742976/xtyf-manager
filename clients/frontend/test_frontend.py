@@ -3,7 +3,6 @@ import hashlib
 import html
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
@@ -11,7 +10,7 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from build_frontend import SOURCE,build,adapt_template,adapt_script
+from build_frontend import build,adapt_template,adapt_script
 from jinja2 import DictLoader,Environment
 
 

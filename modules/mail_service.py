@@ -2,10 +2,8 @@
 import hashlib
 import hmac
 import os
-import secrets
 import smtplib
 import ssl
-import time
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.policy import SMTP

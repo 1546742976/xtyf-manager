@@ -138,7 +138,6 @@ function toggleSelectAll(){var c=document.getElementById('selectAll').checked,cb
 function updateBatchBar(){var b=document.getElementById('batchBar'),n=Object.keys(App.selected).length;if(n>0){b.classList.add('show');document.getElementById('batchCount').textContent='已选 '+n+' 张'}else{b.classList.remove('show')}}
 function clearSelection(){App.selected={};updateBatchBar();loadInvoices(App.currentPage)}
 function escHtml(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-function jsEscape(s){return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\n/g,'\\n').replace(/\r/g,'')}
 
 async function doBatchUpdate(){
 var ids=Object.keys(App.selected);if(!ids.length)return;
