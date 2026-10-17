@@ -71,11 +71,13 @@ async function login(page,base,first){
       assert.equal(await b.locator('[name=note]').inputValue(),'');
       await page.locator('#daily-edit').click();await page.locator('#task-create-panel[aria-busy="false"] #daily-form').waitFor();
       await page.locator('#daily-form [name=status]').selectOption('进行中');await page.locator(`[name=reopen-${stages[0]}]`).fill('60');await page.locator('#daily-form [type=submit]').click();await page.locator('#task-create-panel').waitFor({state:'hidden'});
+      await page.waitForFunction(stage=>document.querySelector(`[data-progress-form="${stage}"] [name=progress]`)?.value==='60',stages[0]);
       project=(await api(page,'/api/daily-projects/'+pid)).body.project;assert.equal(project.status,'进行中');assert.equal(project.groups.find(g=>g.stage===stages[0]).progress,60);
       await page.locator('#daily-blocker-form [name=blocker_reason]').fill('需要联调');await page.locator('#daily-blocker-form [name=blocker_next_action]').fill('安排时间');await page.locator('#daily-blocker-form [type=submit]').click();await page.locator('#daily-blocker-form [data-resolve-blocker]').waitFor();
       await page.locator('#daily-blocker-form [name=blocker_result]').fill('已排定联调');await page.locator('#daily-blocker-form [data-resolve-blocker]').click();await page.locator('#daily-blocker-form [data-resolve-blocker]').waitFor({state:'detached'});
       await page.screenshot({path:path.join(output,name+'-daily.png'),fullPage:true});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+      assert.equal(await page.evaluate(()=>[...document.querySelectorAll('#daily-blocker-form label')].every(label=>{const control=label.querySelector('textarea,input,select'),outer=label.getBoundingClientRect(),inner=control.getBoundingClientRect();return getComputedStyle(label).display==='grid'&&inner.width>0&&inner.height>=44&&inner.left>=outer.left-1&&inner.right<=outer.right+1;})),true);
       checks.push(name+': dynamic group creation, independent drafts, final completion, specified group reopen, blocker cycle');
       await browser.close();browser=null;
     }
