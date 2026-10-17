@@ -1,7 +1,6 @@
 """Personal morning and team evening briefs with a durable SMTP queue."""
 import hashlib
 import hmac
-import html
 import os
 import secrets
 import smtplib
@@ -15,6 +14,7 @@ from urllib.parse import urlsplit
 
 from flask import current_app
 from modules.daily_projects import TZ, describe
+from modules.mail_templates import render_digest_html, render_verification_html, render_test_html
 
 
 def settings():
@@ -157,16 +157,16 @@ def digest_content(db, mid, at, kind='daily'):
         return None
     morning = kind == 'morning'
     title = '个人任务早报' if morning else '团队项目晚报'
-    lines = [title, beijing_time(at).strftime('%Y-%m-%d'), '', '造车任务']
-    cards = [f'<h1>{title}</h1>', '<h2>造车任务</h2>']
-    def paragraph(text):
-        cards.append('<p>' + html.escape(text) + '</p>')
+    local_time = beijing_time(at)
+    lines = [title, local_time.strftime('%Y-%m-%d'), '', '造车任务']
+
     def progress_time(item, baseline_label):
         if item['last_progress']:
             return '最近进度更新：' + parsed_time(item['last_progress']).strftime('%Y-%m-%d %H:%M:%S')
         return '暂无进度更新（' + baseline_label + parsed_time(item['reminder_baseline']).strftime('%Y-%m-%d %H:%M:%S') + '）'
+
     if not tasks:
-        lines.append('暂无您负责或参与的未完成造车任务' if morning else '暂无团队未完成或今日完成的造车任务'); paragraph(lines[-1])
+        lines.append('暂无您负责或参与的未完成造车任务' if morning else '暂无团队未完成或今日完成的造车任务')
     for task in tasks:
         text = f'{task["title"]}｜{task["status"]}｜{task["progress"]}%｜{task["remaining"]}'
         if task['due']:
@@ -175,28 +175,27 @@ def digest_content(db, mid, at, kind='daily'):
             text += f'\n您的角色：{task["role"]}\n' + progress_time(task, '创建于 ')
         if task['nudge']:
             text += '\n请更新进度：您负责的任务已超过 48 小时未更新。'
-        lines.extend([text, task['url'], '']); paragraph(text)
-        cards.append(f'<p><a href="{html.escape(task["url"], quote=True)}">登录查看任务</a></p><hr>')
-    lines.extend(['', '日常项目']); cards.append('<h2>日常项目</h2>')
+        lines.extend([text, task['url'], ''])
+    lines.extend(['', '日常项目'])
     if not projects:
-        lines.append('暂无您负责的未完成日常项目' if morning else '暂无团队未完成或今日完成的日常项目'); paragraph(lines[-1])
+        lines.append('暂无您负责的未完成日常项目' if morning else '暂无团队未完成或今日完成的日常项目')
     for project in projects:
         text = f'{project["title"]}｜{project["status"]}｜{project["progress"]:g}%｜{project["remaining"]}'
         if project['due']:
             text += f'（{project["due"]}）'
-        text += '\n' + ('您负责的小组：' if morning else '') + ' · '.join(f'{group["label"]} {group["progress"]}%' for group in project['groups'])
+        text += '\n' + ('您负责的小组：' if morning else '') + ' · '.join(
+            f'{group["label"]} {group["progress"]}%' for group in project['groups'])
         for group in project['groups']:
             if morning:
                 text += f'\n{group["label"]}组' + progress_time(group, '启用于 ')
             if group['nudge']:
                 text += f'\n请更新进度：您负责的{group["label"]}组已超过 48 小时未更新。'
-        lines.extend([text, project['url'], '']); paragraph(text)
-        cards.append(f'<p><a href="{html.escape(project["url"], quote=True)}">登录查看项目</a></p><hr>')
+        lines.extend([text, project['url'], ''])
     footer = ('截至发送时您负责或参与的未完成事项；每日北京时间 08:00 汇总，包含周末。时间均为北京时间。'
               if morning else '截至发送时的全团队未完成事项与北京时间当天完成事项；每日 22:00 汇总。')
     footer += '仅对您负责且超过 48 小时未更新的事项提示催更。如需暂停，请联系管理员。'
-    lines.append(footer); paragraph(footer)
-    markup = '<!doctype html><html lang="zh-CN"><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0;padding:20px;background:#f5f5f7;color:#202024;font:16px/1.6 sans-serif"><main style="max-width:640px;margin:auto;background:#fff;padding:20px;overflow-wrap:anywhere;white-space:pre-line">' + ''.join(cards) + '</main></body></html>'
+    lines.append(footer)
+    markup = render_digest_html(title, local_time, tasks, projects, morning, footer, progress_time)
     return '\n'.join(lines), markup
 
 
@@ -300,16 +299,14 @@ def process_job(db, job, at, transport=None):
             code = verification_code(member['generation'])
             message['Subject'] = '巡天御风｜邮箱验证码'
             text = f'您的邮箱验证码是：{code}\n请在网站的个人账户页面输入验证码，30 分钟内有效。请勿转发给他人。\n验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；无个人待办时跳过早报。如非本人操作请忽略。'
-            markup = ('<p>您的邮箱验证码是：</p><p style="font-size:30px;font-weight:700;letter-spacing:6px">' + code +
-                      '</p><p>请在网站的个人账户页面输入验证码，30 分钟内有效。请勿转发给他人。</p>' +
-                      '<p>验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；无个人待办时跳过早报。如非本人操作请忽略。</p>')
+            markup = render_verification_html(code)
         else:
             if not member['verified'] or member['paused']:
                 raise DeliveryError('邮箱未验证或提醒已暂停', 'skipped')
             content = digest_content(db, job['member_id'], at, kind=job['kind'])
             if not content and job['kind'] in ('morning', 'daily'):
                 raise DeliveryError('没有个人未完成事项' if job['kind'] == 'morning' else '没有团队未完成或今日完成事项', 'skipped')
-            text, markup = content or ('测试邮件：当前没有团队未完成或今日完成事项。', '<p>测试邮件：当前没有团队未完成或今日完成事项。</p>')
+            text, markup = content or ('测试邮件：当前没有团队未完成或今日完成事项。', render_test_html())
             subjects = {'morning': '巡天御风｜个人任务早报｜', 'daily': '巡天御风｜团队项目晚报｜'}
             message['Subject'] = subjects.get(job['kind'], '巡天御风｜测试邮件｜') + job['day']
         message.set_content(text)

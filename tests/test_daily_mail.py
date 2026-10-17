@@ -11,6 +11,7 @@ from uuid import uuid4
 from test_tasks import app_module
 from common import get_db, DB_PATH
 from modules.daily_projects import TZ
+from modules.mail_templates import render_test_html, render_verification_html
 from modules.mail_service import (verification_code, verification_digest, stale, deadline, daily_window, digest_content, digest_items, enqueue_daily,
                                   claim, process_job, DeliveryError, smtp_send, queue, run_once)
 
@@ -600,3 +601,57 @@ class DailyMailTest(unittest.TestCase):
         run_once(self.db,self.at+timedelta(hours=4),transport)
         self.assertIn('admin@example.com',sent)
         self.assertEqual(self.db.execute('SELECT state FROM mail_jobs WHERE id=?',(first['id'],)).fetchone()[0],'failed')
+
+    def test_html_template_has_structured_cards_and_escapes(self):
+        morning=self.at.replace(hour=8)
+        task_id=self.task(title='<img src=x onerror=alert(1)>',owner_id=self.mid,
+                          due_date='2026-10-14')
+        pid=self.project(title='<svg/onload=alert(1)>')
+        old=(morning-timedelta(hours=49)).strftime('%Y-%m-%d %H:%M:%S')
+        self.db.execute('UPDATE tasks SET created_at=?,progress=35 WHERE id=?',(old,task_id))
+        self.db.execute('UPDATE daily_groups SET enabled_at=? WHERE project_id=?',(old,pid))
+        self.db.commit()
+        text,markup=digest_content(self.db,self.mid,morning,kind='morning')
+        for expected in ('个人任务早报','造车任务','日常项目','需更新进度',
+                         '您的角色','截止日期','查看任务详情','查看项目详情',
+                         '进度 35%','请更新进度：','2026-10-15'):
+            self.assertIn(expected,markup)
+        self.assertIn('<table',markup)
+        self.assertIn('role="presentation"',markup)
+        self.assertIn('width:35%',markup)
+        self.assertIn('&lt;img src=x onerror=alert(1)&gt;',markup)
+        self.assertIn('&lt;svg/onload=alert(1)&gt;',markup)
+        self.assertNotIn('<img',markup)
+        self.assertNotIn('<svg',markup)
+        self.assertNotIn('<script',markup)
+        self.assertNotIn('https://fonts.',markup)
+        self.assertIn('https://team.example/tasks?task=',markup)
+        self.assertIn('<img src=x onerror=alert(1)>',text)
+
+    def test_html_evening_summary_and_group_progress(self):
+        self.task(title='团队普通进行任务')
+        pid=self.project(title='完成进度组',groups={'mechanical':[self.mid],'vision':[self.mid]})
+        self.db.execute("UPDATE daily_groups SET progress=75 WHERE project_id=? AND stage='mechanical'",(pid,))
+        self.db.commit()
+        text,markup=digest_content(self.db,self.mid,self.at,kind='daily')
+        for expected in ('团队项目晚报','今日完成','各小组进度','机械组',
+                         '视觉组','进度 75%','查看项目详情'):
+            self.assertIn(expected,markup)
+        self.assertNotIn('您的角色',markup)
+        self.assertIn('完成进度组',text)
+
+    def test_html_verification_and_empty_test_mail_are_self_contained(self):
+        verification=render_verification_html('123456')
+        test_message=render_test_html()
+        self.assertIn('123456',verification)
+        self.assertIn('30 分钟',verification)
+        self.assertIn('北京时间 08:00',verification)
+        self.assertIn('巡天御风',test_message)
+        self.assertIn('邮件模板预览成功',test_message)
+        for body in (verification,test_message):
+            self.assertIn('<!doctype html>',body)
+            self.assertIn('name="viewport"',body)
+            self.assertNotIn('<img',body)
+            self.assertNotIn('<script',body)
+            self.assertNotIn('href=',body)
+            self.assertNotIn('http://',body)
