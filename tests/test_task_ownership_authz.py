@@ -55,7 +55,7 @@ class TaskOwnershipAuthorization(unittest.TestCase):
 
     def test_participant_may_resend_unchanged_ownership(self):
         response = self.update('member', status='阻塞', owner_id=self.owner_id,
-                               participant_ids=[self.ids['member']])
+                               participant_ids=[self.ids['member']], blocker_reason='等待设备', blocker_next_action='借用设备')
         self.assertEqual(response.status_code, 200, response.get_json())
 
     def test_participant_cannot_change_owner(self):

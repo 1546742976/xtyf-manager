@@ -102,7 +102,49 @@ def update(task_id: int):
         return jsonify(ok=False, error="ID 或版本格式不正确"), 400
     if error:
         return jsonify(ok=False, error=error), status
-    return jsonify(ok=True, id=task_id, version=version)
+    saved = get_db().execute('SELECT status,progress,completed_at FROM tasks WHERE id=?', (task_id,)).fetchone()
+    return jsonify(ok=True, id=task_id, version=version, **dict(saved))
+
+
+@bp.route('/api/task/<int:task_id>/blocker', methods=['GET', 'POST'])
+@login_required
+def blocker(task_id: int):
+    if (response := _path_id_error(task_id)) is not None:
+        return response
+    db = get_db()
+    task = db.execute('SELECT * FROM tasks WHERE id=? AND deleted_at IS NULL', (task_id,)).fetchone()
+    if task is None:
+        return jsonify(ok=False, error='任务不存在'), 404
+    if request.method == 'GET':
+        events = [dict(row) for row in db.execute(
+            'SELECT * FROM task_blocker_events WHERE task_id=? ORDER BY id DESC LIMIT 100', (task_id,))]
+        return jsonify(ok=True, blocker_events=events)
+    body, response = _json_body()
+    if response is not None:
+        return response
+    action = body.get('blocker_action')
+    if action is None and type(body.get('blocked')) is bool:
+        action = 'open' if body['blocked'] else 'resolve'
+    if action not in ('open', 'update', 'resolve'):
+        return jsonify(ok=False, error='阻塞操作不合法'), 400
+    if 'version' not in body:
+        return jsonify(ok=False, error='阻塞修改必须提供版本号'), 400
+    if action == 'resolve' and task['status'] != '阻塞':
+        return jsonify(ok=False, error='任务已不处于阻塞状态，请刷新'), 409
+    if task['status'] in ('已完成', '已取消'):
+        return jsonify(ok=False, error='请先填写实际进度并重新打开任务'), 409
+    data = {key: body[key] for key in ('version', 'blocker_reason', 'blocker_next_action',
+            'blocker_helper_id', 'blocker_follow_up', 'blocker_result', 'resolution') if key in body}
+    data['status'] = '进行中' if action == 'resolve' else '阻塞'
+    try:
+        version, error, status = update_task(db, current_user(), task_id, data)
+    except (TypeError, ValueError):
+        db.rollback()
+        return jsonify(ok=False, error='ID 或版本格式不正确'), 400
+    if error:
+        return jsonify(ok=False, error=error), status
+    saved = db.execute('SELECT status,progress,completed_at FROM tasks WHERE id=?', (task_id,)).fetchone()
+    return jsonify(ok=True, id=task_id, version=version, **dict(saved))
 
 
 @bp.route("/api/task/<int:task_id>/delete", methods=["POST"])

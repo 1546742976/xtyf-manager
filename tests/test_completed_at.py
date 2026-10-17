@@ -51,6 +51,7 @@ class CompletedAtTest(unittest.TestCase):
         project = self.read_project(pid)
         body = {key: project[key] for key in ('title', 'detail', 'status', 'priority', 'start_date', 'due_date', 'version')}
         body['groups'] = {group['stage']: [owner['id'] for owner in group['owners']] for group in project['groups'] if group['enabled']}
+        body['group_versions'] = {group['stage']: group['version'] for group in project['groups']}
         return self.admin.post(f'/api/daily-projects/{pid}', json={**body, **changes})
 
     def test_beijing_completion_day_is_independent_of_utc_host_clock(self):
@@ -81,16 +82,17 @@ class CompletedAtTest(unittest.TestCase):
         response = self.admin.post(f'/api/task/{task_id}/progress', data={'version': edited['version'], 'progress': '100', 'note': '补充验收记录'})
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(self.read_task(task_id)['completed_at'], completed['completed_at'])
-        self.assertIsNone(self.change_task(task_id, status='进行中')['completed_at'])
+        self.assertIsNone(self.change_task(task_id, status='进行中', progress=60)['completed_at'])
         with patch('modules.task_mutations.completion_stamp', return_value='2026-10-18 08:00:00'):
             again = self.change_task(task_id, status='已完成')
         self.assertEqual(again['completed_at'], '2026-10-18 08:00:00')
+        self.change_task(task_id, status='进行中', progress=60)
         self.assertIsNone(self.change_task(task_id, status='已取消')['completed_at'])
 
     def test_task_undo_restores_original_completion_timestamp(self):
         with patch('modules.task_mutations.completion_stamp', return_value='2026-10-16 20:00:00'):
             task_id = self.task(status='已完成')
-        opened = self.change_task(task_id, status='进行中')
+        opened = self.change_task(task_id, status='进行中', progress=60)
         endpoint = f'/api/task/{task_id}'
         revisions = self.admin.get(endpoint + '/revisions').get_json()['revisions']
         reopened_revision = revisions[0]
@@ -128,9 +130,10 @@ class CompletedAtTest(unittest.TestCase):
             ).lastrowid
             db.commit()
         result = self.admin.post(f'/api/task/{task_id}/revisions/{revision}/revert', json={'version': 1})
-        self.assertEqual(result.status_code, 200, result.get_json())
+        self.assertEqual(result.status_code, 409, result.get_json())
         task = self.read_task(task_id)
-        self.assertEqual(task['status'], '已完成')
+        self.assertEqual(task['status'], '未开始')
+        self.assertEqual(task['progress'], 0)
         self.assertIsNone(task['completed_at'])
 
     def test_daily_complete_reopen_recomplete_and_terminal_readonly(self):
@@ -143,12 +146,12 @@ class CompletedAtTest(unittest.TestCase):
         with patch('modules.daily_projects.stamp', return_value='2026-10-17 20:00:00'):
             self.assertEqual(self.change_project(pid, title='终态仍只读').status_code, 409)
         self.assertEqual(self.read_project(pid), current)
-        self.assertEqual(self.change_project(pid, status='进行中').status_code, 200)
+        self.assertEqual(self.change_project(pid, status='进行中', reopen_progress={'mechanical': 60}).status_code, 200)
         self.assertIsNone(self.read_project(pid)['completed_at'])
         with patch('modules.daily_projects.stamp', return_value='2026-10-18 20:00:00'):
             self.assertEqual(self.change_project(pid, status='已完成').status_code, 200)
         self.assertEqual(self.read_project(pid)['completed_at'], '2026-10-18 20:00:00')
-        self.assertEqual(self.change_project(pid, status='进行中').status_code, 200)
+        self.assertEqual(self.change_project(pid, status='进行中', reopen_progress={'mechanical': 60}).status_code, 200)
         self.assertEqual(self.change_project(pid, status='已取消').status_code, 200)
         self.assertIsNone(self.read_project(pid)['completed_at'])
 

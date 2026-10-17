@@ -45,7 +45,8 @@ with tempfile.TemporaryDirectory(prefix='xtyf-theme-demo-') as root:
     ):
         member = post('/api/member', {'name':name,'username':stage,'password':'demo-member-password','group_ids':[groups[stage]],'project_ids':[project]})['id']
         for title, start, end, status in tasks:
-            post('/api/task', {'title':title,'owner_id':member,'project_id':project,'start_date':start,'due_date':end,'status':status})
+            blocker = {'blocker_reason':'等待跨组联调','blocker_next_action':'负责人协调联调时间'} if status == '阻塞' else {}
+            post('/api/task', {'title':title,'owner_id':member,'project_id':project,'start_date':start,'due_date':end,'status':status,**blocker})
     post('/api/task', {'title':'待分配任务','project_id':project})
     post('/api/account/preferences', {'theme': os.environ.get('THEME_DEMO_THEME', 'light')})
     server = make_server('127.0.0.1', int(os.environ.get('THEME_DEMO_PORT', '0')), app, threaded=True)

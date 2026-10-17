@@ -5,7 +5,8 @@ function modalMembers(task) {
   taskParticipants(task).forEach((id) => {
     if (!map.has(id)) map.set(id, { id, name: `成员 #${id}`, is_active: 0 });
   });
-  return [...map.values()].filter((member) => (member.is_active !== 0 && !member.deleted_at) || taskParticipants(task).includes(Number(member.id)));
+  if (task.blocker_helper_id && !map.has(Number(task.blocker_helper_id))) map.set(Number(task.blocker_helper_id), {id: task.blocker_helper_id, name: `成员 #${task.blocker_helper_id}`, is_active: 0});
+  return [...map.values()].filter((member) => (member.is_active !== 0 && !member.deleted_at) || taskParticipants(task).includes(Number(member.id)) || Number(member.id) === Number(task.blocker_helper_id));
 }
 function memberLabel(member) {
   return `${member.name}${(member.group_names || [member.group_name]).filter(Boolean).length ? ` · ${(member.group_names || [member.group_name]).filter(Boolean).join("/")}` : ""}`;
@@ -46,6 +47,14 @@ function taskForm(task) {
     <div class="grid-2"><label>负责人（主负责人）<select name="owner_id"${ownershipLocked ? " disabled" : ""}>${memberOptions(members, task.owner_id)}</select></label><label>造车组别<select name="project_id"${ownershipLocked ? " disabled" : ""}>${options(state.projects, task.project_id, "未选择")}</select></label></div>
     <fieldset${ownershipLocked ? " disabled" : ""}><legend>参与成员（可多选）</legend><p class="field-help">${ownershipLocked ? "负责人和参与成员由管理员或项管调整。" : "负责人和参与成员都可编辑任务设置。"}</p>${choiceGrid("participant_ids", members, task.participant_ids || [], memberLabel)}</fieldset>
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
+    <label data-task-reopen hidden>重新打开后的实际进度（0～99%）<input name="progress" type="number" min="0" max="99" step="1" disabled></label>
+    <fieldset data-task-blocker hidden><legend>阻塞处理</legend>
+      <label>阻塞原因<textarea name="blocker_reason" maxlength="2000" disabled>${esc(task.blocker_reason || '')}</textarea></label>
+      <label>下一步<textarea name="blocker_next_action" maxlength="2000" disabled>${esc(task.blocker_next_action || '')}</textarea></label>
+      <div class="grid-2"><label>协助人<select name="blocker_helper_id" disabled>${memberOptions(members, task.blocker_helper_id)}</select></label><label>下次跟进日期<input name="blocker_follow_up" type="date" value="${esc(task.blocker_follow_up || '')}" disabled></label></div>
+      <p class="field-help">原负责人继续跟进；协助人不会因此获得编辑权限。</p>
+    </fieldset>
+    <label data-task-blocker-result hidden>解除阻塞的处理结果<textarea name="blocker_result" maxlength="2000" disabled></textarea></label>
     <div class="grid-2"><label>开始日期<input name="start_date" type="date" value="${esc(task.start_date)}"></label><label>截止日期<input name="due_date" type="date" value="${esc(task.due_date)}"></label></div>
     <label class="choice-item schedule-lock-choice"><input type="checkbox" name="schedule_locked" ${task.schedule_locked ? "checked" : ""}><span>自动排期时固定日期</span></label>
     ${`<label>主前置任务<select name="parent_id">${options(others.map((item) => ({...item, name: taskLabel(item)})), task.parent_id, "无主前置任务")}</select></label>`}
@@ -60,12 +69,39 @@ function taskModalActive(box, generation, taskId) {
   const modal = document.getElementById("modal");
   return !!box?.isConnected && modal?.contains(box) && Number(modal.dataset.taskId) === Number(taskId) && Number(modal.dataset.generation) === generation;
 }
+function taskBlockerSection(task) {
+  const current = task.status === '阻塞' ? `<dl><dt>阻塞原因</dt><dd>${esc(task.blocker_reason || '待补充')}</dd><dt>下一步</dt><dd>${esc(task.blocker_next_action || '待补充')}</dd><dt>协助人</dt><dd>${esc(memberById(task.blocker_helper_id)?.name || (task.blocker_helper_id ? `成员 #${task.blocker_helper_id}` : '未指定'))}</dd><dt>下次跟进</dt><dd>${esc(task.blocker_follow_up || '未设置')}</dd></dl>` : '';
+  const resolve = task.status === '阻塞' && canEdit(task) ? `<form id="task-blocker-resolve"><label>处理结果<textarea name="blocker_result" maxlength="2000" required></textarea></label><button type="submit" class="btn">解除阻塞并继续进行</button><p class="form-message" role="alert"></p></form>` : '';
+  return `<section class="modal-section"><h3>阻塞跟进</h3>${current}${resolve}<div id="task-blocker-history"><p class="empty">正在加载跟进记录…</p></div></section>`;
+}
+async function loadTaskBlockers(task, generation) {
+  const box = document.getElementById('task-blocker-history'); if (!box) return;
+  const result = await api(`/api/task/${task.id}/blocker`);
+  if (!taskModalActive(box, generation, task.id)) return;
+  if (!result?.ok) { box.textContent = result?.error || '跟进记录加载失败'; return; }
+  const labels = {open: '标记阻塞', update: '更新跟进', resolve: '解除阻塞', cancel: '取消并终止跟进'};
+  box.innerHTML = (result.blocker_events || []).map(event => `<article class="progress-entry"><strong>${esc(labels[event.action] || event.action)} · ${esc(event.actor_name)}</strong><time>${esc(event.created_at)}</time><p>${esc(event.reason)}</p><p>下一步：${esc(event.next_action)}</p>${event.helper_id ? `<p>协助人：${esc(memberById(event.helper_id)?.name || `成员 #${event.helper_id}`)}</p>` : ''}${event.follow_up ? `<p>跟进日期：${esc(event.follow_up)}</p>` : ''}${event.resolution ? `<p>结果：${esc(event.resolution)}</p>` : ''}</article>`).join('') || '<p class="empty">暂无阻塞记录</p>';
+}
+function bindTaskBlocker(task, generation, navigation) {
+  const form = document.getElementById('task-blocker-resolve'); if (!form) return;
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = form.querySelector('button'); button.disabled = true;
+    const result = await api(`/api/task/${task.id}/blocker`, {version: Number(task.version), blocker_action: 'resolve', blocker_result: form.elements.blocker_result.value});
+    if (!taskModalActive(form, generation, task.id)) return;
+    button.disabled = false;
+    if (result?.ok) await finishTaskModalUpdate(form, generation, task.id, navigation);
+    else form.querySelector('.form-message').textContent = result?.error || '解除失败，输入已保留';
+  });
+}
 function taskModalShell(task, navigation = {}) {
   const lead = memberById(task.owner_id);
   return `<div class="modal-head"><div><p class="ux-eyebrow">TASK #${Number(task.id)}</p><h2>${esc(task.title)}</h2></div><button class="btn ghost sm" type="button" data-close>${navigation.returnToList ? "返回任务列表" : "关闭"}</button></div>
     <div class="modal-info">${badge(task.status, STATUS_CLASS[task.status] || "gray")}${badge(`负责人 ${lead?.name || "未指定"}`, "outline")}<span class="muted">${esc(taskProjectName(task) || "未归属造车组别")} · 版本 ${Number(task.version || 0)}</span></div>
     ${taskForm(task)}
     ${progressSection(task)}
+    ${taskBlockerSection(task)}
+    <section class="modal-section" id="task-topic-links"></section>
     <section class="modal-section"><h3>截图附件</h3>${canEdit(task) ? '<form id="attachment-form" class="attachment-form"><label>选择图片（PNG / JPEG / WebP；每张不超过 10 MiB，最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple required></label><label>说明<input name="description" maxlength="300" placeholder="截图内容或验收场景"></label><button class="btn" type="submit">上传截图</button><p class="form-message" role="alert"></p></form>' : ""}<div id="attachment-list"></div></section>
     <section class="modal-section"><h3>版本记录</h3><div id="task-revisions"><p class="empty">正在加载版本记录…</p></div></section>
     <section class="modal-section"><h3>动态与备注</h3><div id="task-logs" class="logs"><p class="empty">正在加载动态…</p></div></section>`;
@@ -83,9 +119,30 @@ function bindTaskForm(task, generation, navigation = {}) {
   const form = document.getElementById("task-form");
   if (!form) return;
   window.TaskDateDefaults?.bind(form, {saved: true});
+  const syncStatusFields = () => {
+    const status = form.elements.status.value;
+    const sections = [
+      ['[data-task-reopen]', ['已完成', '已取消'].includes(task.status) && status !== task.status],
+      ['[data-task-blocker]', status === '阻塞'],
+      ['[data-task-blocker-result]', task.status === '阻塞' && ['未开始', '进行中'].includes(status)],
+    ];
+    sections.forEach(([selector, visible]) => {
+      const section = form.querySelector(selector); if (!section) return;
+      section.hidden = !visible;
+      section.querySelectorAll('input,select,textarea').forEach(control => {
+        control.disabled = !visible;
+        const legacyBlocker = task.status === '阻塞' && (!task.blocker_reason || !task.blocker_next_action);
+        control.required = visible && ['progress', 'blocker_result'].includes(control.name) ||
+          visible && !legacyBlocker && ['blocker_reason', 'blocker_next_action'].includes(control.name);
+      });
+    });
+  };
+  form.elements.status.addEventListener('change', syncStatusFields); syncStatusFields();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(form));
+    if ('progress' in payload) payload.progress = Number(payload.progress);
+    if ('blocker_helper_id' in payload) payload.blocker_helper_id = payload.blocker_helper_id ? Number(payload.blocker_helper_id) : null;
     window.TaskDateDefaults?.payload(form, payload);
     payload.participant_ids = checkedValues(form, "participant_ids");
     payload.predecessor_ids = checkedValues(form, "predecessor_ids");
@@ -123,7 +180,7 @@ function bindTaskActions(task, generation, navigation = {}) {
   modal.querySelector("[data-close]")?.addEventListener("click", hideModal);
   bindTaskProgress(task, generation, navigation);
   modal.querySelector("[data-delete-task]")?.addEventListener("click", async (event) => {
-    if (!confirm("确定删除该任务？存在子任务或依赖引用时将无法删除。")) return;
+    if (!confirm("确定删除该任务？存在后续任务或依赖引用时将无法删除。")) return;
     const button = event.currentTarget,
       result = await api(`/api/task/${task.id}/delete`, { version: Number(task.version) });
     if (!taskModalActive(button, generation, task.id)) return;
@@ -193,7 +250,9 @@ async function openTaskModal(id, navigation = {}) {
   modal.dataset.generation = String(generation);
   bindTaskForm(task, generation, navigation);
   bindTaskActions(task, generation, navigation);
-  await Promise.all([loadTaskProgress(task, generation), loadAttachments(task, generation), loadRevisions(task, generation), loadLogs(task, generation)]);
+  bindTaskBlocker(task, generation, navigation);
+  document.dispatchEvent(new CustomEvent('task:rendered', {detail: {task, host: modal}}));
+  await Promise.all([loadTaskProgress(task, generation), loadAttachments(task, generation), loadRevisions(task, generation), loadLogs(task, generation), loadTaskBlockers(task, generation)]);
 }
 
 /** Dashboard preview deliberately contains no task mutation actions or forms. */
@@ -229,7 +288,7 @@ function taskPreviewShell(task) {
   </section>
   <section class="modal-section"><h3>近期任务动态</h3>
     <div id="task-logs" class="logs"><p class="empty">正在加载动态…</p></div>
-  </section>`;
+  </section><section class="modal-section" id="task-topic-links"></section>`;
 }
 
 async function openTaskPreview(id) {
@@ -242,5 +301,6 @@ async function openTaskPreview(id) {
   modal.dataset.taskId = String(task.id);
   modal.dataset.generation = String(generation);
   modal.querySelector("[data-close]")?.addEventListener("click", hideModal);
+  document.dispatchEvent(new CustomEvent('task:rendered', {detail: {task, host: modal}}));
   await Promise.all([loadTaskProgress(task, generation), loadLogs(task, generation)]);
 }

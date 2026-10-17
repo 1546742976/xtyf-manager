@@ -5,13 +5,14 @@ function progressSection(task) {
   return `<section class="modal-section task-progress-section">
     <h3>任务进度 · ${percent}%</h3>
     <div class="progress" role="progressbar" aria-label="当前进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><div class="progress-inner blue" style="width:${percent}%"></div></div>
-    ${canEdit(task) ? `<form id="progress-form" class="task-progress-form" enctype="multipart/form-data">
+    ${canEdit(task) && task.status !== '已取消' ? `<form id="progress-form" class="task-progress-form" enctype="multipart/form-data">
       <input name="version" type="hidden" value="${Number(task.version)}">
       <div class="progress-edit-row"><label>手动设置进度 <input type="range" name="progress_slider" min="0" max="100" step="1" value="${percent}"></label><label>百分比 <input type="number" name="progress" min="0" max="100" step="1" value="${percent}" required></label></div>
+      <p class="field-help">100% 即已完成。${task.status === '已完成' ? '填写低于 100% 的实际进度会重新打开任务。' : '未开始任务提交大于 0% 的进度后自动开始。'}</p>
       <label>进度备注（完成了什么工作）<textarea name="note" rows="3" maxlength="2000" placeholder="例如：完成电机驱动联调、通过实车测试…"></textarea></label>
       <label>附图（可选，最多 5 张）<input type="file" name="files" accept="image/png,image/jpeg,image/webp" multiple></label>
       <div class="progress-submit"><button type="submit" class="btn primary">提交进度记录</button><p class="form-message" role="alert"></p></div>
-    </form>` : '<p class="muted">仅负责人、参与成员或管理员可更新进度。</p>'}
+    </form>` : `<p class="muted">${task.status === '已取消' ? '已取消任务请先在设置中明确重新打开并填写实际进度。' : '仅负责人、参与成员或管理员可更新进度。'}</p>`}
     <div id="task-progress-list" class="progress-timeline"><p class="empty">正在加载进度记录…</p></div>
   </section>`;
 }

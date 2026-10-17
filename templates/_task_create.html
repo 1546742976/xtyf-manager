@@ -12,6 +12,16 @@
       </div>
       <p class="field-help">负责人可暂不指定；选择参与成员后须指定负责人。专业组用于成员技能分类。</p>
     </section>
+    <section class="task-create-section" data-create-blocker hidden>
+      <h3>阻塞处理</h3>
+      <div class="task-create-grid">
+        <label class="task-create-wide">阻塞原因<textarea name="blocker_reason" maxlength="2000" disabled></textarea></label>
+        <label class="task-create-wide">下一步<textarea name="blocker_next_action" maxlength="2000" disabled></textarea></label>
+        <label>协助人<select name="blocker_helper_id" id="create-blocker-helper" disabled><option value="">未指定</option></select></label>
+        <label>下次跟进日期<input name="blocker_follow_up" type="date" disabled></label>
+      </div>
+      <p class="field-help">原负责人继续跟进；协助人不会因此获得任务编辑权限。</p>
+    </section>
     <section class="task-create-section" aria-labelledby="create-schedule-heading">
       <h3 id="create-schedule-heading">前置依赖与时间</h3>
       <div class="task-create-grid">
