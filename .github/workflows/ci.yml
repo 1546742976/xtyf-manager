@@ -123,6 +123,20 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: browser-e2e-diagnostics
-          path: .venv/*-check/
-          if-no-files-found: ignore
+          path: |
+            .venv/login-password-check/*.png
+            .venv/login-password-check/mobile-result.json
+            .venv/pr22-merge-check/*.png
+            .venv/pr22-merge-check/browser-result.json
+            .venv/task-center-check/*.png
+            .venv/task-center-check/result.json
+            .venv/daily-mail-check/*.png
+            .venv/daily-mail-check/result.json
+            .venv/action-failure-check/result.json
+            .venv/palette-workspace-check/*.png
+            .venv/palette-workspace-check/result.json
+            .venv/local-collaboration-check/*.png
+            .venv/local-collaboration-check/result.json
+          include-hidden-files: true
+          if-no-files-found: warn
 
