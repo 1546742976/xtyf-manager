@@ -30,13 +30,14 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---- 本项目的公共模块与子模块（子模块的蓝图注册见下方 app.register_blueprint）----
 from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
-                    manager_required, now_str)
+                    manager_required, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
 from modules.funds import funds_bp, can_review
 from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
 from modules.invoice_jobs import migrate as migrate_invoice_jobs
 from modules.discussions import discussions_bp
 from modules.collaboration_schema import migrate as migrate_collaboration
 from modules.task_api import bp as task_api_bp
+from modules.task_mutations import PRIORITIES as TASK_PRIORITIES, STATUSES as TASK_STATUSES
 from modules.task_attachments import bp as task_attachments_bp
 from modules.task_progress import bp as task_progress_bp
 from modules.task_catalogs import bp as task_catalogs_bp
@@ -55,11 +56,11 @@ SECRET_PATH = os.environ.get("PROGRESS_SECRET_PATH", os.path.join(BASE_DIR, "sec
 PORT = int(os.environ.get("PORT", "8520"))
 
 # ---- 全局常量：任务状态枚举（看板/表单/校验共用）----
-STATUSES = ["未开始", "进行中", "已完成", "阻塞", "已取消"]
+STATUSES = list(TASK_STATUSES)
 # ---- 任务优先级（看板上以彩色圆点显示）----
-PRIORITIES = ["高", "中", "低"]
+PRIORITIES = list(TASK_PRIORITIES)
 # ---- 系统角色：admin=管理员 / manager=项管 / member=成员 ----
-ROLE_NAMES = {"admin": "管理员", "manager": "项管", "member": "成员"}
+ROLE_NAMES = COMMON_ROLE_NAMES.copy()
 # ---- 会话密钥：读取 secret.key，不存在则生成 64 位随机串并持久化 ----
 def _load_secret():
     """Create the session-signing key privately; never overwrite an existing key.
