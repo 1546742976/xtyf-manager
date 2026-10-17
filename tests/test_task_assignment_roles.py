@@ -1,4 +1,4 @@
-"""Administrators manage work without becoming newly assigned participants."""
+"""Business ownership is independent of permission roles, but requires active accounts."""
 import unittest
 from uuid import uuid4
 
@@ -36,27 +36,32 @@ class TaskAssignmentRoles(unittest.TestCase):
                           for group in project['groups'] if group['enabled']}
         return body
 
-    def test_daily_create_rejects_admin_and_rolls_back_whole_request(self):
-        with self.app.app_context():
-            before = get_db().execute('SELECT count(*) FROM daily_projects').fetchone()[0]
-        for groups in ({'mechanical': [self.admin_id]},
-                       {'mechanical': [self.member_ids[0]], 'vision': [self.member_ids[1], self.admin_id]}):
-            response = self.admin.post('/api/daily-projects', json={'title': '不得保存', 'groups': groups})
-            self.assertEqual(response.status_code, 400)
-            self.assertIn('改选非管理员负责人', response.get_json()['error'])
-        with self.app.app_context():
-            self.assertEqual(get_db().execute('SELECT count(*) FROM daily_projects').fetchone()[0], before)
+    def test_daily_create_accepts_admin_as_owner_across_groups(self):
+        response = self.admin.post('/api/daily-projects', json={
+            'title': '管理员参与的日常目标',
+            'groups': {'mechanical': [self.admin_id],
+                       'vision': [self.member_ids[0], self.admin_id]}})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        project = self.daily(response.get_json()['id'])
+        self.assertEqual(project['owner_ids'], sorted([self.admin_id, self.member_ids[0]]))
+        groups = {group['stage']: [owner['id'] for owner in group['owners']] for group in project['groups']}
+        self.assertEqual(groups['mechanical'], [self.admin_id])
+        self.assertEqual(groups['vision'], sorted([self.admin_id, self.member_ids[0]]))
 
-    def test_daily_update_rejects_mixed_assignment_without_changing_other_fields(self):
+    def test_daily_update_accepts_admin_and_keeps_other_changes(self):
         pid = self.create_daily()
         original = self.daily(pid)
         response = self.admin.post(f'/api/daily-projects/{pid}', json={
-            **self.daily_body(original), 'title': '不得保存的标题', 'status': '阻塞',
-            'groups': {'mechanical': [self.member_ids[0]], 'vision': [self.admin_id]}})
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(self.daily(pid), original)
-        with self.app.app_context():
-            self.assertIsNone(get_db().execute("SELECT 1 FROM daily_groups WHERE project_id=? AND stage='vision'", (pid,)).fetchone())
+            **self.daily_body(original), 'title': '管理员直接负责',
+            'status': '阻塞', 'groups': {'mechanical': [self.member_ids[0]],
+                                          'vision': [self.admin_id]}})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        updated = self.daily(pid)
+        self.assertEqual(updated['title'], '管理员直接负责')
+        self.assertEqual(updated['status'], '阻塞')
+        self.assertEqual(updated['owner_ids'], sorted([self.member_ids[0], self.admin_id]))
+        self.assertEqual([owner['id'] for group in updated['groups'] if group['stage'] == 'vision'
+                          for owner in group['owners']], [self.admin_id])
 
     def test_nonadmin_roles_assignable_and_admin_can_manage_and_update_progress(self):
         pid = self.create_daily()
@@ -73,44 +78,64 @@ class TaskAssignmentRoles(unittest.TestCase):
         self.assertEqual(project['groups'][0]['progress'], 70)
         self.assertEqual(project['groups'][0]['latest']['actor_name'], '管理员')
 
-    def test_historical_admin_assignment_is_preserved_until_explicit_reassignment(self):
+    def test_existing_admin_assignment_can_be_edited_without_reassignment(self):
         pid = self.create_daily()
         self.admin.post(f'/api/daily-projects/{pid}/groups/mechanical/progress', json={
-            'progress': 35, 'version': 1, 'project_version': 1, 'note': '历史进度保留'})
-        # Simulate a pre-existing relationship without invoking a data migration.
+            'progress': 35, 'version': 1, 'project_version': 1, 'note': '原有进度保留'})
         with self.app.app_context():
             db = get_db()
             db.execute('INSERT INTO daily_owners VALUES(?,?,?)', (pid, 'mechanical', self.admin_id))
             db.commit()
         original = self.daily(pid)
-        rejected = self.admin.post(f'/api/daily-projects/{pid}', json={
-            **self.daily_body(original), 'title': '保留旧管理员时不能保存'})
-        self.assertEqual(rejected.status_code, 400)
-        self.assertIn('改选非管理员负责人', rejected.get_json()['error'])
-        self.assertEqual(self.daily(pid), original)
-        replacement = self.admin.post(f'/api/daily-projects/{pid}', json={
-            **self.daily_body(original), 'groups': {'mechanical': [self.member_ids[0]]}})
-        self.assertEqual(replacement.status_code, 200)
-        changed = self.daily(pid)
-        self.assertEqual(changed['owner_ids'], [self.member_ids[0]])
-        self.assertEqual(changed['groups'][0]['latest']['note'], '历史进度保留')
-        self.assertEqual(changed['groups'][0]['progress'], 35)
+        response = self.admin.post(f'/api/daily-projects/{pid}', json={
+            **self.daily_body(original), 'title': '管理员分配可以延续'})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        updated = self.daily(pid)
+        self.assertIn(self.admin_id, updated['owner_ids'])
+        self.assertEqual(updated['title'], '管理员分配可以延续')
+        self.assertEqual(updated['groups'][0]['latest']['note'], '原有进度保留')
+        self.assertEqual(updated['groups'][0]['progress'], 35)
 
-    def test_vehicle_admin_owner_and_participant_rejected_atomically(self):
-        for fields in ({'owner_id': self.admin_id},
-                       {'owner_id': self.member_ids[0], 'participant_ids': [self.admin_id]}):
-            response = self.admin.post('/api/task', json={'title': '非法造车分配', **fields})
-            self.assertEqual(response.status_code, 400)
-        created = self.admin.post('/api/task', json={
-            'title': '合法造车任务', 'owner_id': self.member_ids[0], 'participant_ids': [self.member_ids[1]]}).get_json()
-        def task():
-            return next(item for item in self.admin.get('/api/data').get_json()['tasks'] if item['id'] == created['id'])
-        original = task()
-        for fields in ({'owner_id': self.admin_id}, {'participant_ids': [*self.member_ids, self.admin_id]}):
-            response = self.admin.post(f'/api/task/{created["id"]}', json={
-                'version': created['version'], 'title': '非法字段不得部分保存', **fields})
-            self.assertEqual(response.status_code, 400)
-            self.assertEqual(task(), original)
+    def test_vehicle_accepts_admin_as_owner_and_participant(self):
+        first = self.admin.post('/api/task', json={
+            'title': '管理员担任造车负责人', 'owner_id': self.admin_id,
+            'participant_ids': [self.member_ids[0]]})
+        self.assertEqual(first.status_code, 200, first.get_json())
+        second = self.admin.post('/api/task', json={
+            'title': '管理员担任造车参与者', 'owner_id': self.member_ids[0],
+            'participant_ids': [self.admin_id]})
+        self.assertEqual(second.status_code, 200, second.get_json())
+
+        def task(task_id):
+            return next(item for item in self.admin.get('/api/data').get_json()['tasks']
+                        if item['id'] == task_id)
+
+        created = task(first.get_json()['id'])
+        self.assertEqual(created['owner_id'], self.admin_id)
+        self.assertIn(self.member_ids[0], created['participant_ids'])
+        updated = self.admin.post(f'/api/task/{second.get_json()["id"]}', json={
+            'version': second.get_json()['version'], 'owner_id': self.admin_id,
+            'participant_ids': [self.member_ids[0], self.admin_id]})
+        self.assertEqual(updated.status_code, 200, updated.get_json())
+        saved = task(second.get_json()['id'])
+        self.assertEqual(saved['owner_id'], self.admin_id)
+        self.assertEqual(sorted(saved['participant_ids']), sorted([self.admin_id, self.member_ids[0]]))
+
+    def test_inactive_member_cannot_be_newly_assigned_regardless_of_role(self):
+        name = 'inactive_assignment_' + uuid4().hex[:10]
+        member = self.admin.post('/api/member', json={
+            'name': name, 'username': name, 'password': 'assignment-test-password',
+            'role': 'manager'}).get_json()
+        with self.app.app_context():
+            db = get_db()
+            db.execute('UPDATE members SET is_active=0 WHERE id=?', (member['id'],))
+            db.commit()
+        daily = self.admin.post('/api/daily-projects', json={
+            'title': '停用成员不可担任负责人', 'groups': {'mechanical': [member['id']]}})
+        self.assertEqual(daily.status_code, 400)
+        vehicle = self.admin.post('/api/task', json={
+            'title': '停用成员不可担任负责人', 'owner_id': member['id']})
+        self.assertEqual(vehicle.status_code, 400)
 
     def test_vehicle_historical_admin_relationship_and_log_are_not_rewritten(self):
         created = self.admin.post('/api/task', json={'title': '历史造车任务', 'owner_id': self.member_ids[0]}).get_json()

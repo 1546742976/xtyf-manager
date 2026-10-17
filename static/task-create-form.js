@@ -22,7 +22,7 @@
   }
   function render(catalog) {
     data=catalog;
-    const members=data.members.filter(member=>member.role!=='admin'&&member.is_active!==0),tasks=data.tasks.map(task=>({...task,name:`#${task.id} ${task.title}`}));
+    const members=data.members.filter(member=>member.is_active!==0),tasks=data.tasks.map(task=>({...task,name:`#${task.id} ${task.title}`}));
     selectOptions('create-owner',members,'未指定');selectOptions('create-project',data.projects.filter(project=>project.is_active!==0),'未选择');
     selectOptions('create-parent',tasks,'无主前置任务');choices('create-participants','participant_ids',members);choices('create-dependencies','predecessor_ids',tasks);
     form._taskDates?.refresh();

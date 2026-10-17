@@ -172,7 +172,7 @@ test("task board: search and mine filters apply to people and tasks", () => {
   assert.equal(page.value("filteredTasks")().length, 0);
 });
 
-test("person board hides admin lanes and places filtered unassigned tasks first", () => {
+test("person board includes admin owners and places filtered unassigned tasks first", () => {
   const page = browser(["app.js", "task-board.js"]), state = page.value("state");
   state.view = "person";
   state.members = [{id:1,name:"管理员",role:"admin"},{id:2,name:"队员",role:"member"}];
@@ -185,11 +185,11 @@ test("person board hides admin lanes and places filtered unassigned tasks first"
     {id:5,title:"历史管理员任务",owner_id:3,status:"未开始",priority:"中"},
   ];
   const lanes = page.value("participantLanes")(state.tasks);
-  assert.deepEqual(Array.from(lanes,lane=>lane.key), ["unassigned","m-2"]);
+  assert.deepEqual(Array.from(lanes,lane=>lane.key), ["unassigned","m-1","m-2","m-3"]);
   assert.deepEqual(Array.from(lanes[0].tasks,task=>task.id), [3,4]);
   const html = page.value("renderLanes")(page.value("filteredTasks")());
   assert.ok(html.indexOf('unassigned-lane') < html.indexOf('队员</h2>'));
-  assert.doesNotMatch(html, /管理员<\/h2>/);
+  assert.match(html, /管理员<\/h2>/);
   state.filters.status = "进行中";
   assert.doesNotMatch(page.value("renderLanes")(page.value("filteredTasks")()), /unassigned-lane|待认领/);
   state.filters.status = "";

@@ -158,11 +158,9 @@ def clean_project(body, db):
             raise ValueError('每个启用组至少指定一位负责人')
         for mid in owners:
             integer(mid, '负责人 ID')
-            member = db.execute('SELECT role FROM members WHERE id=? AND is_active=1 AND deleted_at IS NULL', (mid,)).fetchone()
+            member = db.execute('SELECT 1 FROM members WHERE id=? AND is_active=1 AND deleted_at IS NULL', (mid,)).fetchone()
             if not member:
                 raise ValueError('负责人已停用或不存在，请重新选择')
-            if member['role'] == 'admin':
-                raise ValueError('管理员不参与日常项目，请改选非管理员负责人后保存')
     return (title.strip(), detail.strip(), status, priority, *dates), groups
 
 

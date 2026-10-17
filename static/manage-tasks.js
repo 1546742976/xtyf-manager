@@ -5,12 +5,12 @@ const taskFilters = { q: "", project: "", status: "" };
 function renderCreateChoices() {
   const owner = document.getElementById("create-owner");
   const project = document.getElementById("create-project");
-  refreshDraftSelect(owner, state.members.filter((member) => member.role !== "admin"), "未指定");
+  refreshDraftSelect(owner, state.members.filter((member) => member.is_active !== 0), "未指定");
   refreshDraftSelect(project, state.projects, "未选择");
   const participants = document.getElementById("create-participants");
   const dependencies = document.getElementById("create-dependencies");
   const parent = document.getElementById("create-parent");
-  refreshDraftChoices(participants, "participant_ids", state.members.filter((member) => member.role !== "admin"), (member) => member.name);
+  refreshDraftChoices(participants, "participant_ids", state.members.filter((member) => member.is_active !== 0), (member) => member.name);
   refreshDraftChoices(dependencies, "predecessor_ids", state.tasks, taskLabel);
   refreshDraftSelect(parent, state.tasks.map((task) => ({...task, name: taskLabel(task)})), "无主前置任务");
   document.getElementById("create-form")?._taskDates?.refresh();

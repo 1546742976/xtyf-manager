@@ -81,12 +81,12 @@ function taskCard(task, extraClass = "") {
     ${state.view === "specialty" ? `<p class="task-plan-dates">计划：${esc(task.start_date || "未设开始")} → ${esc(task.due_date || "未设截止")}</p>` : ""}
     <div class="task-progress-heading"><span>任务进度</span><strong>${Math.max(0, Math.min(100, Number(task.progress) || 0))}%</strong></div>
     <div class="progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(task.progress) || 0))}"><div class="progress-inner blue" style="width:${Math.max(0, Math.min(100, Number(task.progress) || 0))}%"></div></div>
-    <div class="task-note ${!note ? 'is-empty' : ''}"><span>${esc(note ? (noteAuthor || '成员') : '备注')}</span><p>${esc(note || '无备注')}</p></div>
+    ${note ? `<div class="task-note"><span>${esc(noteAuthor || "成员")}</span><p>${esc(note)}</p></div>` : ""}
     <div class="task-foot"><span>${badge(daysLeftText(task), daysLeftClass(task))}</span><span>更新 ${esc(task.updated_at)}</span></div>
   </article>`;
 }
 function participantLanes(tasks) {
-  const active = state.members.filter((member) => member.role !== "admin").map((member) => ({
+  const active = state.members.map((member) => ({
     key: `m-${member.id}`,
     title: member.name,
     sub: (member.group_names || [member.group_name]).filter(Boolean).join("、"),
@@ -101,7 +101,6 @@ function participantLanes(tasks) {
   );
   historical.forEach((id) => {
     const member = memberById(id);
-    if (member?.role === "admin") return;
     active.push({
       key: `m-${id}`,
       title: member?.name || `成员 #${id}`,

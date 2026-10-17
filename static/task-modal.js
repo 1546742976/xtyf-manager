@@ -5,7 +5,7 @@ function modalMembers(task) {
   taskParticipants(task).forEach((id) => {
     if (!map.has(id)) map.set(id, { id, name: `成员 #${id}`, is_active: 0 });
   });
-  return [...map.values()].filter((member) => member.role !== "admin" || taskParticipants(task).includes(Number(member.id)));
+  return [...map.values()].filter((member) => (member.is_active !== 0 && !member.deleted_at) || taskParticipants(task).includes(Number(member.id)));
 }
 function memberLabel(member) {
   return `${member.name}${(member.group_names || [member.group_name]).filter(Boolean).length ? ` · ${(member.group_names || [member.group_name]).filter(Boolean).join("/")}` : ""}`;
@@ -16,7 +16,7 @@ function memberOptions(members, selected) {
     members
       .map(
         (member) =>
-          `<option ${member.role === "admin" ? "hidden" : ""} value="${Number(member.id)}" ${Number(member.id) === Number(selected) ? "selected" : ""}>${esc(memberLabel(member))}${member.role === "admin" ? "（历史分配）" : ""}${member.is_active === 0 ? "（已停用）" : ""}</option>`,
+          `<option ${member.is_active === 0 && Number(member.id) !== Number(selected) ? "disabled" : ""} value="${Number(member.id)}" ${Number(member.id) === Number(selected) ? "selected" : ""}>${esc(memberLabel(member))}${member.is_active === 0 ? "（已停用）" : ""}</option>`,
       )
       .join("")
   );
@@ -41,7 +41,7 @@ function taskForm(task) {
   return `<form id="task-form" class="task-settings"><input type="hidden" name="version" value="${Number(task.version || 0)}">
     <label>标题<input name="title" value="${esc(task.title)}" required></label>
     <div class="grid-2"><label>负责人（主负责人）<select name="owner_id">${memberOptions(members, task.owner_id)}</select></label><label>造车组别<select name="project_id">${options(state.projects, task.project_id, "未选择")}</select></label></div>
-    <fieldset><legend>参与成员（可多选）</legend><p class="field-help">负责人和参与成员都可编辑任务设置。</p>${choiceGrid("participant_ids", members.filter((member) => member.role !== "admin"), task.participant_ids || [], memberLabel)}${members.filter((member) => member.role === "admin" && (task.participant_ids || []).includes(Number(member.id))).map((member) => `<input type="hidden" name="legacy_admin_participant" value="${Number(member.id)}">`).join('')}</fieldset>
+    <fieldset><legend>参与成员（可多选）</legend><p class="field-help">负责人和参与成员都可编辑任务设置。</p>${choiceGrid("participant_ids", members, task.participant_ids || [], memberLabel)}</fieldset>
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
     <div class="grid-2"><label>开始日期<input name="start_date" type="date" value="${esc(task.start_date)}"></label><label>截止日期<input name="due_date" type="date" value="${esc(task.due_date)}"></label></div>
     ${`<label>主前置任务<select name="parent_id">${options(others.map((item) => ({...item, name: taskLabel(item)})), task.parent_id, "无主前置任务")}</select></label>`}
@@ -74,7 +74,7 @@ function bindTaskForm(task, generation) {
     event.preventDefault();
     const payload = Object.fromEntries(new FormData(form));
     window.TaskDateDefaults?.payload(form, payload);
-    payload.participant_ids = [...checkedValues(form, "participant_ids"), ...[...form.querySelectorAll('[name="legacy_admin_participant"]')].map((input) => Number(input.value))];
+    payload.participant_ids = checkedValues(form, "participant_ids");
     payload.predecessor_ids = checkedValues(form, "predecessor_ids");
     const projectSelect = form.querySelector('[name="project_id"]');
     if (projectSelect) payload.project_id = retainArchivedCatalogSelection(

@@ -41,7 +41,7 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await page.locator('#daily-form [name=title]').fill('保留日常草稿');
     await page.locator('#daily-form [name=detail]').fill('保留分组与说明');
     await page.locator('[name=enabled][value=mechanical]').check();await page.locator(`[name=owners-mechanical][value="${owner.id}"]`).check();
-    assert.equal(await page.locator('[name=owners-mechanical][value="1"]').count(),0);
+    assert.equal(await page.locator('[name=owners-mechanical][value="1"]').count(),1);
     const row=page.locator(`[name=owners-mechanical][value="${owner.id}"]`).locator('..');assert.ok((await row.boundingBox()).height>=44);
     assert.equal(await row.getAttribute('class'),'daily-owner-choice is-selected');
     await page.locator('[data-owner-search=mechanical]').fill('不存在');assert.equal(await row.isVisible(),false);
@@ -49,6 +49,8 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await page.locator('#task-create-type').selectOption('vehicle');await ready(page);assert.equal(await page.locator('#create-form [name=title]').inputValue(),'保持草稿');
     await page.locator('#task-create-type').selectOption('daily');await ready(page);assert.equal(await page.locator('#daily-form [name=title]').inputValue(),'保留日常草稿');assert.equal(await page.locator(`[name=owners-mechanical][value="${owner.id}"]`).isChecked(),true);
     await page.locator('#task-create-type').selectOption('vehicle');await ready(page);
+    assert.equal(await page.locator('#create-owner option[value="1"]').count(),1);
+    assert.equal(await page.locator('#create-participants input[value="1"]').count(),1);
     await page.locator(`[name=participant_ids][value="${owner.id}"]`).check();await page.locator('#create-form [type=submit]').click();
     assert.equal(await page.locator('#create-owner').evaluate(node=>node.validity.valid),false);
     await page.locator(`[name=participant_ids][value="${owner.id}"]`).uncheck();assert.equal(await page.locator('#create-owner').evaluate(node=>node.validity.valid),true);
@@ -62,7 +64,7 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await page.locator('#create-form [type=submit]').click();await page.locator('#task-create-feedback').filter({hasText:'任务已创建'}).waitFor();
     assert.equal(await page.locator('#task-create-panel').evaluate(node=>node.open),false);
     await page.locator('#new-task-toggle').click();await ready(page);assert.equal(await page.locator('#create-form input[type=checkbox]:checked').count(),0);await page.keyboard.press('Escape');
-    checks.push('shared type switching preserves independent drafts; admin excluded; owner search, selection and validation; clean new draft');
+    checks.push('shared type switching preserves independent drafts; admin assignable; owner search, selection and validation; clean new draft');
     checks.push('desktop create: deep link, focus, Escape, retained draft, failed save, successful save');
     const parentA=(await api(page,'/api/task',{title:'前置 A',due_date:'2026-12-10'})).body;
     const parentB=(await api(page,'/api/task',{title:'前置 B',due_date:'2026-12-20'})).body;

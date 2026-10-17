@@ -80,10 +80,6 @@ def _validate(
         return "有参与者时必须指定负责人"
     if not active_ids(db, "members", list(dict.fromkeys(active_member_ids))):
         return "负责人或参与者不存在或已停用"
-    if active_member_ids:
-        placeholders = ','.join('?' for _ in active_member_ids)
-        if db.execute(f"SELECT 1 FROM members WHERE role='admin' AND id IN ({placeholders})", active_member_ids).fetchone():
-            return "管理员不参与造车任务，请选择其他负责人或参与成员"
     if not active_ids(db, "groups", active_group_ids):
         return "组别不存在"
     if active_project_id is not None and not active_ids(db, "projects", [active_project_id]):
