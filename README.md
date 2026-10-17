@@ -82,7 +82,7 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 - [成员使用手册](docs/usage/成员使用手册.md) · [管理员操作手册](docs/usage/管理员操作手册.md)
 - [系统架构](docs/technical/系统架构与技术说明.md) · [源码导读](docs/technical/source-guide.md) · [开发指南](docs/technical/开发与优化指南.md)
 - [配置与权限参考](docs/technical/配置与权限参考.md) · [服务器运维](docs/technical/服务器运维手册.md) · [发布检查与数据恢复](docs/technical/发布检查与数据恢复.md)
-- [Windows / Android / Linux 客户端与自动版本打包](clients/README.md)：`python clients/release.py` 统一递增版本并生成 Windows EXE、Android APK、Ubuntu 22.04 ARM64 DEB、Fedora 44/45 共用 x86_64 RPM，四个产物全部成功后才清理旧安装包。
+- [Windows / Android / Linux 客户端与版本交付](clients/README.md)：先确认是否生成安装包及目标版本号，再通过 `python clients/release.py` 生成 Windows EXE、Android APK、Ubuntu 22.04 ARM64 DEB、Fedora 44/45 共用 x86_64 RPM，四个产物全部成功后才清理旧安装包。
 - [当前待办](TODO.md) · [设计规范](DESIGN.md)
 
 详细实现与数据迁移行为以当前代码和测试为准，历史重构记录不再作为现行功能说明。

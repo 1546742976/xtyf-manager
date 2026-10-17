@@ -29,14 +29,19 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 
 ## 统一版本交付
 
-在项目根目录运行：
+生成安装包前按 [项目交付约定](../AGENTS.md) 询问是否生成及目标版本号。先完成代码修改与必要验证，在项目根目录预览发布入口预计生成的版本：
 
 ```powershell
 python clients/release.py --dry-run
+```
+
+获得用户对生成安装包和版本号的明确确认，且预计版本与确认一致后，再执行：
+
+```powershell
 python clients/release.py
 ```
 
-每次成功发布只递增一次补丁版本和 Android versionCode。先检查构建环境，再构建一次共享前端，四个平台复用同一份资源清单。四个安装包全部构建并检查通过后才替换报告、发布新版和清理旧包；失败恢复版本及原报告，保留旧安装包。
+当前脚本默认递增一次补丁版本和 Android versionCode，尚无指定版本号参数。若用户选择其他版本，先解决发布入口的版本支持，使最终产物与确认一致，再正式构建。先检查构建环境，再构建一次共享前端，四个平台复用同一份资源清单。四个安装包全部构建并检查通过后才替换报告、发布新版和清理旧包；失败恢复版本及原报告，保留旧安装包。
 
 版本来源是 `clients/config.json`，发布入口同步 Tauri 配置、Cargo 和 Android Manifest。不要手工修改版本进行正式交付。
 
@@ -75,7 +80,7 @@ python clients/build_linux.py --check
 
 Linux 默认使用 `Ubuntu-22.04` WSL 的 root 构建用户，缓存位于 `/root/.cache/xtyf-manager-build`；可通过脚本参数指定发行版和用户。ARM64 开发包提取到独立 sysroot，不修改主机 apt 软件源或外国架构列表。Linux 依赖及输出与 Windows 分开。
 
-单平台命令只用于按当前版本调试，不代替四包正式发布：
+单平台生成安装包同样需要确认是否生成及版本号；以下命令只用于按当前版本调试，不代替四包正式发布（`-Check` 仅检查环境）：
 
 ```powershell
 .\clients\build_windows.ps1 -Check
