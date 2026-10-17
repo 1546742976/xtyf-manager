@@ -1,5 +1,5 @@
 <div id="daily-app" data-member-id="{{ me.id }}" data-manager="{{ '1' if me.role in ('admin','manager') else '0' }}" data-project-id="{{ project_id or '' }}">
-<p class="field-help">每个日常项目围绕一个共同目标，按机械、电控、视觉分别维护负责人和进度。</p>
+<p class="field-help">每个日常项目选择需要参与的现有专业组，分别维护负责人和进度。各组平均进度供参考；所有启用组达到 100% 即完成项目。</p>
 <p id="daily-message" role="status" aria-live="polite"></p>
 <section id="daily-detail" class="panel" hidden></section>
 <section id="daily-list-panel">

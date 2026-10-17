@@ -18,23 +18,29 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.goto(base+'/login');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('123456');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
     await page.locator('#account-password-form [name=old]').fill('123456');await page.locator('#account-password-form [name=new]').fill('daily-browser-password');await page.locator('#account-password-form [name=confirm]').fill('daily-browser-password');await page.locator('#account-password-form button').click();await page.waitForURL(base+'/');
     const owner=(await api(page,'/api/member',{name:'浏览器负责人',username:'daily_browser_owner',password:'owner-password'})).body;
+    const specialties=(await api(page,'/api/groups')).body.groups;
+    const mechanical=`group-${specialties.find(group=>group.name==='机械').id}`;
+    const vision=`group-${specialties.find(group=>group.name==='视觉').id}`;
+    const groupForm=(target,stage)=>target.locator(`[data-progress-form=${stage}]`);
     await page.goto(base+'/daily-projects');await page.locator('#new-task-toggle').click();
     await page.locator('#daily-form [name=title]').fill('共同大目标：研发长期可读的机械电控视觉协作方案');
     await page.locator('#daily-form [name=detail]').fill('一个大目标，不拆分小任务。');await page.locator('#daily-form [name=status]').selectOption('阻塞');
-    for(const stage of ['mechanical','vision']){await page.locator(`[name=enabled][value=${stage}]`).check();await page.locator(`[name=owners-${stage}][value="${owner.id}"]`).check();}
+    await page.locator('#daily-form [name=blocker_reason]').fill('等待联调设备');
+    await page.locator('#daily-form [name=blocker_next_action]').fill('负责人协调设备后继续联调');
+    for(const stage of [mechanical,vision]){await page.locator(`[name=enabled][value=${stage}]`).check();await page.locator(`[name=owners-${stage}][value="${owner.id}"]`).check();}
     await page.locator('#daily-form [type=submit]').click();await page.waitForURL(/\/tasks\?type=daily&project=\d+$/);
-    const id=Number(new URL(page.url()).searchParams.get('project'));await page.locator('[data-progress-form=mechanical]').waitFor();
-    await page.locator('[data-progress-form=vision] [name=note]').fill('尚未提交的视觉草稿');
-    await page.locator('[data-progress-form=mechanical] [name=progress]').fill('70');await page.locator('[data-progress-form=mechanical] [name=note]').fill('机械结构完成');await page.locator('[data-progress-form=mechanical] button').click();
-    await page.locator('[data-progress-form=mechanical] .form-message').filter({hasText:'进度已保存'}).waitFor();assert.equal(await page.locator('[data-progress-form=vision] [name=note]').inputValue(),'尚未提交的视觉草稿');
+    const id=Number(new URL(page.url()).searchParams.get('project'));await groupForm(page,mechanical).waitFor();
+    await groupForm(page,vision).locator('[name=note]').fill('尚未提交的视觉草稿');
+    await groupForm(page,mechanical).locator('[name=progress]').fill('70');await groupForm(page,mechanical).locator('[name=note]').fill('机械结构完成');await groupForm(page,mechanical).locator('button').click();
+    await groupForm(page,mechanical).locator('.form-message').filter({hasText:'进度已保存'}).waitFor();assert.equal(await groupForm(page,vision).locator('[name=note]').inputValue(),'尚未提交的视觉草稿');
     assert.equal((await api(page,`/api/daily-projects/${id}`)).body.project.progress,35);
-    await page.route(`**/api/daily-projects/${id}/groups/vision/progress`,r=>r.request().method()==='POST'?r.fulfill({status:409,json:{ok:false,error:'分配或进度已变化'}}):r.continue());
-    await page.locator('[data-progress-form=vision] button').click();await page.locator('[data-progress-form=vision] .form-message').filter({hasText:'输入已保留'}).waitFor();assert.equal(await page.locator('[data-progress-form=vision] [name=note]').inputValue(),'尚未提交的视觉草稿');
-    await page.unroute(`**/api/daily-projects/${id}/groups/vision/progress`);checks.push('goal creation, group progress, cross-group draft retention and conflict recovery');
+    await page.route(`**/api/daily-projects/${id}/groups/${vision}/progress`,r=>r.request().method()==='POST'?r.fulfill({status:409,json:{ok:false,error:'分配或进度已变化'}}):r.continue());
+    await groupForm(page,vision).locator('button').click();await groupForm(page,vision).locator('.form-message').filter({hasText:'输入已保留'}).waitFor();assert.equal(await groupForm(page,vision).locator('[name=note]').inputValue(),'尚未提交的视觉草稿');
+    await page.unroute(`**/api/daily-projects/${id}/groups/${vision}/progress`);checks.push('goal creation, group progress, cross-group draft retention and conflict recovery');
     for(const theme of ['light','dark']){
       await api(page,'/api/account/preferences',{theme});
       for(const width of [375,390,767,768,1280]){
-        await page.setViewportSize({width,height:900});await page.goto(base+`/daily-projects/${id}`);await page.locator('[data-progress-form=mechanical]').waitFor();
+        await page.setViewportSize({width,height:900});await page.goto(base+`/daily-projects/${id}`);await groupForm(page,mechanical).waitFor();
         assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,theme+' '+width);
         await page.screenshot({path:path.join(output,`daily-${theme}-${width}.png`),fullPage:true});
       }
@@ -91,8 +97,8 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     if(process.env.REVIEW_WEBKIT_PATH){
       phoneBrowser=await webkit.launch({headless:true,executablePath:process.env.REVIEW_WEBKIT_PATH});
       const context=await phoneBrowser.newContext({...devices['iPhone 13']});await context.addCookies(await page.context().cookies());const phone=await context.newPage();phone.on('pageerror',e=>errors.push(e.message));
-      await phone.goto(base+`/daily-projects/${id}`);await phone.locator('[data-progress-form=mechanical]').waitFor();assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
-      await phone.locator('[data-progress-form=mechanical] [name=note]').fill('WebKit 手机更新');await phone.locator('[data-progress-form=mechanical] button').click();await phone.locator('[data-progress-form=mechanical] .form-message').filter({hasText:'进度已保存'}).waitFor();await phone.screenshot({path:path.join(output,'daily-webkit-iphone.png'),fullPage:true});checks.push('iPhone WebKit simulated group update');
+      await phone.goto(base+`/daily-projects/${id}`);await groupForm(phone,mechanical).waitFor();assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+      await groupForm(phone,mechanical).locator('[name=note]').fill('WebKit 手机更新');await groupForm(phone,mechanical).locator('button').click();await groupForm(phone,mechanical).locator('.form-message').filter({hasText:'进度已保存'}).waitFor();await phone.screenshot({path:path.join(output,'daily-webkit-iphone.png'),fullPage:true});checks.push('iPhone WebKit simulated group update');
     }
     assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:true,checks,errors},null,2));console.log('DAILY_MAIL_BROWSER_OK '+JSON.stringify(checks));
   }catch(error){console.error(error);console.error(errors);console.error(log.slice(-2000));process.exitCode=1;}

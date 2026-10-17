@@ -20,7 +20,7 @@
   }
   function card(project) {
     const enabled=project.groups.filter(g=>g.enabled), owners=[...new Set(enabled.flatMap(g=>g.owners.map(o=>o.name)))];
-    return `<article class="daily-card${reasons(project)?' daily-alert':''}"><h2><a href="/tasks?type=daily&project=${project.id}">${escape(project.title)}</a></h2><p>${escape(project.status)} · ${escape(project.priority)}优先级</p><p class="muted">${escape(owners.join('、'))}</p>${meter(project.progress,'总进度')}<div>${enabled.map(g=>meter(g.progress,g.label)).join('')}</div><p>${escape(reasons(project)|| (project.due_date?'截止：'+project.due_date:'未设置截止日期'))}</p><a class="btn" href="/tasks?type=daily&project=${project.id}">查看项目</a></article>`;
+    return `<article class="daily-card${reasons(project)?' daily-alert':''}"><h2><a href="/tasks?type=daily&project=${project.id}">${escape(project.title)}</a></h2><p>${escape(project.status)} · ${escape(project.priority)}优先级</p><p class="muted">${escape(owners.join('、'))}</p>${meter(project.progress,'各组平均进度')}<div>${enabled.map(g=>meter(g.progress,g.label)).join('')}</div><p>${escape(reasons(project)|| (project.due_date?'截止：'+project.due_date:'未设置截止日期'))}</p><a class="btn" href="/tasks?type=daily&project=${project.id}">查看项目</a></article>`;
   }
   const dashboard=document.getElementById('daily-dashboard');
   if(dashboard) {
@@ -48,6 +48,35 @@
     pages.innerHTML=`<button class="btn" type="button" data-page="${page-1}" ${page<=1?'disabled':''}>上一页</button><span>第 ${page} 页 · 共 ${data.total} 项</span><button class="btn" type="button" data-page="${page+1}" ${page*20>=data.total?'disabled':''}>下一页</button>`;
   }
   function own(group) {return isManager || group.owners.some(o=>o.id===memberId);}
+  function updateSummary(project) {
+    current.version=project.version;current.status=project.status;current.progress=project.progress;
+    for(const key of ['completed_at','blocker_reason','blocker_next_action','blocker_helper_id','blocker_follow_up','blocker_helper_name','blocker_events'])current[key]=project[key];
+    const status=host.querySelector('[data-daily-status]');if(status)status.textContent=project.status;
+    host.querySelector(':scope > .daily-meter strong').textContent=project.progress+'%';
+    host.querySelector(':scope > .daily-meter progress').value=project.progress;
+    const closed=['已完成','已取消'].includes(project.status);
+    host.querySelectorAll('[data-progress-form] button,[data-progress-form] input,[data-progress-form] textarea').forEach(control=>{control.disabled=closed;});
+    const edit=document.getElementById('daily-edit');if(edit)edit.textContent=closed?'重新打开／调整项目':'编辑项目';
+    const hint=host.querySelector('[data-daily-reminder]');if(hint)hint.textContent=reasons(project);
+  }
+  async function showBlocker(project) {
+    const target=host.querySelector('#daily-blocker');if(!target)return;
+    const blocked=project.status==='阻塞',canEdit=!['已完成','已取消'].includes(project.status)&&(isManager||project.groups.some(group=>group.enabled&&own(group)));
+    target.innerHTML=`<h3>阻塞跟进</h3>${blocked?`<p>${escape(project.blocker_reason||'历史阻塞尚未补充原因')}</p><p>下一步：${escape(project.blocker_next_action||'待补充')}</p><p>协助人：${escape(project.blocker_helper_name||'未指定')}</p><p>下次跟进：${escape(project.blocker_follow_up||'未设置')}</p>`:'<p>当前无阻塞</p>'}${canEdit?`<form id="daily-blocker-form"><label>阻塞原因<textarea name="blocker_reason" maxlength="2000">${escape(project.blocker_reason||'')}</textarea></label><label>下一步<textarea name="blocker_next_action" maxlength="2000">${escape(project.blocker_next_action||'')}</textarea></label><label>协助人<select name="blocker_helper_id"><option value="">未指定</option></select></label><label>下次跟进日期<input name="blocker_follow_up" type="date" value="${escape(project.blocker_follow_up||'')}"></label>${blocked?'<label>解除阻塞结果<textarea name="blocker_result" maxlength="2000"></textarea></label>':''}<button class="btn" type="submit">${blocked?'保存阻塞跟进':'标记阻塞'}</button>${blocked?'<button class="btn" type="button" data-resolve-blocker>解除阻塞</button>':''}<p class="form-message" role="status"></p></form>`:''}<details><summary>阻塞历史（${(project.blocker_events||[]).length}）</summary>${(project.blocker_events||[]).map(event=>`<article class="daily-update"><strong>${escape(event.actor_name)} · ${escape({open:'建立阻塞',update:'更新跟进',resolve:'结束阻塞',cancel:'取消项目，结束跟进'}[event.action]||event.action)}</strong><time>${escape(event.created_at)}</time><p>${escape(event.reason)}</p><p>${escape(event.next_action)}</p><p>协助人：${escape(event.helper_name||'未指定')} · 下次跟进：${escape(event.follow_up||'未设置')}</p><p>${escape(event.resolution||'')}</p></article>`).join('')}</details>`;
+    const form=target.querySelector('form');if(!form)return;
+    const catalog=await request('/api/data');if(!form.isConnected)return;
+    const members=catalog.members.filter(member=>member.is_active!==0);
+    form.elements.blocker_helper_id.insertAdjacentHTML('beforeend',members.map(member=>`<option value="${member.id}" ${member.id===project.blocker_helper_id?'selected':''}>${escape(member.name)}</option>`).join(''));
+    if(project.blocker_helper_id&&!members.some(member=>member.id===project.blocker_helper_id)) {
+      form.elements.blocker_helper_id.insertAdjacentHTML('beforeend',`<option value="${Number(project.blocker_helper_id)}" selected>${escape(project.blocker_helper_name||`成员 #${project.blocker_helper_id}`)}（已停用）</option>`);
+    }
+    const save=resolve=>BusinessUI.action('daily-blocker:'+project.id,form.querySelectorAll('button'),async()=>{
+      const body=Object.fromEntries(new FormData(form));body.version=current.version;body.blocker_action=resolve?'resolve':blocked?'update':'open';body.blocker_helper_id=body.blocker_helper_id?Number(body.blocker_helper_id):null;
+      const data=await request(`/api/daily-projects/${project.id}/blocker`,body);updateSummary(data.project);await showBlocker(data.project);
+    },text=>{form.querySelector('.form-message').textContent=text+'；输入已保留。';});
+    form.addEventListener('submit',event=>{event.preventDefault();save(false);});
+    form.querySelector('[data-resolve-blocker]')?.addEventListener('click',()=>save(true));
+  }
   async function history(project, stage, before) {
     const box=host.querySelector(`[data-history="${stage}"]`);
     if(!box)return;
@@ -62,12 +91,18 @@
     const data=await request('/api/daily-projects/'+id); current=data.project;
     const project=current, closed=['已完成','已取消'].includes(project.status);
     host.hidden=false; document.getElementById('daily-list-panel').hidden=true;
-    host.innerHTML=`<a class="btn" href="/tasks?type=daily">返回项目列表</a><h2>${escape(project.title)}</h2><p class="daily-note">${escape(project.detail||'暂无目标说明')}</p><p>${escape(project.status)} · ${escape(project.priority)}优先级 · ${escape(project.start_date||'未设开始日期')} → ${escape(project.due_date||'未设截止日期')}</p><p>${escape(reasons(project))}</p>${meter(project.progress,'总进度')}${isManager?`<div class="daily-actions"><button type="button" class="btn" id="daily-edit">${closed?'重新打开／调整项目':'编辑项目'}</button><button type="button" class="btn danger" id="daily-delete">删除项目</button></div>`:''}<div class="daily-group-grid">${project.groups.map(g=>`<section class="daily-group"><h3>${escape(g.label)}${g.enabled?'':'（已停用）'}</h3><p>负责人：${g.owners.map(o=>escape(o.name)+(!o.is_active||o.deleted_at?'（已停用）':'')).join('、')}</p>${meter(g.progress,g.label+'进度')}${g.enabled&&!closed&&own(g)?`<form data-progress-form="${g.stage}"><label>进度百分比<input name="progress" type="number" min="0" max="100" step="1" value="${g.progress}" required></label><label>进度备注<textarea name="note" rows="3" maxlength="2000"></textarea></label><label>图片（最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple></label><button class="btn primary" type="submit">提交${escape(g.label)}进度</button><p class="form-message" role="status" aria-live="polite"></p></form>`:'<p class="muted">只读记录</p>'}<h4>进度记录</h4><div data-history="${g.stage}">加载中…</div><button class="btn" type="button" data-history-retry="${g.stage}">刷新记录</button></section>`).join('')}</div>`;
+    host.innerHTML=`<a class="btn" href="/tasks?type=daily">返回项目列表</a><h2>${escape(project.title)}</h2><p class="daily-note">${escape(project.detail||'暂无目标说明')}</p><p>${escape(project.status)} · ${escape(project.priority)}优先级 · ${escape(project.start_date||'未设开始日期')} → ${escape(project.due_date||'未设截止日期')}</p><p>${escape(reasons(project))}</p>${meter(project.progress,'各组平均进度')}${isManager?`<div class="daily-actions"><button type="button" class="btn" id="daily-edit">${closed?'重新打开／调整项目':'编辑项目'}</button><button type="button" class="btn danger" id="daily-delete">删除项目</button></div>`:''}<div class="daily-group-grid">${project.groups.map(g=>`<section class="daily-group"><h3>${escape(g.label)}${g.enabled?'':'（已停用）'}${g.catalog_archived?'（专业组已停用）':''}</h3><p>负责人：${g.owners.map(o=>escape(o.name)+(!o.is_active||o.deleted_at?'（已停用）':'')).join('、')}</p>${meter(g.progress,g.label+'进度')}${g.enabled&&!closed&&own(g)?`<form data-progress-form="${g.stage}"><label>进度百分比<input name="progress" type="number" min="0" max="100" step="1" value="${g.progress}" required></label><label>进度备注<textarea name="note" rows="3" maxlength="2000"></textarea></label><label>图片（最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple></label><button class="btn primary" type="submit">提交${escape(g.label)}进度</button><p class="form-message" role="status" aria-live="polite"></p></form>`:'<p class="muted">只读记录</p>'}<h4>进度记录</h4><div data-history="${g.stage}">加载中…</div><button class="btn" type="button" data-history-retry="${g.stage}">刷新记录</button></section>`).join('')}</div>`;
     for(const group of project.groups) history(project,group.stage).catch(error=>{const box=host.querySelector(`[data-history="${group.stage}"]`);if(box)box.textContent=error.message;});
-    document.getElementById('daily-edit')?.addEventListener('click',event=>window.TaskCreateDialog.open({type:'daily',project,trigger:event.currentTarget}));
+    const header=host.querySelector(':scope > p:nth-of-type(2)');
+    if(header)header.innerHTML=`<span data-daily-status>${escape(project.status)}</span> · ${escape(project.priority)}优先级 · ${escape(project.start_date||'未设开始日期')} → ${escape(project.due_date||'未设截止日期')}`;
+    const reminder=host.querySelector(':scope > p:nth-of-type(3)');if(reminder)reminder.dataset.dailyReminder='';
+    host.insertAdjacentHTML('beforeend',`<section id="daily-blocker"></section><section id="daily-topic-links" data-item-type="daily" data-item-id="${project.id}"></section>`);
+    showBlocker(project).catch(error=>{host.querySelector('#daily-blocker').textContent=error.message+'；请刷新后重试。';});
+    document.dispatchEvent(new CustomEvent('daily:rendered',{detail:{project,host}}));
+    document.getElementById('daily-edit')?.addEventListener('click',event=>window.TaskCreateDialog.open({type:'daily',project:current,trigger:event.currentTarget}));
     document.getElementById('daily-delete')?.addEventListener('click',()=>{
       if(!confirm('删除该项目？项目将从列表移除，历史记录仍保留。'))return;
-      action('daily-delete',host.querySelectorAll('button'),async()=>{await request(`/api/daily-projects/${id}/delete`,{version:project.version});location.assign('/tasks?type=daily');});
+      action('daily-delete',host.querySelectorAll('button'),async()=>{await request(`/api/daily-projects/${id}/delete`,{version:current.version});location.assign('/tasks?type=daily');});
     });
     host.querySelectorAll('[data-progress-form]').forEach(form=>form.addEventListener('submit',event=>{
       event.preventDefault();
@@ -80,15 +115,17 @@
         local.textContent='正在保存…';
         const result=await request(`/api/daily-projects/${id}/groups/${stage}/progress`,body);
         group.version=result.version;group.progress=fields.progress;
+        updateSummary(result.project);
         form.elements.note.value='';form.elements.files.value='';local.textContent='进度已保存';
         const section=form.closest('.daily-group');section.querySelector('progress').value=fields.progress;section.querySelector('.daily-meter strong').textContent=fields.progress+'%';
         // Refresh only this history and total; preserve drafts in the other groups.
         try {
-          const fresh=(await request('/api/daily-projects/'+id)).project;
-          host.querySelector(':scope > .daily-meter strong').textContent=fresh.progress+'%';host.querySelector(':scope > .daily-meter progress').value=fresh.progress;
           await history(current,stage);
+          if(['已完成','已取消'].includes(current.status))await showBlocker(current);
         } catch(error) {local.textContent='进度已保存，但最新摘要加载失败，请刷新记录核对：'+error.message;}
-      },text=>{local.textContent=text+'；输入已保留。若版本冲突，请记录草稿后重新打开项目。';});
+      },text=>{local.textContent=text+'；输入已保留。若版本冲突，请记录草稿后重新打开项目。';}).finally(()=>{
+        if(['已完成','已取消'].includes(current.status))form.querySelectorAll('button,input,textarea').forEach(control=>{control.disabled=true;});
+      });
     }));
   }
   host.addEventListener('click',event=>{
