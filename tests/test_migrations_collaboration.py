@@ -2,6 +2,8 @@
 import sqlite3
 import unittest
 
+# 先经过测试夹具，确保 common 在临时目录下完成导入。
+import test_tasks  # noqa: F401
 from modules.task_migrations import DEFAULT_GROUPS, DEFAULT_VEHICLE_GROUPS, migrate
 
 

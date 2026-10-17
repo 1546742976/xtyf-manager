@@ -8,6 +8,8 @@ from unittest.mock import patch
 from PIL import Image
 from werkzeug.datastructures import FileStorage
 
+# 先经过测试夹具，保证附件目录是临时目录。
+import test_tasks  # noqa: F401
 from modules.image_storage import ImageValidationError, prepare_image
 
 

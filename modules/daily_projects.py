@@ -95,7 +95,8 @@ def _finish_description(project, groups):
     enabled = [g for g in groups if g['enabled']]
     project['progress'] = float((Decimal(sum(g['progress'] for g in enabled)) / max(1, len(enabled))).quantize(Decimal('.1'), rounding=ROUND_HALF_UP))
     project['owner_ids'] = sorted({o['id'] for g in enabled for o in g['owners']})
-    project['days_left'] = (datetime.strptime(row['due_date'], '%Y-%m-%d').date() - now().date()).days if row['due_date'] else None
+    due_date = project.get('due_date')
+    project['days_left'] = (datetime.strptime(due_date, '%Y-%m-%d').date() - now().date()).days if due_date else None
     return project
 
 
@@ -132,7 +133,7 @@ def listing():
     db, user = get_db(), current_user()
     if request.args.get('dashboard') == '1':
         rows = db.execute("SELECT * FROM daily_projects WHERE deleted_at IS NULL AND status NOT IN ('已完成','已取消')")
-        items, total = dashboard_selection([describe(db, r) for r in rows], user['id'])
+        items, total = dashboard_selection(describe_many(db, rows), user['id'])
         return jsonify(ok=True, items=items, total=total)
     try:
         page_number = integer(int(request.args.get('page', '1')), '页码', maximum=100000)
@@ -150,7 +151,7 @@ def listing():
     where = ' AND '.join(clauses)
     total = db.execute('SELECT count(*) FROM daily_projects p WHERE ' + where, args).fetchone()[0]
     rows = db.execute('SELECT p.* FROM daily_projects p WHERE ' + where + ' ORDER BY p.id DESC LIMIT 20 OFFSET ?', [*args, (page_number-1)*20])
-    return jsonify(ok=True, items=[describe(db, r) for r in rows], total=total, page=page_number, per_page=20)
+    return jsonify(ok=True, items=describe_many(db, rows), total=total, page=page_number, per_page=20)
 
 
 @bp.get('/api/daily-projects/<int:pid>')

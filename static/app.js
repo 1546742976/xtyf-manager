@@ -55,6 +55,7 @@ async function apiRequest(url, data) {
   }
 }
 function esc(value) {
+  // 自包含实现：纯函数单元测试与不加载 business-ui.js 的独立页面也依赖它。
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 }
 function memberById(id) {

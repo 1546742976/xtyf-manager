@@ -14,8 +14,9 @@ from uuid import uuid4
 
 from flask.testing import FlaskClient
 from PIL import Image
-from common import get_db
+# 先导入测试夹具（设置临时库/目录），再导入项目模块，避免绑定真实 data.db。
 from test_tasks import app_module
+from common import get_db
 
 API = '/discussions/api'
 

@@ -2,8 +2,9 @@
 import unittest
 from uuid import uuid4
 
-from common import get_db
+# 先导入测试夹具（设置临时库/目录），再导入项目模块。
 from test_tasks import app_module
+from common import get_db
 
 
 class TaskAssignmentRoles(unittest.TestCase):
