@@ -43,7 +43,7 @@ jobs:
         run: python tests/upgrade_from_main.py
       - name: Python syntax check
         run: python -m compileall -q app.py common.py modules tests deploy
-      - name: Lint (ruff: syntax, unused imports/variables)
+      - name: 'Lint (ruff: syntax, unused imports/variables)'
         run: ruff check app.py common.py modules deploy tests
       - name: Run unit and integration tests with branch coverage
         run: coverage run --branch --source=app,common,modules,deploy -m unittest discover -s tests -v
