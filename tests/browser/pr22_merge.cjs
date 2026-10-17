@@ -47,14 +47,20 @@ async function login(page, base, username, password, firstLogin=true) {
     const groups=(await api(page,'/api/groups')).body.groups;
     const projects=(await api(page,'/api/projects')).body.projects;
     const member=(await api(page,'/api/member',{name:'合并验收项管',username:'merge-manager',password:'merge-test-password',role:'manager',group_ids:[groups.find(g=>g.name==='机械').id]})).body;
+    // Match the server's Beijing calendar even when the CI runner uses UTC.
+    const calendar=await api(page,'/api/workspace/countdown');assert.equal(calendar.status,200);
+    const today=calendar.body.countdown.today;
     const date=offset=>{
-      const day=new Date();day.setDate(day.getDate()+offset);
-      return [day.getFullYear(),String(day.getMonth()+1).padStart(2,'0'),String(day.getDate()).padStart(2,'0')].join('-');
+      const day=new Date(`${today}T12:00:00Z`);day.setUTCDate(day.getUTCDate()+offset);
+      return day.toISOString().slice(0,10);
     };
     const project=projects.find(p=>p.is_active).id;
     const blocked=(await api(page,'/api/task',{title:'阻塞且今天截止',owner_id:member.id,project_id:project,status:'阻塞',blocker_reason:'等待联调',blocker_next_action:'负责人协调测试时间',start_date:date(-2),due_date:date(0)})).body;
     const overdue=(await api(page,'/api/task',{title:'已逾期任务',owner_id:member.id,status:'进行中',due_date:date(-1)})).body;
     assert.equal(blocked.ok,true);assert.equal(overdue.ok,true);
+    const taskDates=(await api(page,'/api/data')).body.tasks;
+    assert.equal(taskDates.find(task=>task.id===blocked.id).days_left,0,'今天截止夹具必须与服务端北京时间一致');
+    assert.equal(taskDates.find(task=>task.id===overdue.id).days_left,-1,'昨天截止夹具必须已逾期');
     // The sidebar shortcut works away from account settings and rolls back failed saves.
     await page.goto(base+'/manage');
     const shortcut=page.locator('#workspace-sidebar [data-theme-toggle]');
