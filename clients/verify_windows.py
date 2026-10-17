@@ -143,7 +143,11 @@ def verify(installer,application,manifest,version,report=None):
         if len(applications)!=1 or len(manifests)!=1:raise ValueError(f'Unexpected NSIS payload: {len(applications)} application(s), {len(manifests)} manifest(s)')
         bundled_app,bundled_manifest=applications[0],manifests[0]
         executable_hash,manifest_hash=sha256(application),sha256(manifest)
-        if sha256(bundled_app)!=executable_hash:raise ValueError('NSIS application differs from the compiled release EXE')
+        compiled_bytes,packaged_bytes=application.read_bytes(),bundled_app.read_bytes()
+        # Tauri patches this one reserved slot while bundling, then restores the build output.
+        marker=b'__TAURI_BUNDLE_TYPE_VAR_UNK'
+        if packaged_bytes!=compiled_bytes and not (compiled_bytes.count(marker)==1 and packaged_bytes==compiled_bytes.replace(marker,b'__TAURI_BUNDLE_TYPE_VAR_NSS',1)):
+            raise ValueError('NSIS application differs from the compiled release EXE beyond the Tauri package marker')
         if sha256(bundled_manifest)!=manifest_hash:raise ValueError('NSIS frontend manifest differs from the shared frontend build')
         if pe_machine(bundled_app)!=0x8664:raise ValueError('NSIS application is not x86_64')
         build_info=target/'extracted-build-info.json'
@@ -156,6 +160,7 @@ def verify(installer,application,manifest,version,report=None):
                 'clientPayloadVerified':True,'installerPayloadExtracted':True,'nativeExecutableVerified':True,
                 'embeddedFrontendVerified':True,'runtimeUiVerified':False,
                 'installerSha256':sha256(installer),'applicationSha256':executable_hash,
+                'packagedApplicationSha256':sha256(bundled_app),'bundleTypeMarker':'NSS',
                 'frontendManifestSha256':manifest_hash,'extractedApplication':bundled_app.relative_to(target).as_posix(),
                 'extractedManifest':bundled_manifest.relative_to(target).as_posix(),'extractor':str(extractor)}
     if report:

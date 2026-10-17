@@ -18,7 +18,7 @@ class TestCollaborationAdversarial(unittest.TestCase):
     def setUp(self) -> None:
         self.admin = app_module.app.test_client()
         result = self.admin.post("/login", json={
-            "username": "admin", "password": "ci-test-password-only",
+            "username": "admin", "password": "123456",
         })
         self.assertEqual(result.status_code, 200)
         self.assertTrue(result.get_json()["ok"])
@@ -62,7 +62,7 @@ class TestCollaborationAdversarial(unittest.TestCase):
         clients = [app_module.app.test_client(), app_module.app.test_client()]
         for client in clients:
             login = client.post("/login", json={
-                "username": "admin", "password": "ci-test-password-only",
+                "username": "admin", "password": "123456",
             })
             self.assertEqual(login.status_code, 200)
         gate = threading.Barrier(2)

@@ -139,7 +139,7 @@
     }catch(error){
       if(server!==serverGeneration||attempt!==bootSequence||error.superseded)return;
       if(error.incompatible)localError('服务器需要更新',error.message);
-      else{connection('暂时无法连接服务器，页面已在本地打开。');if(!frame)renderRoute();}
+      else{connection('暂时无法连接服务器，页面已在本地打开。'+(error.message?' '+error.message:''));if(!frame)renderRoute();}
     }finally{if(attempt===bootSequence)booting=false;}
   }
   function openSettings(){document.getElementById('server-url').value=config.serverUrl;document.getElementById('settings-error').textContent='';settings.showModal();}

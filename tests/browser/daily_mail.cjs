@@ -15,8 +15,8 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     });
     browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(15000);
     page.on('pageerror',error=>errors.push(error.message));page.on('dialog',d=>d.accept());
-    await page.goto(base+'/login');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('browser-test-initial');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
-    await page.locator('#account-password-form [name=old]').fill('browser-test-initial');await page.locator('#account-password-form [name=new]').fill('daily-browser-password');await page.locator('#account-password-form [name=confirm]').fill('daily-browser-password');await page.locator('#account-password-form button').click();await page.waitForURL(base+'/');
+    await page.goto(base+'/login');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('123456');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
+    await page.locator('#account-password-form [name=old]').fill('123456');await page.locator('#account-password-form [name=new]').fill('daily-browser-password');await page.locator('#account-password-form [name=confirm]').fill('daily-browser-password');await page.locator('#account-password-form button').click();await page.waitForURL(base+'/');
     const owner=(await api(page,'/api/member',{name:'浏览器负责人',username:'daily_browser_owner',password:'owner-password'})).body;
     await page.goto(base+'/daily-projects');await page.locator('#new-task-toggle').click();
     await page.locator('#daily-form [name=title]').fill('共同大目标：研发长期可读的机械电控视觉协作方案');

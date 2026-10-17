@@ -17,7 +17,7 @@ class CompletedAtTest(unittest.TestCase):
     def setUpClass(cls):
         cls.app = app_module.app
         cls.admin = cls.app.test_client()
-        cls.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
+        cls.admin.post('/login', json={'username': 'admin', 'password': '123456'})
         username = 'completed_' + uuid4().hex[:12]
         cls.member_id = cls.admin.post('/api/member', json={
             'name': username, 'username': username, 'password': 'completed-test-password',

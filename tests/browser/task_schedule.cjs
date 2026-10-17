@@ -43,9 +43,9 @@ async function ready(page) {
     page.on('pageerror', error=>errors.push(error.message));
     await page.goto(base+'/login');
     await page.locator('[name=username]').fill('admin');
-    await page.locator('[name=password]').fill('browser-test-initial');
+    await page.locator('[name=password]').fill('123456');
     await page.locator('#login-form [type=submit]').click(); await page.waitForURL('**/account');
-    await page.locator('#account-password-form [name=old]').fill('browser-test-initial');
+    await page.locator('#account-password-form [name=old]').fill('123456');
     await page.locator('#account-password-form [name=new]').fill('schedule-browser-password');
     await page.locator('#account-password-form [name=confirm]').fill('schedule-browser-password');
     await page.locator('#account-password-form [type=submit]').click(); await page.waitForURL(base+'/');

@@ -10,7 +10,7 @@ const {once} = require('node:events');
 let playwright;
 try { playwright = require('playwright'); }
 catch (_) {
-  const driver = execFileSync(process.env.REVIEW_PYTHON || 'python', ['-c', 'import pathlib,playwright; print(pathlib.Path(playwright.__file__).parent/"driver/package")'], {encoding:'utf8'}).trim();
+  const driver = execFileSync(process.env.PLAYWRIGHT_PYTHON || 'python', ['-c', 'import pathlib,playwright; print(pathlib.Path(playwright.__file__).parent/"driver/package")'], {encoding:'utf8'}).trim();
   playwright = require(driver);
 }
 const root = path.resolve(__dirname, '../..');
@@ -20,6 +20,7 @@ const output = path.join(root,'.build-tools/tauri-runtime-check');
 fs.mkdirSync(output,{recursive:true});
 const userData = fs.mkdtempSync(path.join(output,'profile-'));
 const results = [], pageErrors = [], webRequests = [], externalRequests = [], nativeMenus = [];
+const uiChecks = {platform:'Windows WebView2',androidDeviceRuntimeVerified:false};
 let backend, application, browser, externalServer, backendLog = '', appLog = '';
 const sleep = ms => new Promise(resolve=>setTimeout(resolve,ms));
 async function waitFor(check,label,timeout=30000) {
@@ -76,6 +77,120 @@ async function targetEvaluate(target,expression) {
   } finally {socket.close();}
 }
 function pass(text) {results.push(text);console.log(text);}
+async function nativeAPI(page, apiPath, data) {
+  const response=await page.evaluate(async({apiPath,data})=>{
+    const result=await XTYF.request(apiPath,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    return {status:result.status,body:await result.json()};
+  },{apiPath,data});
+  assert(response.status>=200&&response.status<300,`Isolated fixture API ${apiPath}: ${JSON.stringify(response.body)}`);
+  assert.notEqual(response.body.ok,false,`Isolated fixture API ${apiPath} failed`);
+  return response.body;
+}
+async function accountGeometry(frame) {
+  return frame.locator('.ux-account-grid').evaluate(grid=>({
+    viewport:innerWidth,
+    panels:Object.fromEntries([...grid.children].filter(node=>node.matches('.panel')).map(node=>{
+      const name=[...node.classList].find(value=>/^ux-account-(profile|email|appearance|editor|password)$/.test(value));
+      const {x,y,width,height}=node.getBoundingClientRect();return [name,{x,y,width,height}];
+    }))
+  }));
+}
+function assertAccountRow(geometry,leftName,rightName) {
+  assert(geometry.viewport>760,'Account desktop assertion needs a desktop viewport');
+  const left=geometry.panels[leftName],right=geometry.panels[rightName];
+  assert(left&&right,`Account row needs ${leftName} and ${rightName}`);
+  assert(Math.abs(left.y-right.y)<=1,'Account panels must share their row');
+  assert(Math.abs(left.height-right.height)<=1,'Account panels in one row must have equal height');
+  assert(right.x>left.x+left.width,'Account panels must have a column gap');
+  assert(right.width/left.width>=1.55&&right.width/left.width<=1.8,'Account editor column should remain wider than the profile column');
+}
+async function verifyMemberTaskNavigation(page,frame) {
+  const member=await nativeAPI(page,'/api/member',{name:'本地运行验收成员',username:'native_ui_member',password:'fixture-member-password'});
+  const created=[];
+  for(const [title,status] of [['本地运行验收·进行中','进行中'],['本地运行验收·待办','未开始'],['本地运行验收·已完成','已完成']]) {
+    created.push(await nativeAPI(page,'/api/task',{title,status,owner_id:member.id}));
+  }
+  await page.evaluate(()=>XTYF.navigate('/tasks'));
+  await frame.locator('#view-seg [data-view="person"]').click();
+  await frame.locator('#f-q').fill('本地运行验收');
+  const trigger=frame.locator(`[data-lane-tasks="m-${member.id}"]`);
+  await trigger.waitFor();
+  const before=await frame.locator('body').evaluate(()=>({filters:{...state.filters},view:state.view}));
+  await trigger.click();
+  await frame.locator('#modal.member-task-list-dialog').waitFor();
+  assert.equal(await frame.locator('#modal [data-task-group="active"] [data-task-id]').count(),2);
+  assert.equal(await frame.locator('#modal [data-task-group="finished"] [data-task-id]').count(),1);
+  for(const task of created)assert.equal(await frame.locator(`#modal [data-task-id="${task.id}"]`).count(),1);
+  await frame.locator('#modal [data-member-task-scroll]').waitFor();
+  await page.screenshot({path:path.join(output,'windows-member-task-list.png')});
+  await frame.locator(`#modal [data-task-id="${created[0].id}"]`).click();
+  await frame.locator('#modal [data-close]').filter({hasText:'返回任务列表'}).waitFor();
+  assert.equal(await page.evaluate(()=>window.XTYFClient.back()),true);
+  await frame.locator('#modal.member-task-list-dialog').waitFor();
+  assert.equal(await frame.locator('#modal [data-task-id]').count(),3);
+  assert.equal(await page.evaluate(()=>window.XTYFClient.back()),true);
+  await frame.locator('#modal-mask').waitFor({state:'hidden'});
+  assert.deepEqual(await frame.locator('body').evaluate(()=>({filters:{...state.filters},view:state.view})),before);
+  assert.equal(await frame.locator('#f-q').inputValue(),'本地运行验收');
+  assert.equal(await page.evaluate(()=>XTYF.route),'/tasks');
+  uiChecks.memberTaskList={source:'real API fixture via native transport',active:2,finished:1,backSequence:['detail','member-task-list','person-lane'],filtersPreserved:true,host:'Windows WebView2; shared Android frontend back handler only'};
+  pass('Member task list includes active and completed tasks; shared back handler returns detail → list → lane on Windows');
+}
+async function verifyAccountGrid(page,frame,forcedGeometry) {
+  await page.evaluate(()=>XTYF.navigate('/account'));
+  await frame.locator('#account-profile-form').waitFor();
+  await waitFor(async()=>!(await frame.locator('#account-group-choices').innerText()).includes('加载中'),'account choices');
+  const normal=await accountGeometry(frame);
+  assertAccountRow(normal,'ux-account-profile','ux-account-email');
+  assertAccountRow(normal,'ux-account-appearance','ux-account-editor');
+  assertAccountRow(forcedGeometry,'ux-account-profile','ux-account-password');
+  assert(!forcedGeometry.panels['ux-account-email']&&!forcedGeometry.panels['ux-account-editor']);
+  await page.screenshot({path:path.join(output,'windows-account-layout.png')});
+  uiChecks.accountLayout={normal,forcedPassword:forcedGeometry,equalRowHeights:true,widerRightColumn:true};
+  pass('Packaged account panels share row heights and retain the wider editor column, including first-password layout');
+}
+async function verifyInvoiceButtons(page,frame) {
+  // This creates only a queued job in the isolated fixture; its worker is deliberately disabled.
+  const job=await nativeAPI(page,'/invoices/api/job/start',{type:'scan_dups'});
+  assert(job.job_id,'Isolated invoice job should have an ID');
+  await page.evaluate(()=>XTYF.navigate('/invoices/'));
+  const selectors=[`#invoiceJobsList [data-job-id="${job.job_id}"]`,'#invoiceSortDirection'];
+  await frame.locator(selectors[0]).waitFor();
+  const palettes=[];
+  for(const theme of ['light','dark']) {
+    if(await frame.locator('html').getAttribute('data-theme')!==theme)await frame.locator('[data-theme-toggle]').first().click();
+    await waitFor(async()=>await frame.locator('html').getAttribute('data-theme')===theme,'invoice '+theme+' theme');
+    for(const selector of selectors) {
+      const button=frame.locator(selector);
+      await frame.locator('h1').first().hover();
+      const readColors=()=>button.evaluate(node=>{
+        const probe=document.createElement('span');probe.style.cssText='background:var(--card);color:var(--text);border:1px solid var(--border)';document.body.append(probe);
+        const expected=getComputedStyle(probe),actual=getComputedStyle(node);
+        const result={background:actual.backgroundColor,text:actual.color,border:actual.borderTopColor,expected:{background:expected.backgroundColor,text:expected.color,border:expected.borderTopColor}};probe.remove();return result;
+      });
+      await waitFor(async()=>{const colors=await readColors();return colors.background===colors.expected.background&&colors.text===colors.expected.text&&colors.border===colors.expected.border;},`${theme} invoice palette colors`);
+      const basic=await readColors();
+      assert.deepEqual({background:basic.background,text:basic.text,border:basic.border},basic.expected,`${theme} invoice button colors`);
+      await button.hover();
+      await waitFor(()=>button.evaluate(node=>{
+        const probe=document.createElement('span');probe.style.background='var(--surface-hover)';document.body.append(probe);
+        const matches=getComputedStyle(node).backgroundColor===getComputedStyle(probe).backgroundColor;probe.remove();return matches;
+      }),theme+' invoice button hover');
+      await page.keyboard.press('Tab');await button.focus();
+      assert(await button.evaluate(node=>node.matches(':focus-visible')&&parseFloat(getComputedStyle(node).outlineWidth)>0),theme+' invoice button visible keyboard focus');
+      await button.evaluate(node=>{node.disabled=true;});
+      await waitFor(()=>button.evaluate((node,expected)=>{const style=getComputedStyle(node);return Number(style.opacity)<1&&style.backgroundColor===expected.background&&style.color===expected.text;},basic),theme+' disabled invoice colors');
+      const disabled=await button.evaluate(node=>{const style=getComputedStyle(node);return {opacity:Number(style.opacity),background:style.backgroundColor,text:style.color};});
+      assert(disabled.opacity<1,theme+' disabled invoice action should be visibly disabled');
+      assert.equal(disabled.background,basic.background);assert.equal(disabled.text,basic.text);
+      await button.evaluate(node=>{node.disabled=false;node.blur();});
+      palettes.push({theme,selector,colors:basic,hover:true,keyboardFocus:true,disabled:true});
+    }
+    await page.screenshot({path:path.join(output,`windows-invoice-buttons-${theme}.png`)});
+  }
+  uiChecks.invoiceButtons={fixture:'queued API job; worker disabled',palettes};
+  pass('Invoice job and sort buttons follow light/dark palette colors with hover, focus and disabled states');
+}
 async function main() {
   assert(fs.existsSync(executable),'Build the actual Tauri executable first');
   const binarySha256=crypto.createHash('sha256').update(fs.readFileSync(executable)).digest('hex');
@@ -102,6 +217,8 @@ async function main() {
   let frame=page.frameLocator('#page-host iframe');
   await frame.locator('input[name=username]').fill('admin');await frame.locator('input[name=password]').fill('browser-test-initial');await frame.locator('button[type=submit]').click();
   await waitFor(()=>page.evaluate(()=>XTYF.bootstrap.authenticated&&XTYF.route==='/account'),'initial-password gate');
+  await frame.locator('#account-password-form').waitFor();
+  const forcedAccountGeometry=await accountGeometry(frame);
   await frame.locator('#account-password-form [name=old]').fill('browser-test-initial');
   await frame.locator('#account-password-form [name=new]').fill('local-runtime-password-2026');
   await frame.locator('#account-password-form [name=confirm]').fill('local-runtime-password-2026');
@@ -113,6 +230,9 @@ async function main() {
     await waitFor(async()=>(await frame.locator('h1').first().innerText()).includes(label),'local route '+route);
   }
   pass('Ten business routes render as packaged local documents through native API transport');
+  await verifyMemberTaskNavigation(page,frame);
+  await verifyAccountGrid(page,frame,forcedAccountGeometry);
+  await verifyInvoiceButtons(page,frame);
   await page.evaluate(()=>XTYF.navigate('/tasks'));await frame.locator('h1').first().waitFor();await page.screenshot({path:path.join(output,'windows-tasks.png')});
   await page.keyboard.press('Alt');await page.screenshot({path:path.join(output,'windows-alt.png')});await page.keyboard.press('Escape');
   assert.deepEqual(webRequests,[],'Privileged main WebView must not fetch remote business pages or CDN assets');
@@ -138,11 +258,11 @@ async function main() {
   await page.locator('#client-settings-open').click();await page.locator('#server-url').waitFor({state:'visible'});await page.screenshot({path:path.join(output,'windows-offline-settings.png')});await page.locator('#settings-cancel').click();
   pass('With server stopped, local login and server settings remain usable');
   assert.deepEqual(pageErrors,[],'No JavaScript runtime errors');
-  return {runtime:'actual Windows Tauri executable with Microsoft WebView2',executable,binarySha256,frontendManifestSha256,version:config.version,passed:results,pageErrors,remoteMainWebRequests:webRequests,externalCredentialLeak:false,nativeMenus};
+  return {runtime:'actual Windows Tauri executable with Microsoft WebView2',executable,binarySha256,frontendManifestSha256,version:config.version,passed:results,pageErrors,remoteMainWebRequests:webRequests,externalCredentialLeak:false,nativeMenus,uiChecks};
 }
 (async()=>{
   let report;
   try{report=await main();console.log(JSON.stringify({passed:results.length,report:path.join(output,'result.json')}));}
-  catch(error){let debugTargets=[];try{debugTargets=await(await fetch('http://127.0.0.1:9224/json/list')).json();}catch(_){}report={runtime:'actual Windows Tauri executable with Microsoft WebView2',passed:results,error:error.stack,pageErrors,remoteMainWebRequests:webRequests,externalRequests,debugTargets};console.error(error);process.exitCode=1;}
+  catch(error){let debugTargets=[];try{debugTargets=await(await fetch('http://127.0.0.1:9224/json/list')).json();}catch(_){}report={runtime:'actual Windows Tauri executable with Microsoft WebView2',passed:results,error:error.stack,pageErrors,remoteMainWebRequests:webRequests,externalRequests,debugTargets,uiChecks};console.error(error);process.exitCode=1;}
   finally{fs.writeFileSync(path.join(output,'result.json'),JSON.stringify(report,null,2));fs.writeFileSync(path.join(output,'application.log'),appLog);fs.writeFileSync(path.join(output,'backend.log'),backendLog);await stopApp();if(backend)backend.kill();if(externalServer)externalServer.close();}
 })();

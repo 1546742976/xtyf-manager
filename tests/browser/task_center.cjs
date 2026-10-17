@@ -28,8 +28,8 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(15000);
     page.on('pageerror',error=>errors.push(error.message));
     await page.goto(base+'/login');
-    await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('browser-test-initial');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
-    await page.locator('#account-password-form [name=old]').fill('browser-test-initial');await page.locator('#account-password-form [name=new]').fill('task-center-password');await page.locator('#account-password-form [name=confirm]').fill('task-center-password');await page.locator('#account-password-form [type=submit]').click();await page.waitForURL(base+'/');
+    await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('123456');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
+    await page.locator('#account-password-form [name=old]').fill('123456');await page.locator('#account-password-form [name=new]').fill('task-center-password');await page.locator('#account-password-form [name=confirm]').fill('task-center-password');await page.locator('#account-password-form [type=submit]').click();await page.waitForURL(base+'/');
     const owner=(await api(page,'/api/member',{name:'机械负责人',username:'task_center_owner',password:'owner-password'})).body;
     await api(page,'/api/member',{name:'视觉负责人',username:'task_center_vision',password:'owner-password'});
     await page.goto(base+'/tasks#create');await ready(page);
@@ -128,7 +128,7 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await page.goto(base+'/daily-projects/'+id);await page.waitForURL(base+'/tasks?type=daily&project='+id);
     await page.locator('.task-type-tabs a').filter({hasText:'造车任务'}).click();await page.locator('#board').waitFor();assert.equal(await page.locator('#daily-app').count(),0);
     checks.push('daily tab retains grouped ownership; legacy URL redirects; switching restores vehicle board');
-    // Assert the actual default card, disclosure and archive behavior in a mixed dataset.
+    // Assert the actual default card and grouped member dialog in a mixed dataset.
     await page.waitForFunction(() => state.members.some(member => member.role !== 'admin'));
     const urgencyUI=await page.evaluate(() => {
       const memberId=Number(state.members.find(m=>m.role!=='admin').id);
@@ -143,22 +143,122 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
       renderBoard();
       const lane=document.querySelector('#lane-m-'+memberId).closest('.person-lane');
       const initial=Array.from(lane.querySelectorAll('#lane-m-'+memberId+' .task-head h3'),n=>n.textContent);
-      const archiveInitiallyHidden=lane.querySelector('.person-finished').hidden;
       const firstScore=taskUrgencyScore(state.tasks[1],memberId);
-      lane.querySelector('[data-lane-toggle]').click();
-      const expanded=Array.from(document.querySelectorAll('#lane-m-'+memberId+' .task-head h3'),n=>n.textContent);
-      document.querySelector('#lane-m-'+memberId).closest('.person-lane')
-        .querySelector('[data-lane-finished-toggle]').click();
-      const archived=Array.from(document.querySelector('#lane-m-'+memberId).closest('.person-lane')
-        .querySelectorAll('.person-finished .task-head h3'),n=>n.textContent);
-      return {initial,expanded,archived,archiveInitiallyHidden,firstScore};
+      lane.querySelector('[data-lane-tasks]').click();
+      const active=Array.from(document.querySelectorAll('#modal [data-task-group="active"] .task-head h3'),n=>n.textContent);
+      const archived=Array.from(document.querySelectorAll('#modal [data-task-group="finished"] .task-head h3'),n=>n.textContent);
+      const boardCards=lane.querySelectorAll('[data-task-id]').length;
+      hideModal();
+      return {initial,active,archived,boardCards,firstScore};
     });
     assert.deepEqual(urgencyUI.initial,['明天紧急参与']);
-    assert.deepEqual(urgencyUI.expanded,['明天紧急参与','无截止主责','一般总负责']);
+    assert.deepEqual(urgencyUI.active,['明天紧急参与','无截止主责','一般总负责']);
     assert.deepEqual(urgencyUI.archived,['历史已完成']);
-    assert.equal(urgencyUI.archiveInitiallyHidden,true);
+    assert.equal(urgencyUI.boardCards,1);
     assert.equal(urgencyUI.firstScore,68);
-    checks.push('mixed member default top, expanded urgency order, and completion archive in DOM');
+    checks.push('mixed member lane keeps one card; all filtered work appears in active and finished dialog groups');
+
+    const laneFocus=await page.evaluate(()=>{
+      const [first,second]=state.members.filter(member=>member.role!=='admin');
+      const shared={id:902001,title:'共同紧急任务',owner_id:first.id,participant_ids:[second.id],status:'阻塞',priority:'高',days_left:0};
+      const own=id=>({id,title:'成员独立任务 '+id,owner_id:second.id,status:'未开始',priority:'低',days_left:null});
+      state.filters={group:'',project:'',status:'',q:'',mine:false};state.view='person';
+      state.tasks=[shared,own(902002),own(902003)];renderBoard();
+      const lane=()=>document.getElementById('lane-m-'+second.id);
+      const sharedCard=()=>lane().querySelector('[data-task-id="902001"]');
+      sharedCard().focus();renderBoard();
+      const sameMember=sharedCard()===document.activeElement;
+      state.tasks=[own(902002),own(902003)];renderBoard();
+      const remainingEntry=document.activeElement?.dataset.laneTasks==='m-'+second.id;
+      state.tasks=[shared,own(902002)];renderBoard();sharedCard().focus();
+      state.tasks=[own(902002)];renderBoard();
+      const remainingCard=lane().querySelector('[data-task-id="902002"]')===document.activeElement;
+      state.tasks=[shared];renderBoard();sharedCard().focus();state.tasks=[];renderBoard();
+      const emptyFallback=document.activeElement===document.querySelector('#view-seg [data-view="person"]');
+      return {sameMember,remainingEntry,remainingCard,emptyFallback};
+    });
+    assert.deepEqual(laneFocus,{sameMember:true,remainingEntry:true,remainingCard:true,emptyFallback:true});
+    checks.push('background lane redraw retains shared-task focus within the same member and falls back to that member entry/card or person view');
+
+    // Exercise list/detail navigation and writes against this isolated server's actual tasks.
+    const listTasks=[];
+    for(let index=0;index<9;index++) {
+      const result=await api(page,'/api/task',{title:'成员弹窗任务 '+index,owner_id:owner.id,status:index>=7?'已完成':'进行中',priority:'中'});
+      assert.equal(result.body.ok,true);listTasks.push(result.body.id);
+    }
+    await page.goto(base+'/tasks');
+    await page.waitForFunction(id=>state.tasks.some(task=>task.id===id),listTasks[8]);
+    await page.locator('#f-q').fill('成员弹窗');
+    const listOpener=page.locator(`[data-lane-tasks="m-${owner.id}"]`);
+    await listOpener.click();
+    const list=page.locator('#modal.member-task-list-dialog');
+    await list.waitFor();assert.equal(await list.locator('[data-task-id]').count(),9);
+    assert.equal(await list.locator('[data-task-group="active"] [data-task-id]').count(),7);
+    assert.equal(await list.locator('[data-task-group="finished"] [data-task-id]').count(),2);
+    const lastCard=list.locator('[data-task-id]').last();
+    await lastCard.focus();await page.keyboard.press('Tab');
+    assert.equal(await list.locator('[data-close]').evaluate(node=>node===document.activeElement),true);
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await lastCard.evaluate(node=>node===document.activeElement),true);
+    const lastId=Number(await lastCard.getAttribute('data-task-id'));
+    await lastCard.scrollIntoViewIfNeeded();
+    const listScroll=await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollTop);
+    await lastCard.press('Enter');
+    await page.locator('#task-form').waitFor();
+    assert.equal(await page.locator('#modal-mask:not(.hidden)').count(),1);
+    assert.equal(await page.locator('#modal [data-close]').innerText(),'返回任务列表');
+    await page.keyboard.press('Escape');await list.waitFor();
+    assert.equal(await list.locator(`[data-task-id="${lastId}"]`).evaluate(node=>node===document.activeElement),true);
+    assert.ok(Math.abs(await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollTop)-listScroll)<2);
+    await page.keyboard.press('Escape');await list.waitFor({state:'hidden'});
+    assert.equal(await listOpener.evaluate(node=>node===document.activeElement),true);
+    checks.push('member list traps Tab on task cards; Enter opens a single detail; Escape restores list scroll/card then current lane opener');
+
+    await listOpener.click();
+    await list.locator(`[data-task-id="${listTasks[0]}"]`).click();await page.locator('#task-form').waitFor();
+    await page.locator('#modal-mask').click({position:{x:3,y:3}});await list.waitFor();
+    await list.locator(`[data-task-id="${listTasks[0]}"]`).click();await page.locator('#task-form').waitFor();
+    await page.locator('#modal [data-close]').click();await list.waitFor();
+    await list.locator(`[data-task-id="${listTasks[0]}"]`).click();await page.locator('#task-form').waitFor();
+    await page.locator('#task-form [name=title]').fill('成员弹窗任务 已更新');await page.locator('#task-form [type=submit]').click();
+    await list.waitFor();await list.locator('.task-head h3').filter({hasText:'成员弹窗任务 已更新'}).waitFor();
+    assert.equal(await page.locator('#f-q').inputValue(),'成员弹窗');
+    await list.locator(`[data-task-id="${listTasks[0]}"]`).click();await page.locator('#progress-form').waitFor();
+    await page.locator('#progress-form [name=progress]').fill('42');await page.locator('#progress-form [name=note]').fill('列表返回验证');
+    await page.locator('#progress-form [type=submit]').click();await list.waitFor();
+    assert.match(await list.locator(`[data-task-id="${listTasks[0]}"] .task-progress-heading`).innerText(),/42%/);
+    await list.locator(`[data-task-id="${listTasks[1]}"]`).click();await page.locator('#task-form').waitFor();
+    page.once('dialog',dialog=>dialog.accept());await page.locator('#modal [data-delete-task]').click();await list.waitFor();
+    assert.equal(await list.locator(`[data-task-id="${listTasks[1]}"]`).count(),0);
+    assert.equal(await list.locator('[data-task-id]').count(),8);
+    checks.push('detail close/backdrop, settings save, progress save and deletion all return to refreshed member list without changing filter');
+
+    const focusId=listTasks[8];
+    await list.locator(`[data-task-id="${focusId}"]`).focus();
+    const beforeRefreshScroll=await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollTop);
+    const fresh=(await api(page,'/api/data')).body.tasks.find(task=>task.id===focusId);
+    assert.equal((await api(page,'/api/task/'+focusId,{version:fresh.version,title:'成员弹窗任务 后台更新'})).body.ok,true);
+    await page.evaluate(()=>refresh());
+    await list.locator('.task-head h3').filter({hasText:'成员弹窗任务 后台更新'}).waitFor();
+    assert.equal(await list.locator(`[data-task-id="${focusId}"]`).evaluate(node=>node===document.activeElement),true);
+    assert.ok(Math.abs(await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollTop)-beforeRefreshScroll)<2);
+    await list.locator('[data-close]').click();
+    assert.equal(await listOpener.evaluate(node=>node===document.activeElement),true);
+    await page.locator('#f-status').selectOption('已完成');await listOpener.click();
+    assert.equal(await list.locator('[data-task-group="active"] [data-task-id]').count(),0);
+    assert.equal(await list.locator('[data-task-group="finished"] [data-task-id]').count(),2);
+    await list.locator('[data-close]').click();await page.locator('#f-status').selectOption('');
+    checks.push('background refresh preserves list scroll/focus and restores rebuilt opener; completed filter stays scoped');
+
+    for(const width of [375,390,760,761,767,768,1280,1864]) {
+      await page.setViewportSize({width,height:820});await listOpener.click();
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'member list page overflow '+width);
+      const rect=await list.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width+1,'member list dialog fits '+width);
+      assert.equal(await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollHeight>node.clientHeight),true);
+      if([390,760,761,1280,1864].includes(width))await page.screenshot({path:path.join(output,'member-task-list-'+width+'.png')});
+      await list.locator('[data-close]').click();
+    }
+    checks.push('member task list scrolls internally and fits 375/390/760/761/767/768/1280/1864 widths');
 
     for(const width of [375,390,767,768,850,1280,1606]) {
       await page.setViewportSize({width,height:900});await page.goto(base+'/');await page.locator('#daily-dashboard .daily-card').waitFor();

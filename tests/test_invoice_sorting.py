@@ -11,7 +11,7 @@ class TestInvoiceSorting(unittest.TestCase):
     def setUp(self):
         self.client = app_module.app.test_client()
         login = self.client.post('/login', json={
-            'username': 'admin', 'password': 'ci-test-password-only'
+            'username': 'admin', 'password': '123456'
         })
         self.assertTrue(login.get_json()['ok'])
 

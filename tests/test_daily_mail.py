@@ -21,7 +21,7 @@ class DailyMailTest(unittest.TestCase):
         self.app=app_module.app;self.ctx=self.app.app_context();self.ctx.push();self.db=get_db()
         self.config=dict(self.app.config['MAIL_SETTINGS'])
         self.app.config['MAIL_SETTINGS'].update(mode='preview',base_url='https://team.example',sender='team@example.com')
-        self.admin=self.app.test_client();self.admin.post('/login',json={'username':'admin','password':'ci-test-password-only'})
+        self.admin=self.app.test_client();self.admin.post('/login',json={'username':'admin','password':'123456'})
         name='mail_'+uuid4().hex[:10]
         self.mid=self.admin.post('/api/member',json={'name':name,'username':name,'password':'mail-password'}).get_json()['id']
         self.member=self.app.test_client();self.member.post('/login',json={'username':name,'password':'mail-password'})
@@ -552,9 +552,9 @@ class DailyMailTest(unittest.TestCase):
     def test_mail_login_destination_is_local_only(self):
         client=self.app.test_client()
         for destination in ('https://evil.example','//evil.example','/tasks?task=1&next=https://evil.example'):
-            result=client.post('/login',json={'username':'admin','password':'ci-test-password-only','next':destination})
+            result=client.post('/login',json={'username':'admin','password':'123456','next':destination})
             self.assertEqual(result.get_json()['redirect'],'/')
-        self.assertEqual(client.post('/login',json={'username':'admin','password':'ci-test-password-only','next':'/daily-projects/1'}).get_json()['redirect'],'/tasks?type=daily&project=1')
+        self.assertEqual(client.post('/login',json={'username':'admin','password':'123456','next':'/daily-projects/1'}).get_json()['redirect'],'/tasks?type=daily&project=1')
 
     def test_single_recipient_multipart_and_safe_smtp_failure(self):
         job=self.job();sent=[]

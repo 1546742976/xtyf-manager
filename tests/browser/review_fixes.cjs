@@ -101,7 +101,7 @@ async function checkPasswordVisibility(page, base) {
     const alerts=[];
     admin.on('dialog',async dialog=>{if(dialog.type()==='alert')alerts.push(dialog.message());await dialog.accept()});
     await checkPasswordVisibility(admin,base);
-    await login(admin,base,'admin','browser-test-initial','browser-test-changed',true);
+    await login(admin,base,'admin','123456','browser-test-changed',true);
     const member=(await api(admin,'/api/member',{name:'Browser Member',username:'browser-member',
       password:'browser-member-initial',role:'manager'})).body;
     assert.equal((await api(admin,'/api/admin/permissions/1',{permissions:['funds.review','invoices.manage']})).status,200);

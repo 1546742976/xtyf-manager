@@ -138,10 +138,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary); }
 .ws-brand, .ws-brand:hover { color: var(--text) !important; padding: 32px 24px 20px; gap: 12px; }
 .ws-brand-mark, .login-mark {
   display: grid; place-items: center; flex: none;
-  background: var(--text); color: var(--card);
+  background: #fff; overflow: hidden;
   width: 42px; height: 42px; border-radius: 14px;
-  font-size: 21px; font-weight: 600;
 }
+.brand-logo { display: block; width: 100%; height: 100%; object-fit: contain; }
+.brand-logo-dark, :root[data-theme="dark"] .brand-logo-light { display: none; }
+:root[data-theme="dark"] .brand-logo-dark { display: block; }
 .ws-brand-text strong { font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
 .ws-brand-text small { color: var(--muted); font-size: 9px; letter-spacing: .1em; margin-top: 3px; }
 .ws-nav { padding: 4px 16px 24px; }
@@ -530,8 +532,8 @@ tbody tr:hover td { background: var(--surface-inset); }
 .ux-invoices .chart-box { background: var(--surface-inset); border-color: var(--border); border-radius: var(--radius-control); }
 .ux-invoices .chart-box h3, .ux-invoices .chart-bar .name, .ux-invoices .chart-bar .bar-value { color: var(--muted); }
 .ux-invoices .chart-bar .bar-wrap { background: var(--surface-neutral); }
-.ux-invoices .chart-bar .bar-fill { background: var(--primary); }
-.ux-invoices .chart-bar.accent-green .bar-fill { background: var(--green); }.ux-invoices .chart-bar.accent-orange .bar-fill { background: var(--orange); }.ux-invoices .chart-bar.accent-red .bar-fill { background: var(--red); }
+.ux-invoices .chart-bar .bar-fill { background-color: var(--primary); }
+.ux-invoices .chart-bar.accent-green .bar-fill { background-color: var(--green); }.ux-invoices .chart-bar.accent-orange .bar-fill { background-color: var(--orange); }.ux-invoices .chart-bar.accent-red .bar-fill { background-color: var(--red); }
 .ux-invoices .detail-actions { background: var(--card) !important; }
 .ux-funds .table { --bs-table-bg: var(--card); --bs-table-color: var(--text); --bs-table-border-color: var(--border); --bs-table-hover-bg: var(--surface-hover); --bs-table-hover-color: var(--text); }
 .ux-funds .modal-content { color: var(--text); }
@@ -596,10 +598,7 @@ tbody tr:hover td { background: var(--surface-inset); }
 #daily-app input, #daily-app select, #daily-app textarea { max-width:100%; min-width:0; }
 #daily-app .btn, #mail-admin .btn, #email-form .btn { min-height:44px; }
 @media(max-width:767px) { .daily-grid, .daily-group-grid { grid-template-columns:minmax(0,1fr); } .daily-filters { display:grid; grid-template-columns:minmax(0,1fr); } .daily-card, .daily-group { padding:16px; } }
-.ux-account-sidebar { display: grid; align-content: start; gap: 24px; min-width: 0; }
-.ux-account-sidebar > .panel { margin-bottom: 0; }
-.ux-account-sidebar .theme-options { grid-template-columns: repeat(auto-fit,minmax(min(100%,160px),1fr)); }
-.account-password-warning { grid-column: 1 / -1; }
+.ux-account-appearance .theme-options { grid-template-columns: repeat(auto-fit,minmax(min(100%,160px),1fr)); }
 .appearance-description { color: var(--muted); margin: 0 0 20px; }
 .theme-options { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; border: 0; padding: 0; margin: 0 0 16px; }
 .theme-options:disabled { opacity: .6; }

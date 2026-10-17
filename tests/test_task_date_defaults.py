@@ -10,7 +10,7 @@ from modules.task_dates import dependency_boundary, dependency_start_date
 class TaskDateDefaults(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
+        self.admin.post('/login', json={'username': 'admin', 'password': '123456'})
 
     def create(self, **data):
         response = self.admin.post('/api/task', json={'title': '日期测试' + uuid4().hex[:8], **data})

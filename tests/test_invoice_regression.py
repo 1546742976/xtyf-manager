@@ -13,7 +13,7 @@ class TestInvoiceCorrectionAndPreview(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
         self.assertTrue(self.admin.post('/login', json={
-            'username': 'admin', 'password': 'ci-test-password-only'
+            'username': 'admin', 'password': '123456'
         }).get_json()['ok'])
         login = 'invoice_reg_' + uuid4().hex[:12]
         name = '发票回归成员_' + uuid4().hex[:8]

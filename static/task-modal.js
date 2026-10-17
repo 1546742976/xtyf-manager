@@ -57,9 +57,9 @@ function taskModalActive(box, generation, taskId) {
   const modal = document.getElementById("modal");
   return !!box?.isConnected && modal?.contains(box) && Number(modal.dataset.taskId) === Number(taskId) && Number(modal.dataset.generation) === generation;
 }
-function taskModalShell(task) {
+function taskModalShell(task, navigation = {}) {
   const lead = memberById(task.owner_id);
-  return `<div class="modal-head"><div><p class="ux-eyebrow">TASK #${Number(task.id)}</p><h2>${esc(task.title)}</h2></div><button class="btn ghost sm" type="button" data-close>关闭</button></div>
+  return `<div class="modal-head"><div><p class="ux-eyebrow">TASK #${Number(task.id)}</p><h2>${esc(task.title)}</h2></div><button class="btn ghost sm" type="button" data-close>${navigation.returnToList ? "返回任务列表" : "关闭"}</button></div>
     <div class="modal-info">${badge(task.status, STATUS_CLASS[task.status] || "gray")}${badge(`负责人 ${lead?.name || "未指定"}`, "outline")}<span class="muted">${esc(taskProjectName(task) || "未归属造车组别")} · 版本 ${Number(task.version || 0)}</span></div>
     ${taskForm(task)}
     ${progressSection(task)}
@@ -67,7 +67,16 @@ function taskModalShell(task) {
     <section class="modal-section"><h3>版本记录</h3><div id="task-revisions"><p class="empty">正在加载版本记录…</p></div></section>
     <section class="modal-section"><h3>动态与备注</h3><div id="task-logs" class="logs"><p class="empty">正在加载动态…</p></div></section>`;
 }
-function bindTaskForm(task, generation) {
+async function finishTaskModalUpdate(box, generation, taskId, navigation = {}) {
+  if (navigation.returnToList) {
+    await refresh();
+    if (taskModalActive(box, generation, taskId)) hideModal();
+  } else {
+    hideModal();
+    await refresh();
+  }
+}
+function bindTaskForm(task, generation, navigation = {}) {
   const form = document.getElementById("task-form");
   if (!form) return;
   window.TaskDateDefaults?.bind(form, {saved: true});
@@ -94,8 +103,7 @@ function bindTaskForm(task, generation) {
     if (!taskModalActive(form, generation, task.id)) return;
     button.disabled = false;
     if (result?.ok) {
-      hideModal();
-      await refresh();
+      await finishTaskModalUpdate(form, generation, task.id, navigation);
     } else {
       form.querySelector("#task-form-message").textContent =
         (result?.httpStatus === 409 ? "任务已被他人更新，请关闭窗口刷新后重试：" : "") + (result?.error || "保存失败");
@@ -104,21 +112,20 @@ function bindTaskForm(task, generation) {
   form.querySelector("[name=owner_id]")?.addEventListener("change", (event) => event.target.setCustomValidity(""));
   form.querySelector('[name="project_id"]')?.addEventListener("change", (event) => { event.target.dataset.edited = "1"; });
 }
-function bindTaskActions(task, generation) {
+function bindTaskActions(task, generation, navigation = {}) {
   // Scope every action to the open modal: the task table renders its own
   // [data-delete-task] buttons before #modal in document order, so a
   // document-wide query binds the first table row instead of the modal button.
   const modal = document.getElementById("modal") || document;
   modal.querySelector("[data-close]")?.addEventListener("click", hideModal);
-  bindTaskProgress(task, generation);
+  bindTaskProgress(task, generation, navigation);
   modal.querySelector("[data-delete-task]")?.addEventListener("click", async (event) => {
     if (!confirm("确定删除该任务？存在子任务或依赖引用时将无法删除。")) return;
     const button = event.currentTarget,
       result = await api(`/api/task/${task.id}/delete`, { version: Number(task.version) });
     if (!taskModalActive(button, generation, task.id)) return;
     if (result?.ok) {
-      hideModal();
-      refresh();
+      await finishTaskModalUpdate(button, generation, task.id, navigation);
     } else if (result?.httpStatus === 409) {
       alert(`任务已被他人更新，未删除。请关闭窗口并刷新后重试。${result.error ? `\n${result.error}` : ""}`);
       await refresh();
@@ -131,8 +138,7 @@ function bindTaskActions(task, generation) {
     const result = await api(`/api/task/${task.id}/revisions/${button.dataset.revert}/revert`, { version: Number(task.version || 0) });
     if (!taskModalActive(button, generation, task.id)) return;
     if (result?.ok) {
-      hideModal();
-      await refresh();
+      await finishTaskModalUpdate(button, generation, task.id, navigation);
     } else {
       button.disabled = false;
       alert((result?.httpStatus === 409 ? "版本冲突，请刷新任务后重试。" : "") + (result?.error || "撤销失败"));
@@ -173,17 +179,17 @@ function bindTaskActions(task, generation) {
     }
   });
 }
-async function openTaskModal(id) {
+async function openTaskModal(id, navigation = {}) {
   const task = state.tasks.find((item) => Number(item.id) === Number(id));
   if (!task) return;
   const generation = ++taskModalGeneration;
-  if (showModal(taskModalShell(task), `任务：${task.title}`) === false) return;
+  if (showModal(taskModalShell(task, navigation), `任务：${task.title}`, {afterClose: navigation.returnToList, returnFocus: navigation.returnFocus}) === false) return;
   const modal = document.getElementById("modal");
   modal.classList.remove("task-preview");
   modal.dataset.taskId = String(task.id);
   modal.dataset.generation = String(generation);
-  bindTaskForm(task, generation);
-  bindTaskActions(task, generation);
+  bindTaskForm(task, generation, navigation);
+  bindTaskActions(task, generation, navigation);
   await Promise.all([loadTaskProgress(task, generation), loadAttachments(task, generation), loadRevisions(task, generation), loadLogs(task, generation)]);
 }
 

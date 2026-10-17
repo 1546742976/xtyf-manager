@@ -11,7 +11,7 @@
 </svg>
 <aside class="workspace-sidebar" id="workspace-sidebar" aria-label="主导航">
   <a class="ws-brand" href="{{ url_for('index') }}" aria-label="巡天御风工作台">
-    <span class="ws-brand-mark">巡</span>
+    <span class="ws-brand-mark" aria-hidden="true">{% include "_brand_mark.html" %}</span>
     <span class="ws-brand-text"><strong>巡天御风</strong><small>TEAM MANAGEMENT</small></span>
   </a>
   <nav class="ws-nav" aria-label="业务工作区">
@@ -48,7 +48,7 @@
       <span class="ws-avatar">{{ me.name[:1] }}</span>
       <span class="ws-user-info"><strong>{{ me.name }}</strong><small>{{ role_names[me.role] }}</small></span>
     </a>
-    <button type="button" class="ws-theme-toggle" data-theme-toggle aria-label="{{ '切换为银白主题' if me.ui_theme == 'dark' else '切换为黑色主题' }}" title="{{ '切换为银白主题' if me.ui_theme == 'dark' else '切换为黑色主题' }}" {% if me.must_change_password %}disabled{% endif %}>
+    <button type="button" class="ws-theme-toggle" data-theme-toggle aria-label="切换亮色或暗色" {% if me.must_change_password %}disabled{% endif %}>
       <svg class="ws-theme-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.5 13.2A8.5 8.5 0 0 1 10.8 3.5 8.5 8.5 0 1 0 20.5 13.2Z"/></svg>
       <svg class="ws-theme-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></svg>
     </button>

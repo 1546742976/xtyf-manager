@@ -204,7 +204,7 @@ class UpgradeFromMainTests(unittest.TestCase):
             env.update({
                 "PROGRESS_DB": str(root / "data.db"),
                 "PROGRESS_SECRET_PATH": str(root / "secret.key"),
-                "PROGRESS_INITIAL_ADMIN_PASSWORD": "ci-upgrade-fixture-only",
+                "PROGRESS_INITIAL_ADMIN_PASSWORD": "123456",
                 "FUNDS_DIR": str(root / "funds"),
                 "INVOICES_DIR": str(root / "invoices"),
                 "TASK_ATTACHMENTS_DIR": str(root / "attachments"),

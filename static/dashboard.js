@@ -1,11 +1,12 @@
 "use strict";
 
-// Home dashboard includes team-wide tasks: only four points separate non-participation
-// from active participation (8), while primary responsibility remains 28.
+// Personal tasks come first; each group keeps the existing urgency ranking.
 const DASHBOARD_TEAM_TASK_WEIGHT = 4;
 function rankDashboardTasks(tasks, memberId, maxCount = 8) {
+  const isMine = (task) => taskParticipants(task).includes(Number(memberId));
   return tasks.filter((task) => !isFinishedTask(task))
-    .sort((a, b) => compareTaskUrgency(a, b, memberId, DASHBOARD_TEAM_TASK_WEIGHT))
+    .sort((a, b) => Number(isMine(b)) - Number(isMine(a))
+      || compareTaskUrgency(a, b, memberId, DASHBOARD_TEAM_TASK_WEIGHT))
     .slice(0, maxCount);
 }
 function dashboardTaskRow(task) {

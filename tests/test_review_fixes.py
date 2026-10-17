@@ -19,7 +19,7 @@ from modules.funds_revisions import migrate as migrate_revisions
 class TestReviewFixes(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
+        self.admin.post('/login', json={'username': 'admin', 'password': '123456'})
         name = 'review_' + uuid4().hex[:12]
         created = self.admin.post('/api/member', json={
             'name': name, 'username': name, 'password': 'review-password', 'role': 'manager'}).get_json()

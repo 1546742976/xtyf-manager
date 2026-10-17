@@ -20,7 +20,7 @@ class TestSecurityAndStability(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
         reply = self.admin.post("/login", json={
-            "username": "admin", "password": "ci-test-password-only",
+            "username": "admin", "password": "123456",
         })
         self.assertTrue(reply.get_json()["ok"], reply.get_json())
 

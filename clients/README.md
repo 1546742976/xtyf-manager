@@ -2,7 +2,7 @@
 
 Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录页、全部业务页面、脚本、样式、字体和 PDF 阅读器随安装包内置。客户端只向配置服务器请求数据和文件；主界面不加载服务器 HTML，也不使用在线 CDN。
 
-默认服务器为 **http://manager.skywalker-rm.online**。断网可以打开本地界面和服务器设置，业务操作需要联网。站外 HTTP/HTTPS 链接在 App 内独立浏览视图打开，具有返回、关闭入口，不调用系统浏览器。图片及 PDF 在 App 内预览，其余附件通过系统保存窗口下载。
+默认服务器为 **https://manager.skywalker-rm.online**。断网可以打开本地界面和服务器设置，业务操作需要联网。站外 HTTP/HTTPS 链接在 App 内独立浏览视图打开，具有返回、关闭入口，不调用系统浏览器。图片及 PDF 在 App 内预览，其余附件通过系统保存窗口下载。
 
 ## 安装和升级
 
@@ -13,7 +13,7 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 
 桌面升级保留服务器地址，首次从 Electron 迁移需要重新登录。Windows 安装器识别旧版 Electron 的卸载记录，保留用户数据后完成替换；Linux 保持 `xtyf-manager` 包名。Android 保留原服务器地址设置，新的原生会话首次需要登录。
 
-服务器地址支持 HTTP/HTTPS 根地址及自定义端口，HTTPS 正常校验证书。切换服务器会取消当前请求、清空页面状态，各服务器会话分别保存。
+服务器地址支持 HTTP/HTTPS 根地址及自定义端口，HTTPS 正常校验证书。旧版保存的默认服务器 HTTP 地址（80 端口）自动迁移为 HTTPS，避免该站点的 HTTPS 跳转被跨来源保护拦截；其他服务器和自定义端口保持原配置。切换服务器会取消当前请求、清空页面状态，各服务器会话分别保存。
 
 ## 服务器兼容性
 
@@ -96,3 +96,7 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 - 交付记录中的运行验证仅在确实执行后标记通过。模拟器测试与真机测试分别说明；未部署服务器不等于线上业务已经验收。
 
 参考：[Tauri 分发](https://v2.tauri.app/distribute/)、[Tauri Linux ARM64 构建](https://v2.tauri.app/distribute/debian/)、[Android 本地内容](https://developer.android.com/develop/ui/views/layout/webapps/load-local-content)。
+
+## 应用图标源文件
+
+客户端图标使用 `static/brand/xtyf-red-blue.jpg` 中的原始红蓝队徽。在安装好固定版本的 Tauri CLI 后，运行 `python clients/build_icons.py` 可按原比例放入白底方形画布，生成桌面的 ICO、128/256 px PNG 和 Android 的 512 px PNG。Android 保留 `@drawable/ic_launcher` 入口，通过 `drawable-nodpi` 中的高清图缩放显示；图标留有边距，不拉伸队徽。此命令仅更新图标资源，不修改版本、不生成安装包；已安装客户端要在下次打包安装后才会使用新图标。

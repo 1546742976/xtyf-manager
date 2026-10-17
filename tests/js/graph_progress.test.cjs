@@ -59,7 +59,7 @@ test("task note label uses the nonempty note author and escapes names", () => {
   assert.doesNotMatch(empty, /旧备注者|旧备注/);
 });
 
-test("person lanes collapse remaining tasks and retain expansion separately from trees", () => {
+test("person lanes keep one task and expose a dialog independently from tree expansion", () => {
   const { evaluate } = page(["app.js", "task-board.js"]);
   const state = evaluate("state");
   state.view = 'person';
@@ -67,10 +67,10 @@ test("person lanes collapse remaining tasks and retain expansion separately from
   const tasks = [1,2,3].map(id => ({id,title:'任务'+id,owner_id:2,status:'未开始',priority:'中'}));
   const render = evaluate('renderLanes');
   assert.equal((render(tasks).match(/data-task-id=/g)||[]).length,1);
-  assert.match(render(tasks), /展开其余 2 项/);
-  evaluate("expandedPersonLanes.add('m-2')");
-  assert.equal((render(tasks).match(/data-task-id=/g)||[]).length,3);
-  assert.match(render(tasks), /aria-expanded="true"/);
+  assert.match(render(tasks), /查看全部 3 项/);
+  assert.match(render(tasks), /aria-haspopup="dialog"/);
+  assert.equal((render(tasks).match(/data-task-id=/g)||[]).length,1);
+  assert.doesNotMatch(render(tasks), /aria-expanded/);
   assert.equal(state.expanded.size,0);
 });
 
@@ -88,7 +88,8 @@ test("dependency graph draws multiple upstream parents and keeps filtered ancest
   const html = evaluate("renderTree")(state.tasks);
   assert.match(html, /<svg/);
   assert.match(html, /marker-end="url\(#dep-arrow\)"/);
-  assert.equal((html.match(/<path d="M [\d.]+ [\d.]+ C /g) || []).length, 2);
+  // Hit paths deliberately duplicate geometry; only count the visible edges.
+  assert.equal((html.match(/class="dependency-edge"/g) || []).length, 2);
   assert.match(html, /data-task-id="3"/);
 });
 

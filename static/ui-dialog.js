@@ -10,7 +10,7 @@ function showModal(html, label = "任务操作窗口", options = {}) {
   if (modalOptions.className) modal.classList.remove(modalOptions.className);
   modalOptions = options;
   if (options.className) modal.classList.add(options.className);
-  modalReturnFocus = document.activeElement;
+  modalReturnFocus = options.returnFocus || document.activeElement;
   modal.innerHTML = html;
   modal.setAttribute("aria-label", label);
   document.getElementById("modal-mask").classList.remove("hidden");
@@ -21,13 +21,18 @@ function showModal(html, label = "任务操作窗口", options = {}) {
 
 function hideModal() {
   if (modalOptions.beforeClose?.() === false) return false;
-  modalOptions.onClose?.();
-  if (modalOptions.className) document.getElementById("modal")?.classList.remove(modalOptions.className);
+  const closing = modalOptions, returnFocus = modalReturnFocus;
+  closing.onClose?.();
+  if (closing.className) document.getElementById("modal")?.classList.remove(closing.className);
   modalOptions = {};
+  modalReturnFocus = null;
   document.getElementById("modal-mask")?.classList.add("hidden");
   document.getElementById("modal")?.replaceChildren();
   document.body.classList.remove("modal-open");
-  modalReturnFocus?.focus?.();
+  (typeof returnFocus === "function" ? returnFocus() : returnFocus)?.focus?.({preventScroll: true});
+  // A return view must be opened only after the old dialog has been removed.
+  // showModal replacements run onClose for cleanup, but never this navigation hook.
+  closing.afterClose?.();
   return true;
 }
 
@@ -43,8 +48,8 @@ function modalKeydown(event) {
   const focusable = [
     ...document
       .getElementById("modal")
-      .querySelectorAll("button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]"),
-  ];
+      .querySelectorAll('button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex]:not([tabindex="-1"]):not([disabled])'),
+  ].filter((element) => element.getClientRects().length);
   if (!focusable.length) return;
   const first = focusable[0];
   const last = focusable.at(-1);

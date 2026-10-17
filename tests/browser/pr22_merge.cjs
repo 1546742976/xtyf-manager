@@ -43,7 +43,7 @@ async function login(page, base, username, password, firstLogin=true) {
     browser=await chromium.launch({headless:true});
     const context=await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'});
     const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
-    await login(page,base,'admin','browser-test-initial');
+    await login(page,base,'admin','123456');
     const groups=(await api(page,'/api/groups')).body.groups;
     const projects=(await api(page,'/api/projects')).body.projects;
     const member=(await api(page,'/api/member',{name:'合并验收项管',username:'merge-manager',password:'merge-test-password',role:'manager',group_ids:[groups.find(g=>g.name==='机械').id]})).body;
@@ -83,7 +83,7 @@ async function login(page, base, username, password, firstLogin=true) {
         page.locator(`input[name=account-mode][value=${theme}]`).check(),
       ]);
       assert.equal(saved.status(),200);
-      assert.equal(await shortcut.getAttribute('aria-label'),theme==='dark'?'切换为银白蓝':'切换为深空蓝');
+      assert.equal(await shortcut.getAttribute('aria-label'),theme==='dark'?'切换为Mistral 暖橙':'切换为GitHub 暗黑');
       await page.reload();assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
       await page.goto(base+'/tasks');await page.locator('[data-view="status"]').click();await page.locator(`.task[data-task-id="${blocked.id}"]`).waitFor();
       assert.match(await page.locator(`.task[data-task-id="${blocked.id}"]`).getAttribute('class'),/is-blocked.*is-due-soon/);
@@ -110,7 +110,7 @@ async function login(page, base, username, password, firstLogin=true) {
     const child=await api(manager,'/api/task',{title:'项管创建主前置任务',owner_id:member.id,parent_id:blocked.id});assert.equal(child.status,200);
     // A fresh browser session reads the saved preference, independent of browser storage.
     const freshContext=await browser.newContext(), fresh=await freshContext.newPage();
-    await login(fresh,base,'admin','browser-test-initial-changed',false);
+    await login(fresh,base,'admin','123456-changed',false);
     assert.equal(await fresh.locator('html').getAttribute('data-theme'),'light');
     assert.deepEqual(errors,[]);
     fs.writeFileSync(path.join(output,'browser-result.json'),JSON.stringify({ok:true,errors,chromium:browser.version(),node:process.version},null,2));

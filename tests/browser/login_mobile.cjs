@@ -60,7 +60,7 @@ fs.mkdirSync(output, {recursive:true});
       await toggle.tap();await page.reload();
       assert.equal(await password.getAttribute('type'),'password');
       await page.locator('[name=username]').fill('admin');
-      await password.fill('browser-test-initial');
+      await password.fill('123456');
       await toggle.tap();
       await page.locator('button[type=submit]').tap();
       await page.waitForURL('**/account');

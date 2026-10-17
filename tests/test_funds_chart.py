@@ -13,7 +13,7 @@ class TestFundsChartTheme(unittest.TestCase):
     def setUp(self):
         self.client = app_module.app.test_client()
         self.assertTrue(self.client.post('/login', json={
-            'username': 'admin', 'password': 'ci-test-password-only',
+            'username': 'admin', 'password': '123456',
         }).get_json()['ok'])
         self.original_theme = self.client.get('/api/account/preferences').get_json()
 

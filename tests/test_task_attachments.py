@@ -31,7 +31,7 @@ class TestTaskAttachments(unittest.TestCase):
         app_module.app.config["TASK_ATTACHMENTS_DIR"] = str(self.root)
         self.admin = app_module.app.test_client()
         login = self.admin.post("/login", json={
-            "username": "admin", "password": "ci-test-password-only",
+            "username": "admin", "password": "123456",
         })
         self.assertTrue(login.get_json()["ok"])
         created = self.admin.post("/api/task", json={"title": "截图测试任务"})

@@ -16,7 +16,7 @@ function progressSection(task) {
   </section>`;
 }
 
-function bindTaskProgress(task, generation) {
+function bindTaskProgress(task, generation, navigation = {}) {
   const form = document.getElementById("progress-form");
   if (!form) return;
   const slider = form.elements.progress_slider, number = form.elements.progress;
@@ -39,8 +39,7 @@ function bindTaskProgress(task, generation) {
     if (!taskModalActive(form, generation, task.id)) return;
     button.disabled = false;
     if (result?.ok) {
-      hideModal();
-      await refresh();
+      await finishTaskModalUpdate(form, generation, task.id, navigation);
     } else {
       message.textContent = (result?.httpStatus === 409 ? "版本冲突，请关闭任务并刷新：" : "") + (result?.error || "保存失败");
     }

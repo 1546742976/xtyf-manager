@@ -10,7 +10,7 @@ class TestCollaborationBackend(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
         login = self.admin.post("/login", json={
-            "username": "admin", "password": "ci-test-password-only",
+            "username": "admin", "password": "123456",
         })
         self.assertTrue(login.get_json()["ok"])
 

@@ -1,5 +1,5 @@
 {% if not me.must_change_password %}
-<section class="panel"><h2>每日任务邮件</h2><p>验证邮箱后，每天北京时间 08:00 收到个人未完成任务早报，22:00 收到全团队未完成事项及当天完成事项的简报，包含周末。无个人事项时不发送早报。仅对您负责且超过 48 小时未更新的任务或项目组提示催更。如需暂停两类邮件，请联系管理员。</p>
+<section class="panel ux-account-email"><h2>每日任务邮件</h2><p>验证邮箱后，每天北京时间 08:00 收到个人未完成任务早报，22:00 收到全团队未完成事项及当天完成事项的简报，包含周末。无个人事项时不发送早报。仅对您负责且超过 48 小时未更新的任务或项目组提示催更。如需暂停两类邮件，请联系管理员。</p>
 <p id="email-state" role="status">正在加载邮箱状态…</p>
 <form id="email-form" class="ux-account-form"><label for="email-address">收件邮箱</label><input id="email-address" name="email" type="email" maxlength="254" autocomplete="email" required><button type="submit" class="btn">发送／重发 6 位验证码</button><p>修改邮箱会停止向原地址发送，新地址验证后恢复。60 秒后可重发，每小时最多 5 次。</p><p id="email-result" role="status" aria-live="polite"></p></form>
 <form id="email-code-form" class="ux-account-form" hidden><p id="email-code-address"></p><label for="email-code">邮件验证码</label><input id="email-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="请输入 6 位数字" required><button type="submit" class="btn primary">验证并绑定邮箱</button><p>验证码 30 分钟有效，输错 5 次后需重新发送。</p><p id="email-code-result" role="status" aria-live="polite"></p></form>

@@ -11,9 +11,15 @@ os.environ["FUNDS_DIR"] = os.path.join(_TEMP.name, "funds")
 os.environ["INVOICES_DIR"] = os.path.join(_TEMP.name, "invoices")
 os.environ["TASK_ATTACHMENTS_DIR"] = os.path.join(_TEMP.name, "task-attachments")
 os.environ["PROGRESS_SECRET_PATH"] = os.path.join(_TEMP.name, "secret.key")
-os.environ["PROGRESS_INITIAL_ADMIN_PASSWORD"] = "ci-test-password-only"
+os.environ["PROGRESS_INITIAL_ADMIN_PASSWORD"] = "123456"
 
 import app as app_module  # noqa: E402
+# The shared fixture admin has a fixed test-only password for manual/CI access.
+# First-login and password-strength tests create dedicated members below.
+with app_module.app.app_context():
+    db = app_module.get_db()
+    db.execute("UPDATE members SET must_change_password=0 WHERE username='admin'")
+    db.commit()
 # Queue recovery tests claim jobs explicitly against their own patched DB paths.
 # A daemon started by an unrelated page request must not consume those fixtures
 # or mutate another test's invoice directory while DB_PATH is temporarily patched.
@@ -25,10 +31,10 @@ from werkzeug.datastructures import Headers
 
 
 class SecurityAwareTestClient(FlaskClient):
-    """Exercise real CSRF + first-login password change in legacy API tests.
+    """Exercise real CSRF + new-member password changes in legacy API tests.
 
     Tests intentionally keep the same password to avoid reworking unrelated
-    fixtures: change to a temporary password, then rotate back via the public
+    member fixtures: change to a temporary password, then rotate back via the public
     authenticated API. The application security checks are never bypassed.
     """
 
@@ -66,7 +72,7 @@ class TestManagementAPI(unittest.TestCase):
     def setUp(self):
         self.client = app_module.app.test_client()
         login = self.client.post("/login", json={
-            "username": "admin", "password": "ci-test-password-only",
+            "username": "admin", "password": "123456",
         })
         self.assertTrue(login.get_json()["ok"])
 

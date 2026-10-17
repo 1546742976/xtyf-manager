@@ -47,12 +47,12 @@ import matplotlib.pyplot as plt
 # These are the corresponding text/surface/control/primary tokens in themes.css.
 # The query chooses a known palette, never arbitrary matplotlib color input.
 CHART_PALETTES = {
-    'silver': ('#ffffff', '#1d1d1f', '#62626a', '#b9b9c1', '#0064cc', 'light'),
+    'silver': ('#fffefd', '#26231f', '#625c55', '#958678', '#9b5733', 'light'),
     'rm-light': ('#ffffff', '#182947', '#52627a', '#879cb9', '#0752cf', 'light'),
     'mist': ('#ffffff', '#1d3028', '#52685e', '#9aafa3', '#176b51', 'light'),
     'paw': ('#fffaf9', '#4b2034', '#785165', '#b8889d', '#edb0c7', 'light'),
-    'space': ('#1d2736', '#ecf1ff', '#afbdd2', '#6a819e', '#90b6ff', 'dark'),
-    'rm-dark': ('#172a3e', '#eff5ff', '#b1c3d8', '#698aaf', '#82bdff', 'dark'),
+    'space': ('#0d1117', '#e6edf3', '#9da7b3', '#6e7681', '#3fb950', 'dark'),
+    'rm-dark': ('#181818', '#f5f5f5', '#b0b0b0', '#737373', '#f5f5f5', 'dark'),
     'graphite': ('#27282c', '#f5f0e7', '#c2bbb0', '#8f877b', '#e7c483', 'dark'),
     'xueli': ('#352730', '#fff0f6', '#d4b4c4', '#ac8297', '#edb0cf', 'dark'),
 }

@@ -240,12 +240,12 @@ a { color: var(--primary); text-decoration: none; }
   overflow: hidden;
   margin-top: 8px;
 }
-.progress-inner { height: 100%; border-radius: 999px; background: var(--gray); transition: width .3s; }
-.progress-inner.blue { background: var(--blue); }
-.progress-inner.green { background: var(--green); }
-.progress-inner.red { background: var(--red); }
-.progress-inner.orange { background: var(--orange); }
-.progress-inner.dark { background: var(--dark); }
+.progress-inner { height: 100%; border-radius: 999px; background-color: var(--gray); background-image: var(--progress-gradient); transition: width .3s; }
+.progress-inner.blue { background-color: var(--blue); }
+.progress-inner.green { background-color: var(--green); }
+.progress-inner.red { background-color: var(--red); }
+.progress-inner.orange { background-color: var(--orange); }
+.progress-inner.dark { background-color: var(--dark); }
 
 .task-foot {
   display: flex;

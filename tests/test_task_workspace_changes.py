@@ -9,7 +9,7 @@ class WorkspaceChanges(unittest.TestCase):
     def setUp(self):
         self.app=app_module.app
         self.admin=self.app.test_client()
-        self.admin.post('/login',json={'username':'admin','password':'ci-test-password-only'})
+        self.admin.post('/login',json={'username':'admin','password':'123456'})
         self.clients={}
         self.ids={}
         for role in ('member','manager'):

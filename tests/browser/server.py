@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix='xtyf-browser-review-') as root:
         'MPLCONFIGDIR': 'matplotlib',
     }.items():
         os.environ[key] = str(Path(root) / relative)
-    os.environ['PROGRESS_INITIAL_ADMIN_PASSWORD'] = 'browser-test-initial'
+    os.environ['PROGRESS_INITIAL_ADMIN_PASSWORD'] = '123456'
     from app import app
     from modules import invoices
     from werkzeug.serving import make_server

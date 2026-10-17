@@ -53,7 +53,7 @@ class FrontendTests(unittest.TestCase):
                 self.assertEqual(html.unescape(actual).strip(),html.unescape(fixture['expected']).strip())
 
     def test_manifest_has_every_packaged_asset_and_hashes(self):
-        self.assertEqual(len(self.manifest['templates']),21)
+        self.assertEqual(self.manifest['templates'], sorted(self.templates))
         for name,expected in self.manifest['files'].items():
             self.assertEqual(hashlib.sha256((self.dist/name).read_bytes()).hexdigest(),expected,name)
         for name in ('index.html','page-runtime.js','external.html','vendor/bootstrap/bootstrap.min.css','vendor/bootstrap-icons/fonts/bootstrap-icons.woff2','vendor/pdfjs/pdf.mjs','vendor/pdfjs/pdf.worker.mjs'):

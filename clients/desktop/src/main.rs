@@ -26,10 +26,15 @@ struct AppState {
 }
 fn text<'a>(value: &'a Value, key: &str) -> &'a str { value.get(key).and_then(Value::as_str).unwrap_or("") }
 fn normalize_server(input: &str) -> Result<String, String> {
-    let url = Url::parse(input.trim()).map_err(|_| "请输入完整的 HTTP/HTTPS 网站根地址")?;
+    let mut url = Url::parse(input.trim()).map_err(|_| "请输入完整的 HTTP/HTTPS 网站根地址")?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() || !url.username().is_empty()
         || url.password().is_some() || url.query().is_some() || url.fragment().is_some() || url.path() != "/" {
         return Err("服务器地址不能包含账号、密码、路径、查询参数或片段".into());
+    }
+    // The built-in server now redirects port 80 to HTTPS. Migrate its saved
+    // address before choosing a session; never forward credentials across origins.
+    if url.scheme() == "http" && url.host_str() == Some("manager.skywalker-rm.online") && url.port().is_none() {
+        url.set_scheme("https").map_err(|_| "无法迁移默认服务器地址")?;
     }
     Ok(url.origin().ascii_serialization())
 }
@@ -283,6 +288,14 @@ mod tests {
     #[test] fn server_validation(){
         assert_eq!(normalize_server(" http://127.0.0.1:8520/ ").unwrap(),"http://127.0.0.1:8520");
         for input in ["file:///a","javascript:alert(1)","https://u:p@example.com","https://example.com/a","https://example.com/?a=b","https://example.com/#x",""]{assert!(normalize_server(input).is_err(),"{input}");}
+    }
+    #[test] fn legacy_default_server_migrates_to_https(){
+        for input in ["http://manager.skywalker-rm.online", " http://MANAGER.skywalker-rm.online:80/ "] {
+            assert_eq!(normalize_server(input).unwrap(), "https://manager.skywalker-rm.online");
+        }
+        for input in ["https://manager.skywalker-rm.online", "http://manager.skywalker-rm.online:8080", "http://127.0.0.1:8520", "http://example.com", "http://manager.skywalker-rm.online.example.com"] {
+            assert_eq!(normalize_server(input).unwrap(), input);
+        }
     }
     #[test] fn request_origin(){
         assert!(server_path("http://example.com","/api/data").is_ok());

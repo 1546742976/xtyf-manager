@@ -27,6 +27,13 @@ public final class NativeHttpClientTest {
     interface RunnableIO { void run() throws Exception; }
     public static void main(String[] args) throws Exception {
         check("http://localhost:1234".equals(NativeHttpClient.normalize(" HTTP://LOCALHOST:1234/ ")), "Normalize scheme and host");
+        for (String legacy : Arrays.asList("http://manager.skywalker-rm.online", "http://manager.skywalker-rm.online:80/", " HTTP://MANAGER.SKYWALKER-RM.ONLINE/ "))
+            check("https://manager.skywalker-rm.online".equals(NativeHttpClient.normalize(legacy)), "Migrate the built-in legacy HTTP server: " + legacy);
+        for (String unchanged : Arrays.asList("http://manager.skywalker-rm.online:8080", "http://manager.skywalker-rm.online:443", "http://example.com", "http://manager.skywalker-rm.online.example.com"))
+            check(unchanged.equals(NativeHttpClient.normalize(unchanged)), "Keep custom HTTP servers unchanged: " + unchanged);
+        NativeHttpClient migrated = new NativeHttpClient("http://manager.skywalker-rm.online", "", value -> {});
+        check("https://manager.skywalker-rm.online/api/client/bootstrap".equals(migrated.resolve("/api/client/bootstrap").toString()), "Legacy saved server requests start on HTTPS before any redirect");
+        fails(() -> migrated.resolve("http://manager.skywalker-rm.online/api/client/bootstrap"), "Migration must still reject a downgrade to HTTP");
         for (String invalid : Arrays.asList("file:///tmp", "http://u:p@example.com", "http://example.com/path", "http://example.com?x", "http://example.com#x", "http://example.com:65536", "not a URL")) fails(() -> NativeHttpClient.normalize(invalid), "Reject " + invalid);
         AtomicInteger outsideHits = new AtomicInteger(), writeHits = new AtomicInteger(); AtomicReference<String> saved = new AtomicReference<>("");
         HttpServer outside = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

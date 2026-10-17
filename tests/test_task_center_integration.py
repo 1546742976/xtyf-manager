@@ -9,7 +9,7 @@ class TaskCenterIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.admin = app_module.app.test_client()
-        cls.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
+        cls.admin.post('/login', json={'username': 'admin', 'password': '123456'})
         name = 'tabs_' + uuid4().hex[:10]
         cls.admin.post('/api/member', json={'name': name, 'username': name, 'password': 'member-password'})
         cls.member = app_module.app.test_client()
@@ -64,7 +64,7 @@ class TaskCenterIntegrationTest(unittest.TestCase):
         for candidate, expected in destinations.items():
             with self.subTest(candidate=candidate):
                 client = app_module.app.test_client()
-                result = client.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only', 'next': candidate})
+                result = client.post('/login', json={'username': 'admin', 'password': '123456', 'next': candidate})
                 self.assertEqual(result.get_json()['redirect'], expected)
 
     def test_untrusted_next_is_not_a_redirect(self):

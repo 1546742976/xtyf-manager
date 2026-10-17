@@ -55,7 +55,7 @@ async function openTopic(page, base, topic) {
     const page = await context.newPage(); page.setDefaultTimeout(12000);
     page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', d => d.accept());
-    await login(page, base, 'admin', 'browser-test-initial', 'collaboration-admin-password');
+    await login(page, base, 'admin', '123456', 'collaboration-admin-password');
     const member = (await api(page, '/api/member', {name: '协作成员', username: 'collab_member', password: 'collab-member-password'})).body;
     assert.ok(member.id);
     await page.goto(base + '/discussions');

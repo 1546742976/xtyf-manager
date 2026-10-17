@@ -5,7 +5,7 @@ from test_tasks import app_module
 class TestWorkspaceNavigation(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        result = self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
+        result = self.admin.post('/login', json={'username': 'admin', 'password': '123456'})
         self.assertTrue(result.get_json()['ok'])
 
     def test_all_workspace_pages_render_shared_navigation(self):
@@ -30,7 +30,7 @@ class TestWorkspaceNavigation(unittest.TestCase):
         text = response.get_data(as_text=True)
         self.assertIn('姓名,用户名,专业组,造车组别,角色,账号状态', text)
         self.assertNotIn('password_hash', text)
-        self.assertNotIn('ci-test-password-only', text)
+        self.assertNotIn('123456', text)
 
     def test_csv_escapes_spreadsheet_formulas(self):
         created = self.admin.post('/api/member', json={

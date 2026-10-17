@@ -200,7 +200,7 @@ function loadStats(){
     document.getElementById('sOut').textContent = '¥'+Money.format(d.total_out);
     var bal = d.balance;
     document.getElementById('sBal').textContent = '¥'+Money.format(bal);
-    document.getElementById('sBal').style.color = Money.compare(bal,'0.00')>=0?'#1890ff':'#ff4d4f';
+    document.getElementById('sBal').style.color = Money.compare(bal,'0.00')>=0?'var(--funds-balance-positive, #1890ff)':'#ff4d4f';
     document.getElementById('sCnt').textContent = cnt;
 
     var h = '<table class="table table-sm small mb-0">';

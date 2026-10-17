@@ -12,7 +12,7 @@ class TaskProgressTests(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
         self.assertTrue(self.admin.post("/login", json={
-            "username": "admin", "password": "ci-test-password-only",
+            "username": "admin", "password": "123456",
         }).get_json()["ok"])
 
     def new_task(self, **fields):
@@ -137,7 +137,7 @@ class RetiredGitHubGatewayTests(unittest.TestCase):
     def setUp(self):
         self.client = app_module.app.test_client()
         self.assertTrue(self.client.post("/login", json={
-            "username": "admin", "password": "ci-test-password-only",
+            "username": "admin", "password": "123456",
         }).get_json()["ok"])
 
     def test_remote_read_endpoints_return_gone_without_network(self):

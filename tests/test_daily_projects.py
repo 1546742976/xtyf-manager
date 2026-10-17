@@ -15,7 +15,7 @@ class DailyProjectsTest(unittest.TestCase):
     def setUpClass(cls):
         cls.app = app_module.app
         cls.admin = cls.app.test_client()
-        cls.admin.post('/login', json={'username':'admin','password':'ci-test-password-only'})
+        cls.admin.post('/login', json={'username':'admin','password':'123456'})
         cls.ids, cls.clients = [], []
         for role in ('member','member','manager'):
             name='daily_'+uuid4().hex[:10]

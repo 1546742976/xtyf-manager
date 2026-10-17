@@ -28,12 +28,12 @@ async function api(page,url,data,method='POST') {
     const idle=selector=>page.waitForFunction(selector=>!document.querySelector(selector).disabled,selector);
 
     await page.goto(base+'/login');
-    await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('browser-test-initial');
+    await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('123456');
     await page.route('**/login',r=>r.request().method()==='POST'?r.abort():r.continue());
     await page.locator('button[type=submit]').click();await page.locator('#login-error').filter({hasText:'网络'}).waitFor();
-    assert.equal(await page.locator('[name=password]').inputValue(),'browser-test-initial');await idle('button[type=submit]');
+    assert.equal(await page.locator('[name=password]').inputValue(),'123456');await idle('button[type=submit]');
     await page.unroute('**/login');await page.locator('button[type=submit]').click();await page.waitForURL('**/account');
-    await page.locator('#account-password-form [name=old]').fill('browser-test-initial');
+    await page.locator('#account-password-form [name=old]').fill('123456');
     await page.locator('#account-password-form [name=new]').fill('action-test-password');
     await page.locator('#account-password-form [name=confirm]').fill('action-test-password');
     await reject('**/api/password',403);await page.locator('#account-password-form button').click();

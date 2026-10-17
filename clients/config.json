@@ -2,5 +2,5 @@
   "name": "巡天御风管理系统",
   "version": "1.0.8",
   "versionCode": 10,
-  "serverUrl": "http://manager.skywalker-rm.online"
+  "serverUrl": "https://manager.skywalker-rm.online"
 }

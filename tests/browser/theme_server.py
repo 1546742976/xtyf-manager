@@ -13,12 +13,19 @@ with tempfile.TemporaryDirectory(prefix='xtyf-theme-demo-') as root:
         'MPLCONFIGDIR':'matplotlib',
     }.items():
         os.environ[key] = str(Path(root) / relative)
-    os.environ['PROGRESS_INITIAL_ADMIN_PASSWORD'] = 'theme-demo-initial'
+    os.environ['PROGRESS_INITIAL_ADMIN_PASSWORD'] = '123456'
     from app import app
     from modules import invoices
     from werkzeug.serving import make_server
     app.jinja_env.auto_reload = True
     invoices.start_invoice_worker = lambda: None
+    # This disposable visual fixture uses the shared manual-test admin password.
+    # Password-change flows are covered by server.py and dedicated member tests.
+    with app.app_context():
+        from common import get_db
+        db = get_db()
+        db.execute("UPDATE members SET must_change_password=0 WHERE username='admin'")
+        db.commit()
     client = app.test_client()
 
     def post(url, body):
@@ -28,8 +35,7 @@ with tempfile.TemporaryDirectory(prefix='xtyf-theme-demo-') as root:
             raise RuntimeError((url, response.get_json()))
         return response.get_json()
 
-    post('/login', {'username':'admin','password':'theme-demo-initial'})
-    post('/api/password', {'old':'theme-demo-initial','new':'theme-demo-password'})
+    post('/login', {'username':'admin','password':'123456'})
     groups = {row['name']:row['id'] for row in client.get('/api/groups').get_json()['groups']}
     project = next(row['id'] for row in client.get('/api/projects').get_json()['projects'] if row['name']=='哨兵')
     for stage, name, tasks in (

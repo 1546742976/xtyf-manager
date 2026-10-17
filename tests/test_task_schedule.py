@@ -14,7 +14,7 @@ from modules import task_schedule
 class TestTaskSchedule(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        self.assertTrue(self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'}).get_json()['ok'])
+        self.assertTrue(self.admin.post('/login', json={'username': 'admin', 'password': '123456'}).get_json()['ok'])
         self.marker = uuid4().hex[:12]
         self.project = self.admin.post('/api/projects', json={'name': '排期' + self.marker}).get_json()['id']
         self.groups = {row['name']: row['id'] for row in self.admin.get('/api/groups').get_json()['groups']}

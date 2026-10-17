@@ -10,7 +10,7 @@ from modules.task_migrations import DEFAULT_GROUPS
 class TestGroupCatalog(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        response = self.admin.post("/login", json={"username": "admin", "password": "ci-test-password-only"})
+        response = self.admin.post("/login", json={"username": "admin", "password": "123456"})
         self.assertTrue(response.get_json()["ok"])
 
     def test_default_groups_and_member_page_entry(self):

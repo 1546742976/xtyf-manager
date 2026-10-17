@@ -53,8 +53,7 @@ body.member .col-check{display:none!important}
 /* 发票字段排序，与表头排序保持同步 */
 .toolbar .sort-controls{display:flex;align-items:center;gap:6px;white-space:nowrap}
 .toolbar .sort-label{font-size:12px;color:#667085}
-.toolbar .sort-direction{padding:6px 9px;background:#fff;border:1px solid #ddd;border-radius:5px;font-size:12px;color:#1f2430;cursor:pointer}
-.toolbar .sort-direction:hover{color:#1a73e8;border-color:#1a73e8}
+.toolbar .sort-direction{padding:6px 9px;background:var(--card);border:1px solid var(--border);border-radius:5px;font-size:12px;color:var(--text);cursor:pointer}
 th.sortable-header{padding:0}
 th.sortable-header .sort-head{width:100%;border:0;background:transparent;color:inherit;text-align:left;padding:9px 10px;font:inherit;font-weight:600;white-space:nowrap;cursor:pointer}
 th.sortable-header .sort-head:hover,th.sortable-header .sort-head:focus-visible{background:#e8f0fe;color:#1a73e8}
@@ -154,6 +153,9 @@ tr.row-dup{background:#fff3e0}
 .inline-select:focus{border-color:#1a73e8}
 .btn-sm{padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;font-size:10px;white-space:nowrap}
 .btn-sm:hover{background:#f0f0f0}
+#invoiceJobsList .btn-sm{background:var(--card);color:var(--text);border-color:var(--border)}
+.toolbar .sort-direction:hover:not(:disabled),#invoiceJobsList .btn-sm:hover:not(:disabled){background:var(--surface-hover);color:var(--text);border-color:var(--border)}
+.toolbar .sort-direction:disabled,#invoiceJobsList .btn-sm:disabled{background:var(--card);color:var(--text);border-color:var(--border);opacity:.5;cursor:default}
 /* 统计图表 */
 .chart-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
 .chart-box{background:#fafbfd;border:1px solid #f0f0f0;border-radius:8px;padding:12px 14px}
@@ -161,10 +163,11 @@ tr.row-dup{background:#fff3e0}
 .chart-bar{display:grid;grid-template-columns:100px 1fr 170px;gap:8px;align-items:center;margin-bottom:8px;font-size:11px}
 .chart-bar .name{color:#555;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chart-bar .bar-wrap{background:#f0f0f0;border-radius:3px;height:16px;overflow:hidden}
-.chart-bar .bar-fill{height:100%;background:linear-gradient(90deg,#1a73e8,#4fc3f7);border-radius:3px;min-width:2px}
-.chart-bar.accent-green .bar-fill{background:#0d904f}
-.chart-bar.accent-orange .bar-fill{background:#f9ab00}
-.chart-bar.accent-red .bar-fill{background:#d93025}
+.chart-bar .bar-fill{height:100%;background-color:#1a73e8;background-image:var(--progress-gradient);border-radius:3px;min-width:2px}
+.chart-bar.accent-green .bar-fill{background-color:#0d904f}
+.chart-bar.accent-orange .bar-fill{background-color:#f9ab00}
+.chart-bar.accent-red .bar-fill{background-color:#d93025}
+#progressFill{height:100%;width:0;background-color:var(--primary);background-image:var(--progress-gradient);border-radius:4px;transition:width .3s}
 .chart-bar .bar-value{color:#666;white-space:nowrap;font-size:10px}
 @media(max-width:1024px){
 .chart-row,.chart-row.three{grid-template-columns:1fr}

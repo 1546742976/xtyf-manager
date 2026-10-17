@@ -26,7 +26,7 @@ class LocalCollaborationTests(unittest.TestCase):
         cls.app = app_module.app
         cls.admin = cls.app.test_client()
         assert cls.admin.post('/login', json={
-            'username': 'admin', 'password': 'ci-test-password-only',
+            'username': 'admin', 'password': '123456',
         }).get_json()['ok']
         cls.users = {}
         for role in ('author', 'reader', 'manager'):

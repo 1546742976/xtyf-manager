@@ -287,7 +287,7 @@ test("archived catalog entries are dictionary-only choices without destroying sa
   assert.equal(page.value("retainArchivedCatalogSelection")("2", 1, items, true), "2");
 });
 
-test("person lanes prioritize scored active tasks and fold completed work", () => {
+test("person lanes keep their top active task and expose all filtered work in two modal groups", () => {
   const page = browser(["app.js", "task-board.js"]), state = page.value("state");
   state.view = "person";
   state.members = [{id:7,name:"小七",role:"member"},{id:2,name:"队友",role:"member"}];
@@ -309,22 +309,67 @@ test("person lanes prioritize scored active tasks and fold completed work", () =
   let html = page.value("renderPersonLane")(lane);
   assert.match(html, /主责明天/);
   assert.doesNotMatch(html, /主责逾期|主责今天|协助逾期|已完成<\/h3>|已取消<\/h3>/);
-  assert.match(html, /展开其余 6 项/);
-  assert.match(html, /查看已完成\/取消 2 项/);
-  assert.match(html, /id="lane-finished-m-7" hidden/);
-  page.value("expandedPersonLanes").add("m-7");
-  html = page.value("renderPersonLane")(lane);
-  assert.match(html, /主责今天|协助逾期/);
-  assert.doesNotMatch(html, /已完成<\/h3>|已取消<\/h3>/);
-  page.value("expandedFinishedLanes").add("m-7");
-  html = page.value("renderPersonLane")(lane);
+  assert.match(html, /查看全部 9 项/);
+  assert.match(html, /data-lane-tasks="m-7" aria-haspopup="dialog"/);
+  assert.doesNotMatch(html, /person-finished|aria-expanded/);
+  html = page.value("memberTaskListShell")(lane);
+  assert.equal((html.match(/data-task-id=/g) || []).length, 9);
+  assert.match(html, /data-task-group="active"/);
+  assert.match(html, /data-task-group="finished"/);
   assert.match(html, /已完成<\/h3>/);
   assert.match(html, /已取消<\/h3>/);
-  assert.doesNotMatch(html, /id="lane-finished-m-7" hidden/);
+  assert.ok(html.indexOf('data-task-id="2"') < html.indexOf('data-task-id="4"'));
+  assert.ok(html.indexOf('data-task-id="7"') < html.indexOf('data-task-id="8"'));
   state.filters.status = "已完成";
   const filtered = page.value("participantLanes")(page.value("filteredTasks")()).find((item) => item.key === "m-7");
-  page.value("expandedFinishedLanes").delete("m-7");
   assert.match(page.value("renderPersonLane")(filtered), /已完成<\/h3>/);
+  html = page.value("memberTaskListShell")(filtered);
+  assert.equal((html.match(/data-task-id=/g) || []).length, 1);
+  assert.doesNotMatch(html, /主责明天|已取消<\/h3>/);
+  state.filters.status = "";
+  const historical = {...lane, tasks: lane.tasks.filter(page.value("isFinishedTask"))};
+  html = page.value("renderPersonLane")(historical);
+  assert.match(html, /暂无未完成任务/);
+  assert.match(html, /查看全部 2 项/);
+  assert.doesNotMatch(html, /data-task-id=/);
+});
+
+test("member task modal preserves unassigned and historical members without escaping current filters", () => {
+  const page = browser(["app.js", "task-board.js"]), state = page.value("state");
+  state.tasks = [
+    {id:1,title:'<old>',owner_id:99,status:'已完成',priority:'中'},
+    {id:2,title:'未分配任务',owner_id:null,participant_ids:[],status:'未开始',priority:'高'},
+    {id:3,title:'其他任务',owner_id:99,status:'未开始',priority:'中'},
+  ];
+  const lanes = page.value("participantLanes")(page.value("filteredTasks")());
+  const old = lanes.find(lane => lane.key === 'm-99');
+  assert.equal(old.sub, '历史成员');
+  assert.match(page.value('memberTaskListShell')(old), /&lt;old&gt;/);
+  assert.equal(lanes.find(lane => lane.key === 'unassigned').tasks[0].id, 2);
+  state.filters.q = '<old>';
+  const filtered = page.value('participantLanes')(page.value('filteredTasks')());
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].tasks.length, 1);
+});
+
+test("shared modal afterClose runs only after hide cleanup and restores the current return target", () => {
+  function classes(initial = []) { const values = new Set(initial); return {add:value=>values.add(value),remove:value=>values.delete(value),contains:value=>values.has(value)}; }
+  let focused = null, cleanup = 0, after = 0;
+  const first = {focus() {focused = 'first';}}, rebuilt = {focus() {focused = 'rebuilt';}};
+  const mask = {classList:classes(['hidden'])};
+  const modal = {innerHTML:'',classList:classes(),setAttribute(){},querySelector(){return first;},replaceChildren(){this.innerHTML='';}};
+  const document = {activeElement:first,body:{classList:classes()},getElementById:id=>id==='modal'?modal:mask,addEventListener(){}};
+  const context = {document}; vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(ROOT,'static/ui-dialog.js'),'utf8'),context);
+  context.showModal('list','任务',{onClose:()=>cleanup++,afterClose:()=>after++});
+  context.showModal('detail','详情',{returnFocus:()=>rebuilt,afterClose:()=>{
+    assert.equal(modal.innerHTML,'');assert.equal(mask.classList.contains('hidden'),true);assert.equal(focused,'rebuilt');
+    context.showModal('returned-list');after++;
+  }});
+  assert.equal(cleanup,1);assert.equal(after,0);
+  context.hideModal();
+  assert.equal(after,1);assert.equal(modal.innerHTML,'returned-list');assert.equal(mask.classList.contains('hidden'),false);
+  context.hideModal();assert.equal(after,1);
 });
 
 test("urgency comparator weighs priority, deadline and status jointly", () => {
@@ -425,7 +470,7 @@ test("composite urgency gives deterministic, transitive ranking for varied task 
 });
 
 
-test("dashboard ranks everyone by composite urgency with owner 28, participant 8, team 4", () => {
+test("dashboard puts owned and participating tasks before urgent team work", () => {
   const page=browser(["app.js","dashboard.js"]);
   const score=page.value("taskUrgencyScore");
   const rank=page.value("rankDashboardTasks");
@@ -448,12 +493,18 @@ test("dashboard ranks everyone by composite urgency with owner 28, participant 8
     "unassigned active work remains eligible for team-wide ranking");
   const ordered=Array.from(rank([unrelated,participant,owner],7),task=>task.id);
   assert.deepEqual(ordered,[91,92,93]);
+  const urgentTeam={...unrelated,id:94,status:"阻塞",priority:"高",days_left:-6};
+  const quietOwner={...owner,status:"未开始",priority:"低",days_left:null};
+  const quietParticipant={...participant,participant_ids:["7"],status:"未开始",priority:"低",days_left:null};
+  assert.ok(score(urgentTeam,7,teamWeight)>score(quietOwner,7,teamWeight));
+  assert.deepEqual(Array.from(rank([urgentTeam,quietParticipant,quietOwner],"7"),task=>task.id),[91,92,94],
+    "both personal roles precede more urgent team work, including string member IDs");
   // The dashboard-specific four points must never leak into person-lane scoring.
   assert.equal(score(unrelated,7),score(unrelated,7,0));
   assert.equal(role(unrelated,7),0);
 });
 
-test("dashboard mixed urgency ranks unrelated urgent work without displacing every personal task", () => {
+test("dashboard preserves urgency within personal and team groups before the eight-task limit", () => {
   const page=browser(["app.js","dashboard.js"]);
   const rank=page.value("rankDashboardTasks");
   const tasks=[
@@ -472,12 +523,18 @@ test("dashboard mixed urgency ranks unrelated urgent work without displacing eve
   ];
   const original=tasks.map(task=>task.id);
   const order=Array.from(rank(tasks,7),task=>task.id);
-  assert.deepEqual(order,[7,5,6,2,4,3,1,12],
-    "homepage top eight should be ranked across the whole team");
+  assert.deepEqual(order,[5,6,2,1,12,7,4,3],
+    "all personal work comes first, with urgency ordering preserved within each group");
   assert.deepEqual(Array.from(rank([...tasks].reverse(),7),task=>task.id),order);
   assert.deepEqual(tasks.map(task=>task.id),original,"sorting must not change API data");
-  assert.deepEqual(Array.from(rank(tasks,7,100),task=>task.id),[7,5,6,2,4,3,1,12,10,11],
+  assert.deepEqual(Array.from(rank(tasks,7,100),task=>task.id),[5,6,2,1,12,7,4,3,10,11],
     "finished and cancelled tasks never occupy dashboard slots");
+  const crowded=[...Array.from({length:8},(_,index)=>({...tasks[6],id:20+index})),tasks[0],tasks[11]];
+  assert.deepEqual(Array.from(rank(crowded,7),task=>task.id),[1,12,20,21,22,23,24,25],
+    "personal priority applies before truncation even when eight urgent team tasks are available");
+  const teamOnly=[tasks[2],tasks[3],tasks[6],tasks[9],tasks[10]];
+  assert.deepEqual(Array.from(rank(teamOnly,7),task=>task.id),[7,4,3,10,11],
+    "members with no personal work still see team tasks in urgency order");
   assert.deepEqual(Array.from(rank([tasks[7],tasks[8]],7),task=>task.id),[]);
   assert.deepEqual(Array.from(rank(tasks,7,0),task=>task.id),[]);
 });

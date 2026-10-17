@@ -31,6 +31,11 @@ final class NativeHttpClient {
                     || !(value.getPath() == null || value.getPath().isEmpty() || "/".equals(value.getPath()))
                     || value.getPort() > 65535 || value.getPort() == 0 || value.getPort() < -1)
                 throw new IOException("请输入完整的网站根地址，不含账号、密码、路径或参数");
+            // The built-in server permanently redirects its old HTTP address to HTTPS.
+            // Migrate before loading a session; unrelated HTTP servers keep their origin.
+            if ("http".equalsIgnoreCase(scheme) && "manager.skywalker-rm.online".equalsIgnoreCase(value.getHost())
+                    && (value.getPort() == -1 || value.getPort() == 80))
+                return "https://manager.skywalker-rm.online";
             return new URI(scheme.toLowerCase(Locale.ROOT), null, value.getHost().toLowerCase(Locale.ROOT), value.getPort(), null, null, null).toASCIIString();
         } catch (URISyntaxException | NullPointerException error) { throw new IOException("服务器地址无效", error); }
     }

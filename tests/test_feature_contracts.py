@@ -8,7 +8,7 @@ class TestFeatureContracts(unittest.TestCase):
     def setUp(self):
         self.client = app_module.app.test_client()
         response = self.client.post("/login", json={
-            "username": "admin", "password": "ci-test-password-only"})
+            "username": "admin", "password": "123456"})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["ok"])
 

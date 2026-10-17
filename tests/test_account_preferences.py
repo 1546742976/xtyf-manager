@@ -11,7 +11,7 @@ from modules.task_migrations import migrate
 class TestAccountPreferences(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
+        self.admin.post('/login', json={'username': 'admin', 'password': '123456'})
         self.username = 'theme_' + uuid4().hex[:12]
         self.password = 'theme-member-password'
         self.admin.post('/api/member', json={'name': '主题测试', 'username': self.username, 'password': self.password})
