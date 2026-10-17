@@ -137,6 +137,10 @@ jobs:
             .venv/palette-workspace-check/result.json
             .venv/local-collaboration-check/*.png
             .venv/local-collaboration-check/result.json
+            .build-tools/seven-repairs-20261018/browser/*.png
+            .build-tools/seven-repairs-20261018/browser/results.json
+            .venv/seven-repairs-review-check/*.png
+            .venv/seven-repairs-review-check/result.json
           include-hidden-files: true
           if-no-files-found: warn
 
