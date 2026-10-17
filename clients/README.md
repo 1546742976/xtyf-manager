@@ -2,7 +2,7 @@
 
 Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录页、全部业务页面、脚本、样式、字体和 PDF 阅读器随安装包内置。客户端只向配置服务器请求数据和文件；主界面不加载服务器 HTML，也不使用在线 CDN。
 
-默认服务器为 **https://manager.skywalker-rm.online**。断网可以打开本地界面和服务器设置，业务操作需要联网。站外 HTTP/HTTPS 链接在 App 内独立浏览视图打开，具有返回、关闭入口，不调用系统浏览器。图片及 PDF 在 App 内预览，其余附件通过系统保存窗口下载。
+默认服务器为 **http://manager.skywalker-rm.online/**。断网可以打开本地界面和服务器设置，业务操作需要联网。站外 HTTP/HTTPS 链接在 App 内独立浏览视图打开，具有返回、关闭入口，不调用系统浏览器。图片及 PDF 在 App 内预览，其余附件通过系统保存窗口下载。
 
 ## 安装和升级
 
@@ -13,7 +13,7 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 
 桌面升级保留服务器地址，首次从 Electron 迁移需要重新登录。Windows 安装器识别旧版 Electron 的卸载记录，保留用户数据后完成替换；Linux 保持 `xtyf-manager` 包名。Android 保留原服务器地址设置，新的原生会话首次需要登录。
 
-服务器地址支持 HTTP/HTTPS 根地址及自定义端口，HTTPS 正常校验证书。旧版保存的默认服务器 HTTP 地址（80 端口）自动迁移为 HTTPS，避免该站点的 HTTPS 跳转被跨来源保护拦截；其他服务器和自定义端口保持原配置。切换服务器会取消当前请求、清空页面状态，各服务器会话分别保存。
+服务器地址支持 HTTP/HTTPS 根地址及自定义端口，按输入的协议连接，HTTPS 正常校验证书。客户端不再把默认域名的 HTTP 地址自动改为 HTTPS。升级保留已保存的服务器地址；若旧版已保存 HTTPS，可在服务器设置中改为上述 HTTP 地址。切换服务器会取消当前请求、清空页面状态，各服务器会话分别保存。
 
 ## 服务器兼容性
 
