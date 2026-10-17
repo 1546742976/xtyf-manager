@@ -233,6 +233,9 @@ function refreshDraftChoices(host, name, items, labeler = (item) => item.name) {
 }
 
 let refreshing = false;
+// Polling bookkeeping: hidden tabs stop polling, repeated failures back off.
+let consecutiveFailures = 0;
+let nextSyncAt = 0;
 function showSync(ok, message) {
   const element = document.getElementById("sync-status");
   if (!element) return;
@@ -245,9 +248,11 @@ async function refresh() {
   try {
     const data = await api("/api/data");
     if (!data?.ok) {
+      consecutiveFailures += 1;
       showSync(false, data?.error || "同步失败");
       return;
     }
+    consecutiveFailures = 0;
     state.me = data.me;
     state.members = data.members || [];
     state.allMembers = data.all_members || state.allMembers || [];
@@ -273,5 +278,13 @@ function addDataListener(listener) {
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("refresh-now")?.addEventListener("click", refresh);
   refresh();
-  window.setInterval(refresh, 5000);
+  window.setInterval(() => {
+    if (document.hidden) return;                       // 后台标签页停止全量轮询
+    if (Date.now() < nextSyncAt) return;               // 连续失败后退避到 30 秒
+    nextSyncAt = Date.now() + (consecutiveFailures >= 3 ? 30000 : 0);
+    refresh();
+  }, 5000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refresh();                   // 回到前台立即同步一次
+  });
 });

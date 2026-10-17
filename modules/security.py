@@ -202,6 +202,15 @@ def init_security(app):
         if request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-CSRF-Token"] = csrf_token()
+            # Inline handlers are still used by the finance pages, so this policy
+            # deliberately only locks down framing, plugins and <base> injection.
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+            response.headers.setdefault("Referrer-Policy", "same-origin")
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "frame-ancestors 'self'; object-src 'none'; base-uri 'self'",
+            )
         audit_id = getattr(g, "audit_id", None)
         if audit_id:
             payload = response.get_json(silent=True) if response.is_json else None

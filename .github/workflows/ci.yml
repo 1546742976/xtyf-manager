@@ -44,18 +44,18 @@ jobs:
       - name: Python syntax check
         run: python -m compileall -q app.py common.py modules tests deploy
       - name: Run unit and integration tests with branch coverage
-        run: coverage run --branch --source=app,common,modules -m unittest discover -s tests -v
+        run: coverage run --branch --source=app,common,modules,deploy -m unittest discover -s tests -v
       - name: Coverage report
         if: always()
         shell: bash
         run: |
-          if [ -f .coverage ]; then
-            coverage report -m
-            coverage xml -o coverage.xml
-            coverage json -o coverage.json
-            python -c 'import json,os; p=json.load(open("coverage.json"))["totals"]["percent_covered_display"]; open(os.environ["GITHUB_STEP_SUMMARY"],"a").write("## Python branch coverage\n\nTotal: **"+p+"%**\n")'
-            coverage report --fail-under=65
-          fi
+          set -euo pipefail
+          # The gate must never be skippable: a missing .coverage is a failure.
+          coverage report -m
+          coverage xml -o coverage.xml
+          coverage json -o coverage.json
+          python -c 'import json,os; p=json.load(open("coverage.json"))["totals"]["percent_covered_display"]; open(os.environ["GITHUB_STEP_SUMMARY"],"a").write("## Python branch coverage\n\nTotal: **"+p+"%**\n")'
+          coverage report --fail-under=65
       - name: Upload coverage XML
         if: always()
         uses: actions/upload-artifact@v4
@@ -109,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           failures=0
-          for suite in review_fixes pr22_merge task_center daily_mail action_failures login_mobile palette_workspace local_collaboration; do
+          for suite in review_fixes pr22_merge task_center daily_mail action_failures login_mobile palette_workspace local_collaboration account_invoice_ui task_schedule; do
             echo "::group::Browser test: ${suite}"
             if ! node "tests/browser/${suite}.cjs"; then
               echo "::error::Browser suite ${suite} failed"

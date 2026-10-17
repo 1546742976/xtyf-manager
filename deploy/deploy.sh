@@ -23,10 +23,16 @@ sudo apt-get install -y python3-venv python3-pip sqlite3 rsync fonts-noto-cjk
 
 echo "==> 同步代码"
 sudo mkdir -p "$APP_DIR"
+# Never ship build caches or client artifacts: a full workspace can carry
+# tens of gigabytes (.build-tools), which would fill the SD card mid-deploy.
 sudo rsync -a --delete \
   --exclude venv --exclude data.db --exclude 'data.db-*' \
   --exclude secret.key --exclude backups --exclude __pycache__ \
   --exclude data --exclude mail.env --exclude index.html \
+  --exclude .git --exclude .build-tools --exclude dist \
+  --exclude 'clients/*/node_modules' --exclude 'clients/*/target' \
+  --exclude 'clients/desktop/target' --exclude 'clients/android/build' \
+  --exclude '*.log' \
   "$SRC_DIR"/ "$APP_DIR"/
 sudo chmod +x "$APP_DIR"/deploy/*.sh
 

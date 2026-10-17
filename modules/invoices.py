@@ -169,6 +169,9 @@ def _user_can_view(rel_path):
 
 # ========== 后台任务管理 ==========
 _invoice_lock = InvoiceFileLock(os.path.join(BASE_DIR, '.invoice.lock'))
+# Upper bound for a request waiting on the shared invoice lock. Without it a
+# stuck holder parks every worker thread until the process is restarted.
+_INVOICE_LOCK_TIMEOUT = float(os.environ.get('INVOICE_LOCK_TIMEOUT', '30'))
 _worker_guard = threading.Lock()
 _worker_thread = None
 _worker_pid = None
@@ -600,23 +603,32 @@ def parse_invoice_filename(filename):
 
 
 # ---- 金额取值优先级：文件名 → 金额缓存 → 实时解析 PDF ----
-def resolve_amount(inv, use_cache=True):
-    cache = load_cache() if use_cache else {}
-    cache = {k.replace('\\', '/'): v for k, v in cache.items()}
+def resolve_amount(inv, use_cache=True, cache=None):
+    """解析单张发票金额；缓存由 scan_invoices 统一持有，避免逐张读写整个 JSON。
+
+    返回 (金额, 来源, 本次是否新增缓存条目)。不传 cache 时保持单次调用的旧行为。
+    """
+    owns_cache = cache is None
+    if not use_cache:
+        cache = {}
+    elif owns_cache:
+        cache = {k.replace('\\', '/'): v for k, v in load_cache().items()}
     key = inv['id'].replace('\\', '/')
     if inv.get('from_filename') and inv['amount'] > 0:
-        return inv['amount'], '文件名'
+        return inv['amount'], '文件名', False
     if key in cache and cache[key].get('amount') is not None:
-        return cache[key]['amount'], 'PDF(缓存)'
+        return cache[key]['amount'], 'PDF(缓存)', False
     filepath = os.path.join(BASE_DIR, inv.get('rel_path', ''))
     if os.path.isfile(filepath):
         pdf_amount = extract_amount_from_pdf(filepath)
         if pdf_amount is not None:
-            cache[key] = {'amount': pdf_amount, 'vendor': inv['vendor'],
-                          'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            save_cache(cache)
-            return pdf_amount, 'PDF'
-    return inv.get('amount', Decimal('0.00')), '未知'
+            if use_cache:
+                cache[key] = {'amount': pdf_amount, 'vendor': inv['vendor'],
+                              'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                if owns_cache:
+                    save_cache(cache)
+            return pdf_amount, 'PDF', use_cache
+    return inv.get('amount', Decimal('0.00')), '未知', False
 
 
 # ===================== 文件夹管理 =====================
@@ -841,9 +853,21 @@ def _build_invoice_number_index():
     return index
 
 
+def _existing_file_hashes():
+    """一次性哈希已入库发票，供批量查重复用（逐张重算会退化为 O(N²) 读盘）。"""
+    hashes = {}
+    for key, entry in load_meta().items():
+        path = os.path.join(BASE_DIR, entry.get('rel_path', key))
+        if os.path.isfile(path):
+            digest = _file_hash(path)
+            if digest:
+                hashes[os.path.normcase(os.path.abspath(path))] = digest
+    return hashes
+
+
 # ---- 查重：按发票号索引 + 文件内容 MD5 双重校验 ----
-def check_duplicates(rel_path):
-    """检查单个文件是否与已有文件重复"""
+def check_duplicates(rel_path, index=None, hashes=None):
+    """检查单个文件是否与已有文件重复；可传入预建索引供批量复用。"""
     fp = os.path.join(BASE_DIR, rel_path)
     if not os.path.isfile(fp): return None
 
@@ -852,7 +876,7 @@ def check_duplicates(rel_path):
 
     # 1. 按发票号码查重
     if inv_num:
-        index = _build_invoice_number_index()
+        index = _build_invoice_number_index() if index is None else index
         existing = index.get(inv_num, [])
         for ep in existing:
             if os.path.normcase(ep) != os.path.normcase(rel_path):
@@ -861,14 +885,38 @@ def check_duplicates(rel_path):
     # 2. 按文件内容 MD5 查重
     fp_hash = _file_hash(fp)
     if fp_hash:
-        meta = load_meta()
-        for mid, mdata in meta.items():
-            existing_path = os.path.join(BASE_DIR, mdata.get('rel_path', mid))
-            if os.path.isfile(existing_path) and os.path.normcase(existing_path) != os.path.normcase(fp):
-                if _file_hash(existing_path) == fp_hash:
-                    candidates.append({'type': '文件内容完全相同', 'path': mdata.get('rel_path', mid)})
+        if hashes is None:
+            hashes = _existing_file_hashes()
+        target = os.path.normcase(os.path.abspath(fp))
+        for existing_path, digest in hashes.items():
+            if existing_path != target and digest == fp_hash:
+                candidates.append({'type': '文件内容完全相同',
+                                   'path': os.path.relpath(existing_path, BASE_DIR).replace('\\', '/')})
 
     return candidates if candidates else None
+
+
+def duplicate_guard(data, rel_path, index=None, hashes=None):
+    """Server-side duplicate gate; only finance may accept a known duplicate.
+
+    Returns an error response (or None when the caller may continue). The
+    client-supplied "skip" flag was removed on purpose: any member could bypass
+    duplicate detection by sending it.
+    """
+    allow = data.get('allow_duplicate', False)
+    if type(allow) is not bool:
+        return jsonify(success=False, error='allow_duplicate 必须是布尔值'), 400
+    duplicates = check_duplicates(rel_path, index=index, hashes=hashes) or []
+    if not duplicates:
+        return None
+    if not allow:
+        return jsonify({
+            'success': False, 'error': '存在重复发票',
+            'duplicates': _visible_duplicates(duplicates), 'code': 'DUPLICATE',
+        })
+    if not _is_finance():
+        return jsonify({'success': False, 'error': '只有财务可以确认重复发票入库'}), 403
+    return None
 
 
 # ===================== 发票扫描 =====================
@@ -876,6 +924,9 @@ def check_duplicates(rel_path):
 # ---- 全量扫描：遍历文件夹并合并元数据 → 发票列表（元数据键做了反斜杠→正斜杠归一化）----
 def scan_invoices(use_cache=True):
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
+    # 一次扫描只读写金额缓存一份：逐张 load/save 会把列表接口拖成 O(N²) I/O。
+    cache = {k.replace('\\', '/'): v for k, v in load_cache().items()} if use_cache else {}
+    cache_dirty = False
     invoices = []
 
     for entry in os.listdir(BASE_DIR):
@@ -889,11 +940,11 @@ def scan_invoices(use_cache=True):
                 if not os.path.isdir(status_dir): continue
                 for f in os.listdir(status_dir):
                     if not f.lower().endswith('.pdf'): continue
-                    _add_invoice(invoices, meta, month, status, os.path.join(status_dir, f), use_cache)
+                    cache_dirty |= bool(_add_invoice(invoices, meta, month, status, os.path.join(status_dir, f), use_cache, cache))
             for f in os.listdir(entry_path):
                 fp = os.path.join(entry_path, f)
                 if os.path.isfile(fp) and f.lower().endswith('.pdf'):
-                    _add_invoice(invoices, meta, month, '未报销', fp, use_cache)
+                    cache_dirty |= bool(_add_invoice(invoices, meta, month, '未报销', fp, use_cache, cache))
         else:
             for root, dirs, files in os.walk(entry_path):
                 dirs[:] = [d for d in dirs if not is_skipped(d)]
@@ -908,7 +959,10 @@ def scan_invoices(use_cache=True):
                         found_status = '已报销' if folder_hint else '未报销'
                     m = re.match(r'^(\d{4}\.\d{1,2})', entry)
                     month = _normalize_month(m.group(1)) if m else entry
-                    _add_invoice(invoices, meta, month, found_status, os.path.join(root, f), use_cache)
+                    cache_dirty |= bool(_add_invoice(invoices, meta, month, found_status, os.path.join(root, f), use_cache, cache))
+
+    if use_cache and cache_dirty:
+        save_cache(cache)
 
     seen = set()
     unique = []
@@ -929,7 +983,8 @@ def scan_invoices(use_cache=True):
 
 
 # ---- 单文件 → 发票字典（合并元数据字段，ID 使用正斜杠相对路径）----
-def _add_invoice(invoices, meta, month, status, filepath, use_cache=True):
+def _add_invoice(invoices, meta, month, status, filepath, use_cache=True, cache=None):
+    """追加一张发票并返回是否向金额缓存写入新条目。"""
     filename = os.path.basename(filepath)
     rel_path = os.path.relpath(filepath, BASE_DIR).replace('\\', '/')
     inv_id = rel_path
@@ -959,10 +1014,13 @@ def _add_invoice(invoices, meta, month, status, filepath, use_cache=True):
         if type(confirmed) is not int or not 0 <= confirmed <= MAX_CENTS:
             raise RuntimeError(f'发票确认金额分值无效：{inv_id}')
         inv['amount'], inv['source'] = Decimal(format_cents(confirmed)), '人工确认'
+        cache_dirty = False
     else:
-        inv['amount'], inv['source'] = resolve_amount(inv, use_cache=use_cache)
+        inv['amount'], inv['source'], cache_dirty = resolve_amount(
+            inv, use_cache=use_cache, cache=cache)
     inv['amount_cents'] = str(to_cents(inv['amount']))
     invoices.append(inv)
+    return cache_dirty
 
 
 
@@ -1750,7 +1808,6 @@ def api_upload_confirm():
     vendor = data.get('vendor', '')
     original_name = data.get('original_name', '')
     invoice_number = data.get('invoice_number', '')
-    skip_duplicate_check = data.get('skip_duplicate_check', False)
 
     if not tmp_path or not os.path.isfile(tmp_path):
         return jsonify({'success': False, 'error': '临时文件不存在'})
@@ -1765,14 +1822,9 @@ def api_upload_confirm():
     except ValueError as exc:
         return jsonify(success=False, error=str(exc)), 400
 
-    # 查重保护
-    if not skip_duplicate_check:
-        dups = check_duplicates(os.path.relpath(tmp_path, BASE_DIR)) or []
-        if dups:
-            return jsonify({
-                'success': False, 'error': '存在重复发票',
-                'duplicates': _visible_duplicates(dups), 'code': 'DUPLICATE',
-            })
+    # 查重保护：服务端强制，只有财务能显式确认重复入库
+    if (duplicate_error := duplicate_guard(data, os.path.relpath(tmp_path, BASE_DIR))) is not None:
+        return duplicate_error
 
     target_dir = os.path.join(BASE_DIR, month, status)
     ensure_dir(target_dir)
@@ -1835,6 +1887,9 @@ def api_upload_confirm_batch():
     results = []
     is_fin = _is_finance()
     cur_name = current_user()['name']
+    # 预建一次查重索引与哈希表：逐张重建会把整批退化成 O(N²) 的全库解析/哈希。
+    dedupe_index = _build_invoice_number_index()
+    dedupe_hashes = _existing_file_hashes()
     for item in items:
         if not isinstance(item, dict):
             results.append({'file': '', 'status': 'error', 'reason': '条目格式错误'})
@@ -1883,6 +1938,18 @@ def api_upload_confirm_batch():
             results.append({'file': original_name, 'status': 'error', 'reason': str(exc)})
             continue
 
+        duplicate_error = duplicate_guard(item, os.path.relpath(tmp_path, BASE_DIR),
+                                          index=dedupe_index, hashes=dedupe_hashes)
+        if duplicate_error is not None:
+            duplicate_response, duplicate_status = duplicate_error
+            detail = duplicate_response.get_json() or {}
+            results.append({
+                'file': original_name, 'status': 'error', 'tmp_path': tmp_rel,
+                'code': detail.get('code'), 'reason': detail.get('error', '查重失败'),
+                'duplicates': detail.get('duplicates', []),
+            })
+            continue
+
         target_dir = os.path.join(BASE_DIR, month, status)
         ensure_dir(target_dir)
 
@@ -1919,6 +1986,12 @@ def api_upload_confirm_batch():
                 cache = load_cache()
                 cache[rel_path] = {'amount': amount, 'vendor': vendor, 'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                 save_cache(cache)
+            # 更新本次请求内的查重索引，让同一批次里的重复文件也能被拦住。
+            new_digest = _file_hash(new_path)
+            if new_digest:
+                dedupe_hashes[os.path.normcase(os.path.abspath(new_path))] = new_digest
+            if invoice_number:
+                dedupe_index.setdefault(invoice_number, []).append(rel_path)
             results.append({'file': original_name, 'status': 'ok', 'path': rel_path,
                             **money_fields(to_cents(amount))})
         except Exception as e:
@@ -2139,7 +2212,14 @@ def _invoices_guard():
     start_invoice_worker()
     if request.endpoint not in {'invoices.index', 'invoices.api_job_stream', 'invoices.api_job_start',
                                 'invoices.api_job_detail', 'invoices.api_jobs'}:
-        _invoice_lock.acquire()
+        if not _invoice_lock.acquire(timeout=_INVOICE_LOCK_TIMEOUT):
+            # 拿不到锁时返回可重试的 503，而不是让请求无限期挂着。
+            message = '发票系统正忙，请稍后重试'
+            reply = (jsonify({'success': False, 'error': message}) if '/api/' in request.path
+                     else Response(message + '\n', mimetype='text/plain'))
+            reply.status_code = 503
+            reply.headers['Retry-After'] = '5'
+            return reply
         g.invoice_lock_held = True
     return None
 

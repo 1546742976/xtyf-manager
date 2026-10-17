@@ -35,6 +35,6 @@ def validate_fields(data):
     if 'tags' in data and (not isinstance(data['tags'], list)
                            or any(not isinstance(tag, str) for tag in data['tags'])):
         return 'tags 必须是字符串数组'
-    if 'skip_duplicate_check' in data and type(data['skip_duplicate_check']) is not bool:
-        return 'skip_duplicate_check 必须是布尔值'
+    if 'allow_duplicate' in data and type(data['allow_duplicate']) is not bool:
+        return 'allow_duplicate 必须是布尔值'
     return None

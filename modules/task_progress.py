@@ -28,6 +28,7 @@ def _active_task(db, task_id: int):
 @bp.get("/api/task/<int:task_id>/progress")
 @login_required
 def history(task_id: int):
+    """进度历史（含备注）对全体登录成员可读，与任务本身的可见范围一致。"""
     if task_id > MAX_SQLITE_INTEGER:
         return jsonify(ok=False, error="任务 ID 不合法"), 400
     db = get_db()

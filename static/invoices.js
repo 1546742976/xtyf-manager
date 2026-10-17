@@ -217,11 +217,16 @@ if(d2.success){await BUModal.open(d2.results)}else{showToast('上传失败: '+(d
 
 function cleanupTmp(paths){if(!paths||!paths.length)return;BusinessUI.fetch('/invoices/api/upload/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tmp_paths:paths})}).then(async r=>{if(!r.ok)throw new Error((await r.json()).error)}).catch(e=>showToast('临时文件清理未完成：'+e.message,'error'))}
 
+function duplicateOverride(result,label){
+if(!result||!result.has_duplicate)return false;
+if(!IS_FINANCE){showToast(label+' 疑似重复发票，只有财务可以确认入库','error');return false}
+return confirm('检测到可能的重复发票，仍要入库吗？');
+}
 async function quickConfirm(d){
 if(IS_FINANCE){await BUModal.open([d]);return}
 var sub=ME_NAME;
 if(!sub||!sub.trim()){showToast('需要填写提交人才能入库','error');cleanupTmp([d.tmp_path]);return}
-var body={tmp_path:d.tmp_path,original_name:d.original_name,month:d.info.month||'未归类',status:'未报销',submitter:sub.trim(),category:d.info.category||'',notes:'',amount:d.info.amount||'0.00',vendor:d.info.vendor||'',date:d.info.date||'',invoice_number:d.info.invoice_number||'',skip_duplicate_check:!d.has_duplicate||confirm('检测到可能重复，仍要入库吗？')};
+var body={tmp_path:d.tmp_path,original_name:d.original_name,month:d.info.month||'未归类',status:'未报销',submitter:sub.trim(),category:d.info.category||'',notes:'',amount:d.info.amount||'0.00',vendor:d.info.vendor||'',date:d.info.date||'',invoice_number:d.info.invoice_number||'',allow_duplicate:duplicateOverride(d,'该发票')};
 Progress.show('正在入库...');
 try{var r=await BusinessUI.fetch('/invoices/api/upload/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var dd=await r.json();Progress.hide();if(dd.success){showToast(dd.message,'success');App.stats=null;loadStats();loadInvoices(1)}else if(dd.code==='DUPLICATE'){showToast('存在重复发票，已拦截','error');cleanupTmp([d.tmp_path])}else{throw new Error(dd.error||'入库失败')}}
 catch(e){Progress.hide();await BUModal.open([d]);showToast('入库结果未确认，请先核对列表；确认信息已保留：'+e.message,'error')}
@@ -251,12 +256,12 @@ var dupInfo=r.has_duplicate?'<span class="badge tag-dup" title="'+r.duplicates.m
 return '<tr class="'+dupClass+'">'+
 '<td>'+(idx+1)+'</td>'+
 '<td title="'+escHtml(r.original_name)+'">'+escHtml(r.original_name.substring(0,25))+'</td>'+
-'<td><input type="number" step="any" min="0" title="金额按分四舍五入" value="'+(d.amount||'')+'" style="width:70px" class="bu-amount-'+idx+'"></td>'+
-'<td><input type="text" value="'+(d.date||'')+'" style="width:90px" class="bu-date-'+idx+'"></td>'+
-'<td><input type="text" value="'+(d.month||'')+'" style="width:55px" class="bu-month-'+idx+'"></td>'+
+'<td><input type="number" step="any" min="0" title="金额按分四舍五入" value="'+escHtml(d.amount||'')+'" style="width:70px" class="bu-amount-'+idx+'"></td>'+
+'<td><input type="text" value="'+escHtml(d.date||'')+'" style="width:90px" class="bu-date-'+idx+'"></td>'+
+'<td><input type="text" value="'+escHtml(d.month||'')+'" style="width:55px" class="bu-month-'+idx+'"></td>'+
 '<td><input type="text" value="'+escHtml(d.vendor||'')+'" style="width:120px" class="bu-vendor-'+idx+'"></td>'+
-'<td><input type="text" value="'+(d.invoice_number||'')+'" style="width:100px" class="bu-inum-'+idx+'"></td>'+
-'<td><input type="text" value="'+(d.category||'')+'" style="width:60px" class="bu-cat-'+idx+'"></td>'+
+'<td><input type="text" value="'+escHtml(d.invoice_number||'')+'" style="width:100px" class="bu-inum-'+idx+'"></td>'+
+'<td><input type="text" value="'+escHtml(d.category||'')+'" style="width:60px" class="bu-cat-'+idx+'"></td>'+
 '<td><select aria-label="提交人" style="min-width:100px" class="bu-sub-'+idx+'"'+(IS_FINANCE?'':' disabled')+'>'+invoiceOwnerOptions(IS_FINANCE?(r.submitter_id||''):ME_ID,'使用统一提交人')+'</select></td>'+
 '<td>'+dupInfo+'</td></tr>';
 }).join('');
@@ -272,7 +277,7 @@ cleanupTmp(paths);
 confirm:async function(){
 if(BUModal._ownersFailed){showToast('请先重新加载提交人，再确认入库','error');return}
 var dupN=BUModal._data.filter(function(r){return r.success&&r.has_duplicate}).length;
-if(dupN>0&&!confirm('有 '+dupN+' 张疑似重复发票, 仍要入库吗?'))return;
+if(dupN>0&&!confirm('有 '+dupN+' 张疑似重复发票，仍要入库吗？'+(IS_FINANCE?'':'（非财务账号的重复发票会被拦截）')))return;
 var globalSub=IS_FINANCE?document.getElementById('buSubmitter').value:String(ME_ID);
 var globalStatus=IS_FINANCE?document.getElementById('buStatus').value:'未报销';
 var items=[];
@@ -280,7 +285,7 @@ for(var i=0;i<BUModal._data.length;i++){
 var r=BUModal._data[i];
 if(!r.success)continue;
 var sub=document.querySelector('.bu-sub-'+i);
-items.push({tmp_path:r.tmp_path,original_name:r.original_name,status:globalStatus,submitter_id:Number((sub&&sub.value)||globalSub),category:document.querySelector('.bu-cat-'+i).value,notes:'',amount:document.querySelector('.bu-amount-'+i).value||'0.00',vendor:document.querySelector('.bu-vendor-'+i).value,date:document.querySelector('.bu-date-'+i).value,month:document.querySelector('.bu-month-'+i).value||'未归类',invoice_number:document.querySelector('.bu-inum-'+i).value});
+items.push({tmp_path:r.tmp_path,original_name:r.original_name,status:globalStatus,submitter_id:Number((sub&&sub.value)||globalSub),category:document.querySelector('.bu-cat-'+i).value,notes:'',amount:document.querySelector('.bu-amount-'+i).value||'0.00',vendor:document.querySelector('.bu-vendor-'+i).value,date:document.querySelector('.bu-date-'+i).value,month:document.querySelector('.bu-month-'+i).value||'未归类',invoice_number:document.querySelector('.bu-inum-'+i).value,allow_duplicate:IS_FINANCE&&dupN>0});
 }
 if(!items.every(function(it){return it.submitter_id>0})){showToast('请选择每张发票的提交人或统一提交人','error');return}
 Progress.show('正在入库 '+items.length+' 张发票...');

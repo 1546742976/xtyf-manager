@@ -42,22 +42,55 @@ def active_project(db, pid):
     return db.execute('SELECT * FROM daily_projects WHERE id=? AND deleted_at IS NULL', (pid,)).fetchone()
 
 
+def describe_many(db, rows):
+    """批量组装日常项目：固定 3 条查询，替代每个项目 9 条查询的 N+1。"""
+    rows = list(rows)
+    if not rows:
+        return []
+    ids = [int(row['id']) for row in rows]
+    placeholders = ','.join('?' for _ in ids)
+    groups: dict[int, dict[str, dict]] = {}
+    for group in db.execute('SELECT * FROM daily_groups WHERE project_id IN (' + placeholders + ')', ids):
+        groups.setdefault(int(group['project_id']), {})[group['stage']] = dict(group)
+    owners: dict[tuple[int, str], list[dict]] = {}
+    for owner in db.execute(
+        'SELECT o.project_id,o.stage,m.id,m.name,m.is_active,m.deleted_at FROM daily_owners o '
+        'JOIN members m ON m.id=o.member_id WHERE o.project_id IN (' + placeholders + ') ORDER BY m.id', ids
+    ):
+        owners.setdefault((int(owner['project_id']), owner['stage']), []).append(
+            {key: owner[key] for key in ('id', 'name', 'is_active', 'deleted_at')})
+    latest: dict[tuple[int, str], dict] = {}
+    for update in db.execute(
+        'SELECT project_id,stage,id,actor_name,progress,note,created_at FROM daily_updates '
+        'WHERE project_id IN (' + placeholders + ') ORDER BY id DESC', ids
+    ):
+        latest.setdefault((int(update['project_id']), update['stage']),
+                          {key: update[key] for key in ('id', 'actor_name', 'progress', 'note', 'created_at')})
+    described = []
+    for row in rows:
+        project = dict(row)
+        pid = int(row['id'])
+        project_groups = []
+        for stage, label in STAGES.items():
+            group = groups.get(pid, {}).get(stage)
+            if not group:
+                continue
+            item = dict(group)
+            item['label'] = label
+            item['owners'] = owners.get((pid, stage), [])
+            item['latest'] = latest.get((pid, stage))
+            project_groups.append(item)
+        described.append(_finish_description(project, project_groups))
+    return described
+
+
 def describe(db, row):
-    project = dict(row)
-    groups = []
-    for stage, label in STAGES.items():
-        group = db.execute('SELECT * FROM daily_groups WHERE project_id=? AND stage=?', (row['id'], stage)).fetchone()
-        if not group:
-            continue
-        item = dict(group)
-        item['label'] = label
-        item['owners'] = [dict(r) for r in db.execute(
-            'SELECT m.id,m.name,m.is_active,m.deleted_at FROM daily_owners o JOIN members m ON m.id=o.member_id '
-            'WHERE o.project_id=? AND o.stage=? ORDER BY m.id', (row['id'], stage))]
-        latest = db.execute('SELECT id,actor_name,progress,note,created_at FROM daily_updates '
-                            'WHERE project_id=? AND stage=? ORDER BY id DESC LIMIT 1', (row['id'], stage)).fetchone()
-        item['latest'] = dict(latest) if latest else None
-        groups.append(item)
+    """单个项目描述：详情/保存路径复用批量实现。"""
+    described = describe_many(db, [row])
+    return described[0] if described else None
+
+
+def _finish_description(project, groups):
     project['groups'] = groups
     enabled = [g for g in groups if g['enabled']]
     project['progress'] = float((Decimal(sum(g['progress'] for g in enabled)) / max(1, len(enabled))).quantize(Decimal('.1'), rounding=ROUND_HALF_UP))
@@ -293,6 +326,7 @@ def progress(pid, stage):
 @bp.get('/api/daily-projects/<int:pid>/attachments/<int:aid>')
 @login_required
 def image(pid, aid):
+    """日常项目图片对全体登录成员可读（项目对全员可见）；写入按负责人校验。"""
     if max(pid, aid) > 2**63-1:
         return failure('图片不存在', 404)
     db = get_db()

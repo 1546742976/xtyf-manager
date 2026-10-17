@@ -45,7 +45,8 @@ def version_parts(version):
     return tuple(map(int, version.split('.')))
 
 
-def next_config(root):
+def release_state(root):
+    """Return the highest version and versionCode already recorded on disk."""
     config = read_json(root / 'clients/config.json')
     versions = [version_parts(config['version'])]
     code = int(config['versionCode'])
@@ -63,7 +64,22 @@ def next_config(root):
     major, minor, patch = max(versions)
     if not 0 < code < 2100000000:
         raise ValueError('Android versionCode is outside the incrementable range')
-    return {**config, 'version': f'{major}.{minor}.{patch + 1}', 'versionCode': code + 1}
+    return {**config, 'version': f'{major}.{minor}.{patch}', 'versionCode': code}
+
+
+def next_config(root):
+    current = release_state(root)
+    major, minor, patch = version_parts(current['version'])
+    return {**current, 'version': f'{major}.{minor}.{patch + 1}', 'versionCode': current['versionCode'] + 1}
+
+
+def requested_config(root, requested):
+    """Honour the version the user confirmed, but never re-use a released one."""
+    version_parts(requested)
+    current = release_state(root)
+    if version_parts(requested) <= version_parts(current['version']):
+        raise ValueError(f'Confirmed version {requested} must be newer than the released {current["version"]}')
+    return {**current, 'version': requested, 'versionCode': current['versionCode'] + 1}
 
 
 def sync_versions(root, config):
@@ -193,14 +209,14 @@ def verify_shared_frontend(root, staging, version, windows, linux):
     return digest
 
 
-def release(root=ROOT, runner=run_command):
+def release(root=ROOT, runner=run_command, requested_version=None):
     root = Path(root).resolve()
     output = (root / 'dist/clients').resolve()
     if not output.is_relative_to(root):
         raise RuntimeError('Client release output must stay inside the project')
     output.mkdir(parents=True, exist_ok=True)
     with release_lock(output):
-        config = next_config(root)
+        config = requested_config(root, requested_version) if requested_version else next_config(root)
         version = config['version']
         # Fail on missing Linux tools before changing versions or building other platforms.
         runner([sys.executable, root / 'clients/build_linux.py', '--check'], root)
@@ -292,11 +308,14 @@ def release(root=ROOT, runner=run_command):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry-run', action='store_true', help='Preview the next version without writing files or building')
+    parser.add_argument('--version', metavar='X.Y.Z',
+                        help='Release this exact confirmed version instead of auto-incrementing the patch')
     args = parser.parse_args()
     if args.dry_run:
-        print(json.dumps(next_config(ROOT), ensure_ascii=False, indent=2))
+        config = requested_config(ROOT, args.version) if args.version else next_config(ROOT)
+        print(json.dumps(config, ensure_ascii=False, indent=2))
     else:
-        release()
+        release(requested_version=args.version)
 
 
 if __name__ == '__main__':

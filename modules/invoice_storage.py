@@ -28,8 +28,19 @@ class InvoiceFileLock:
             self._file.close()
         self._reset()
 
-    def acquire(self, blocking=True):
-        if not self._thread_lock.acquire(blocking=blocking):
+    def acquire(self, blocking=True, timeout=None):
+        """Acquire the lock; timeout bounds the wait when blocking.
+
+        A deadline makes contention answerable: callers get False back and can
+        return a retryable error instead of leaving a worker thread parked
+        forever behind a stuck holder.
+        """
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        if blocking and deadline is not None:
+            acquired = self._thread_lock.acquire(blocking=True, timeout=max(0.0, deadline - time.monotonic()))
+        else:
+            acquired = self._thread_lock.acquire(blocking=blocking)
+        if not acquired:
             return False
         try:
             if self._depth:
@@ -54,15 +65,31 @@ class InvoiceFileLock:
                                 stream.close()
                                 self._thread_lock.release()
                                 return False
+                            if deadline is not None and time.monotonic() >= deadline:
+                                stream.close()
+                                self._thread_lock.release()
+                                return False
                             time.sleep(0.05)
                 else:
                     import fcntl
-                    try:
-                        fcntl.flock(stream, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
-                    except BlockingIOError:
-                        stream.close()
-                        self._thread_lock.release()
-                        return False
+                    if deadline is None:
+                        try:
+                            fcntl.flock(stream, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+                        except BlockingIOError:
+                            stream.close()
+                            self._thread_lock.release()
+                            return False
+                    else:
+                        while True:
+                            try:
+                                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                break
+                            except BlockingIOError:
+                                if time.monotonic() >= deadline:
+                                    stream.close()
+                                    self._thread_lock.release()
+                                    return False
+                                time.sleep(0.05)
             except BaseException:
                 stream.close()
                 raise

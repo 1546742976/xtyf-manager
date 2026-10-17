@@ -33,7 +33,7 @@ class TestCollaborationBackend(unittest.TestCase):
         project_id = self.admin.post("/api/projects", json={"name": "协作项目A"}).get_json()["id"]
         member_id, member_client = self._member("catalog")
 
-        # When: an admin creates a task and its participant changes all non-parent settings.
+        # When: an admin creates a task and its participant edits the task content.
         created = self.admin.post("/api/task", json={
             "title": "协作任务A", "owner_id": member_id,
             "participant_ids": [member_id], "group_ids": [group_id],
@@ -43,8 +43,6 @@ class TestCollaborationBackend(unittest.TestCase):
         payload = created.get_json()
         updated = member_client.post(f"/api/task/{payload['id']}", json={
             "version": payload["version"], "title": "参与者已修改",
-            "owner_id": member_id, "participant_ids": [],
-            "group_ids": [group_id], "project_id": project_id,
         })
 
         # Then: the version advances and the expanded task is returned by the aggregate API.
@@ -55,6 +53,13 @@ class TestCollaborationBackend(unittest.TestCase):
         self.assertEqual(task["title"], "参与者已修改")
         self.assertEqual(task["group_ids"], [group_id])
         self.assertEqual(task["project_id"], project_id)
+
+        # 归属字段只有管理员/项管可以调整：参与者清空参与成员必须被拒绝。
+        forbidden = member_client.post(f"/api/task/{payload['id']}", json={
+            "version": updated.get_json()["version"], "participant_ids": [],
+        })
+        self.assertEqual(forbidden.status_code, 403, forbidden.get_json())
+        self.assertIn("参与成员", forbidden.get_json()["error"])
 
     def test_version_conflict_and_revision_revert_conflict(self):
         # Given: a task changed in two separate structural revisions.

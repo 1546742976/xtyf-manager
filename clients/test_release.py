@@ -303,6 +303,27 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual((self.root / relative).read_bytes(), content)
         self.assertEqual(self.calls, [])
 
+    def test_confirmed_version_preview_still_advances_version_code(self):
+        config = module.requested_config(self.root, '2.0.0')
+        self.assertEqual(config['version'], '2.0.0')
+        self.assertEqual(config['versionCode'], 12)
+
+    def test_confirmed_version_must_be_newer_than_everything_released(self):
+        for requested in ('1.0.9', '1.0.8', '0.9.0'):
+            with self.subTest(requested=requested):
+                with self.assertRaises(ValueError):
+                    module.requested_config(self.root, requested)
+        with self.assertRaises(ValueError):
+            module.requested_config(self.root, '2.0')
+
+    def test_release_builds_the_confirmed_version(self):
+        report = module.release(self.root, self.builder, requested_version='2.0.0')
+        self.assertEqual(report['version'], '2.0.0')
+        self.assertEqual(report['android']['versionCode'], 12)
+        self.assertTrue((self.output / 'android/XTYF-Manager-2.0.0.apk').exists())
+        self.assertEqual(module.read_json(self.root / 'clients/config.json')['version'], '2.0.0')
+        self.assertEqual(module.next_config(self.root)['version'], '2.0.1')
+
 
 if __name__ == '__main__':
     unittest.main()

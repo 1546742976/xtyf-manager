@@ -59,6 +59,7 @@ class TestFeatureContracts(unittest.TestCase):
     def test_ledger_filters_sort_export_and_delete_roundtrip(self):
         marker = "unit-" + uuid4().hex[:12]
         ids = []
+        versions = {}
         try:
             for amount in ("1.25", "2.75"):
                 response = self.client.post("/funds/api/records", json={
@@ -67,7 +68,9 @@ class TestFeatureContracts(unittest.TestCase):
                 })
                 self.assertEqual(response.status_code, 200, response.get_json())
                 self.assertEqual(response.get_json()["code"], 0)
-                ids.append(response.get_json()["id"])
+                payload = response.get_json()
+                ids.append(payload["id"])
+                versions[payload["id"]] = payload["version"]
             result = self.client.get("/funds/api/records", query_string={
                 "keyword": marker, "amount_min": "1.25",
                 "amount_max": "2.75", "sort_by": "amount", "sort_order": "ASC"
@@ -86,7 +89,8 @@ class TestFeatureContracts(unittest.TestCase):
         finally:
             for rid in ids:
                 self.assertEqual(self.client.delete(
-                    "/funds/api/records/" + str(rid)).status_code, 200)
+                    "/funds/api/records/" + str(rid),
+                    query_string={"version": versions[rid]}).status_code, 200)
 
     def test_invoice_validation_and_audit_contracts(self):
         for query in ("page=0", "per_page=101", "min_amount=-1",

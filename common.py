@@ -31,10 +31,13 @@ def now_str():
 def get_db():
     db = getattr(g, "_db", None)
     if db is None:
-        db = g._db = sqlite3.connect(DB_PATH)
+        # 15s matches the audit connection: longer than any normal write, short
+        # enough that a stuck writer surfaces as a retryable error.
+        db = g._db = sqlite3.connect(DB_PATH, timeout=15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA foreign_keys=ON")
+        db.execute("PRAGMA busy_timeout=15000")
     return db
 
 

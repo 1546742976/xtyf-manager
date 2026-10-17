@@ -219,6 +219,19 @@ def update_task(
             relations[key] = supplied_relations[key]
             touched.add(key)
     old_relations = _relations(db, task_id)
+    if not management:
+        # 归属类字段只允许管理员/项管调整；负责人和参与者仍可更新状态与内容。
+        ownership = []
+        if values["owner_id"] != prior["owner_id"]:
+            ownership.append("负责人")
+        if values["project_id"] != prior["project_id"]:
+            ownership.append("造车组别")
+        for key, label in (("participant_ids", "参与成员"), ("group_ids", "专业组")):
+            if sorted(relations[key]) != sorted(old_relations[key]):
+                ownership.append(label)
+        if ownership:
+            db.rollback()
+            return None, "只有管理员或项管可以调整" + "、".join(ownership), 403
     active_members = [item for item in relations["participant_ids"] if item not in old_relations["participant_ids"]]
     if values["owner_id"] != prior["owner_id"] and values["owner_id"] is not None:
         active_members.append(values["owner_id"])

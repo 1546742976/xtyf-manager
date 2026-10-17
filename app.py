@@ -233,6 +233,16 @@ def init_db():
         migrate_security(db)
         migrate_invoice_owners(db)
         migrate_invoice_jobs(db)
+        # Hot read paths (dashboard tree, status filters, attachment lookups)
+        # would otherwise scan the whole table on every 5s poll.
+        db.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_id, id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_deleted ON tasks(deleted_at, id);
+            CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments(task_id, id);
+            CREATE INDEX IF NOT EXISTS idx_logs_task ON logs(task_id, id);
+        """)
+        db.commit()
     finally:
         db.close()
 
