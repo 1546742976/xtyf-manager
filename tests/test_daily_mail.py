@@ -127,14 +127,15 @@ class DailyMailTest(unittest.TestCase):
         pid=self.project(groups={'mechanical':[self.mid],'vision':[self.mid],'electrical':[self.mid]})
         self.db.execute('UPDATE tasks SET created_at=? WHERE id IN (?,?,?,?,?)',(old,owned,boundary,full,participant,updated))
         self.db.execute('UPDATE tasks SET created_at=? WHERE id=?',(exact,boundary))
-        self.db.execute('UPDATE tasks SET progress=100 WHERE id=?',(full,))
+        self.db.execute("UPDATE tasks SET progress=100,status='已完成',completed_at=? WHERE id=?",(recent,full))
         self.db.execute('UPDATE task_progress_updates SET created_at=? WHERE task_id=?',(recent,updated))
         self.db.execute('UPDATE daily_groups SET enabled_at=? WHERE project_id=?',(old,pid))
         self.db.execute('UPDATE daily_groups SET enabled_at=? WHERE project_id=? AND stage=?',(exact,pid,'mechanical'))
         self.db.execute('UPDATE daily_groups SET progress=100 WHERE project_id=? AND stage=?',(pid,'electrical'));self.db.commit()
         tasks,projects=digest_items(self.db,self.mid,morning,kind='morning');by_id={task['id']:task for task in tasks}
         self.assertTrue(by_id[owned]['nudge'])
-        for tid in (boundary,full,participant,updated):self.assertFalse(by_id[tid]['nudge'])
+        self.assertNotIn(full,by_id,'100% 的已完成任务应从早报排除')
+        for tid in (boundary,participant,updated):self.assertFalse(by_id[tid]['nudge'])
         self.assertEqual(by_id[updated]['last_progress'],recent)
         self.assertEqual(by_id[updated]['reminder_baseline'],recent)
         self.assertIsNone(by_id[owned]['last_progress']);self.assertEqual(by_id[owned]['reminder_baseline'],old)
@@ -527,14 +528,15 @@ class DailyMailTest(unittest.TestCase):
                 self.assertNotIn('colleague-private@example.com',content)
                 self.assertNotIn('member@example.com',content)
 
-    def test_disabled_groups_and_full_progress_do_not_nudge(self):
-        pid=self.project(groups={'mechanical':[self.mid],'vision':[self.mid]})
+    def test_disabled_groups_and_completed_groups_do_not_nudge(self):
+        pid=self.project(groups={'mechanical':[self.mid],'vision':[self.mid],'electrical':[self.mid]})
         old=(self.at-timedelta(hours=49)).strftime('%Y-%m-%d %H:%M:%S')
         self.db.execute('UPDATE daily_groups SET enabled_at=?,progress=100 WHERE project_id=? AND stage=?',(old,pid,'mechanical'))
         self.db.execute('UPDATE daily_groups SET enabled_at=?,enabled=0 WHERE project_id=? AND stage=?',(old,pid,'vision'));self.db.commit()
         project=next(p for p in digest_items(self.db,self.mid,self.at)[1] if p['id']==pid)
-        self.assertEqual(project['progress'],100)
-        self.assertEqual(project['groups'],[{'label':'机械','progress':100,'nudge':False}])
+        self.assertEqual(project['progress'],50)
+        self.assertEqual(project['groups'],[{'label':'机械','progress':100,'nudge':False},
+                                           {'label':'电控','progress':0,'nudge':False}])
 
     def test_beijing_window_deadlines_and_weekends(self):
         self.assertFalse(daily_window(self.at-timedelta(seconds=1)))

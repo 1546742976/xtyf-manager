@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}团队异常{% endblock %}
+{% block content %}
+<div class="ux-page-head"><div><p class="ux-eyebrow">WORKSPACE / ATTENTION</p><h1>团队异常</h1><p>集中处理阻塞、逾期、负责人缺失和超过 48 小时未更新的事项。时间按北京时间计算。</p></div><a class="btn" href="/">返回工作台</a></div>
+<form id="alert-filters" class="panel alert-filters">
+  <label>事项类型<select name="type"><option value="">全部事项</option><option value="task">造车任务</option><option value="daily">日常项目</option></select></label>
+  <label>异常类型<select name="category"><option value="">全部异常</option><option value="blocked">阻塞</option><option value="overdue">已逾期</option><option value="unassigned">缺少负责人</option><option value="stale">超过48小时未更新</option></select></label>
+  <label>造车组别<select name="project_id"><option value="">全部车组</option></select></label>
+  <label>专业组<select name="group_id"><option value="">全部专业组</option></select></label>
+  <label>负责人<select name="owner_id"><option value="">全部成员</option></select></label>
+  <button class="btn primary" type="submit">查询 / 刷新</button>
+</form>
+<p id="alert-feedback" role="status" aria-live="polite">正在读取异常…</p>
+<p id="alert-counts"></p>
+<div id="alert-items" class="alert-items"></div>
+<nav class="alert-pages" aria-label="异常分页"><button id="alert-prev" class="btn" type="button" disabled>上一页</button><span id="alert-page"></span><button id="alert-next" class="btn" type="button" disabled>下一页</button></nav>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='task-alerts.js') }}"></script>{% endblock %}

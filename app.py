@@ -45,6 +45,7 @@ from modules.member_profiles import bp as member_profiles_bp
 from modules.task_migrations import migrate as migrate_tasks
 from modules.daily_schema import migrate as migrate_daily
 from modules.daily_projects import bp as daily_projects_bp
+from modules.task_alerts import bp as task_alerts_bp
 from modules.email_api import bp as email_bp
 from modules.mail_service import configure as configure_mail
 from modules.security import init_security, migrate_security, write_initial_credentials
@@ -129,6 +130,7 @@ app.register_blueprint(task_attachments_bp)
 app.register_blueprint(task_progress_bp)
 app.register_blueprint(discussions_bp, url_prefix="/discussions")
 app.register_blueprint(daily_projects_bp)
+app.register_blueprint(task_alerts_bp)
 app.register_blueprint(email_bp)
 app.register_blueprint(workspace_settings_bp)
 app.context_processor(theme_context)

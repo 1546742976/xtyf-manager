@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from modules.task_types import JsonObject
 from modules.task_schedule import resolve_stage
@@ -93,7 +93,7 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
                     if int(event["id"]) == int(image["progress_update_id"]):
                         event["image_ids"].append(int(image["id"]))
     by_id = {int(row["id"]): dict(row) for row in rows}
-    today = datetime.now().date()
+    today = datetime.now(timezone(timedelta(hours=8))).date()
     tasks: list[JsonObject] = []
     for row in rows:
         task = dict(row)

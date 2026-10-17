@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from flask import current_app
-from modules.daily_projects import TZ, describe
+from modules.daily_projects import TZ, describe_many
 from modules.mail_templates import render_digest_html, render_verification_html, render_test_html
 
 
@@ -92,6 +92,11 @@ def digest_items(db, mid, at, kind='daily'):
     at = beijing_time(at)
     morning = kind == 'morning'
     today = at.date().isoformat()
+    helper_names = {row['id']: row['name'] for row in db.execute('SELECT id,name FROM members')}
+    def blocker(row):
+        item = dict(row)
+        return {key: item.get(key) for key in ('blocker_reason', 'blocker_next_action', 'blocker_follow_up')} | {
+            'blocker_helper_name': helper_names.get(item.get('blocker_helper_id'), '')}
     tasks = []
     task_scope = (" AND (t.owner_id=? OR EXISTS(SELECT 1 FROM task_participants tp "
                   "WHERE tp.task_id=t.id AND tp.member_id=?))" if morning else "")
@@ -111,6 +116,7 @@ def digest_items(db, mid, at, kind='daily'):
         if morning:
             task.update(role='负责人' if owner else '参与者', last_progress=row['last_progress'],
                         reminder_baseline=last)
+        task.update(blocker(row))
         tasks.append(task)
     projects = []
     project_scope = (" AND EXISTS(SELECT 1 FROM daily_owners o JOIN daily_groups g "
@@ -122,8 +128,8 @@ def digest_items(db, mid, at, kind='daily'):
                       + project_scope + " "
                       "ORDER BY CASE WHEN p.due_date IS NULL OR p.due_date='' THEN 1 ELSE 0 END,p.due_date,p.id",
                       (today, mid) if morning else (today,))
-    for row in rows:
-        project = describe(db, row)
+    for project in describe_many(db, rows):
+        row = project
         groups = []
         for group in project['groups']:
             if not group['enabled']:
@@ -146,7 +152,7 @@ def digest_items(db, mid, at, kind='daily'):
         projects.append({'id': row['id'], 'title': row['title'], 'status': row['status'],
                          'progress': project['progress'], 'groups': groups,
                          'due': row['due_date'], 'remaining': deadline(row['due_date'], at),
-                         'url': settings()['base_url'] + f'/tasks?type=daily&project={row["id"]}'})
+                         'url': settings()['base_url'] + f'/tasks?type=daily&project={row["id"]}', **blocker(row)})
     return tasks, projects
 
 
@@ -169,6 +175,14 @@ def digest_content(db, mid, at, kind='daily'):
             return '最近进度更新：' + parsed_time(item['last_progress']).strftime('%Y-%m-%d %H:%M:%S')
         return '暂无进度更新（' + baseline_label + parsed_time(item['reminder_baseline']).strftime('%Y-%m-%d %H:%M:%S') + '）'
 
+    def blocker_text(item):
+        if item['status'] != '阻塞': return ''
+        text = '\n阻塞原因：' + (item.get('blocker_reason') or '待补充')
+        text += '\n下一步行动：' + (item.get('blocker_next_action') or '待补充')
+        if item.get('blocker_helper_name'): text += '\n协助成员：' + item['blocker_helper_name']
+        if item.get('blocker_follow_up'): text += '\n下次跟进：' + item['blocker_follow_up']
+        return text
+
     if not tasks:
         lines.append('暂无您负责或参与且符合提醒条件的造车任务' if morning else '暂无团队符合提醒条件的造车任务')
     for task in tasks:
@@ -179,7 +193,7 @@ def digest_content(db, mid, at, kind='daily'):
             text += f'\n您的角色：{task["role"]}\n' + progress_time(task, '创建于 ')
         if task['nudge']:
             text += '\n请更新进度：您负责的任务已超过 48 小时未更新。'
-        lines.extend([text, task['url'], ''])
+        lines.extend([text + blocker_text(task), task['url'], ''])
     lines.extend(['', '日常项目'])
     if not projects:
         lines.append('暂无您负责且符合提醒条件的日常项目' if morning else '暂无团队符合提醒条件的日常项目')
@@ -194,7 +208,7 @@ def digest_content(db, mid, at, kind='daily'):
                 text += f'\n{group["label"]}组' + progress_time(group, '启用于 ')
             if group['nudge']:
                 text += f'\n请更新进度：您负责的{group["label"]}组已超过 48 小时未更新。'
-        lines.extend([text, project['url'], ''])
+        lines.extend([text + blocker_text(project), project['url'], ''])
     footer = ('截至发送时您负责或参与且符合提醒条件的事项；每日北京时间 08:00 汇总，包含周末。'
               if morning else '截至发送时全团队符合提醒条件的事项；每日北京时间 22:00 汇总，包含周末。')
     footer += ('仅包含进行中、阻塞，以及未开始但已逾期的事项。逾期指截止日期早于发送当天（北京时间），'

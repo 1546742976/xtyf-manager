@@ -76,6 +76,16 @@ def _meta(label, value):
             f'{_e(label)}：<strong style="color:#263b56">{_e(value)}</strong></span>')
 
 
+def _blocker(item):
+    if item['status'] != '阻塞':
+        return ''
+    fields = [('阻塞原因', item.get('blocker_reason') or '待补充'),
+              ('下一步行动', item.get('blocker_next_action') or '待补充')]
+    if item.get('blocker_helper_name'): fields.append(('协助成员', item['blocker_helper_name']))
+    if item.get('blocker_follow_up'): fields.append(('下次跟进', item['blocker_follow_up']))
+    return ''.join(f'<p style="margin:8px 0;white-space:pre-wrap">{_e(label)}：{_e(value)}</p>' for label, value in fields)
+
+
 def _task_card(task, morning, progress_time):
     overdue = task['remaining'].startswith('已逾期')
     parts = [_card_start(), _title(task['title']),
@@ -86,6 +96,7 @@ def _task_card(task, morning, progress_time):
     if task['due']:
         parts.append(_meta('截止日期', task['due']))
     parts.append(_progress(task['progress']))
+    parts.append(_blocker(task))
     if morning:
         parts.append(f'<p style="margin:12px 0 0;font-size:12px;line-height:1.6;'
                      f'color:#64748b">{_e(progress_time(task, "创建于 "))}</p>')
@@ -103,6 +114,7 @@ def _project_card(project, morning, progress_time):
              _tag(project['remaining'], urgent=overdue)]
     if project['due']:
         parts.append(_meta('截止日期', project['due']))
+    parts.append(_blocker(project))
     parts.extend([_progress(project['progress']),
                   f'<p style="margin:13px 0 8px;font-size:13px;font-weight:700;'
                   f'color:#334761">{"您负责的小组" if morning else "各小组进度"}</p>'])
