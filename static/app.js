@@ -86,6 +86,49 @@ function isDueSoon(task) {
 function isOverdue(task) {
   return Number.isInteger(task.days_left) && task.days_left < 0 && !["已完成", "已取消"].includes(task.status);
 }
+function isFinishedTask(task) {
+  return task.status === "已完成" || task.status === "已取消";
+}
+// Capped urgency scores: ownership 28, deadline 44, priority 20, state 8 (max 100).
+function taskResponsibilityWeight(task, memberId = null, teamTaskWeight = 0) {
+  const id = Number(memberId);
+  if (memberId == null || !Number.isSafeInteger(id) || id <= 0) return 0;
+  if (Number(task.owner_id) === id) return 28;
+  return taskParticipants(task).includes(id) ? 8 : teamTaskWeight;
+}
+function taskDeadlineWeight(daysLeft) {
+  if (!Number.isSafeInteger(daysLeft)) return 0;
+  if (daysLeft < 0) return 38 + Math.min(6, -daysLeft);
+  if (daysLeft === 0) return 36;
+  if (daysLeft <= 3) return 36 - daysLeft * 4;
+  if (daysLeft <= 7) return 20 - (daysLeft - 4) * 2;
+  if (daysLeft <= 14) return 12 - (daysLeft - 8);
+  if (daysLeft <= 30) return Math.max(0, 5 - Math.floor((daysLeft - 15) / 3));
+  return 0;
+}
+function taskUrgencyScore(task, memberId = null, teamTaskWeight = 0) {
+  if (isFinishedTask(task)) return 0;
+  const priority = { "高": 20, "中": 10, "低": 0 }[task.priority] ?? 0;
+  const workState = { "阻塞": 8, "进行中": 4, "未开始": 0 }[task.status] ?? 0;
+  return taskResponsibilityWeight(task, memberId, teamTaskWeight) +
+    taskDeadlineWeight(task.days_left) + priority + workState;
+}
+function compareTaskUrgency(a, b, memberId = null, teamTaskWeight = 0) {
+  const closedDiff = Number(isFinishedTask(a)) - Number(isFinishedTask(b));
+  if (closedDiff) return closedDiff;
+  const scoreDiff = taskUrgencyScore(b, memberId, teamTaskWeight) -
+    taskUrgencyScore(a, memberId, teamTaskWeight);
+  if (scoreDiff) return scoreDiff;
+  // Stable tie-breaking never restores unlimited bias for severely overdue tasks.
+  const roleDiff = taskResponsibilityWeight(b, memberId, teamTaskWeight) -
+    taskResponsibilityWeight(a, memberId, teamTaskWeight);
+  if (roleDiff) return roleDiff;
+  const priority = (task) => ({ "高": 20, "中": 10, "低": 0 })[task.priority] ?? 0;
+  const priorityDiff = priority(b) - priority(a);
+  if (priorityDiff) return priorityDiff;
+  const workState = (task) => ({ "阻塞": 8, "进行中": 4, "未开始": 0 })[task.status] ?? 0;
+  return workState(b) - workState(a) || Number(a.id) - Number(b.id);
+}
 function daysLeftText(task) {
   if (task.status === "已完成") return "已完成";
   if (task.status === "已取消") return "已取消";

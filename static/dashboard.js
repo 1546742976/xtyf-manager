@@ -1,6 +1,16 @@
 "use strict";
 
+// Home dashboard includes team-wide tasks: only four points separate non-participation
+// from active participation (8), while primary responsibility remains 28.
+const DASHBOARD_TEAM_TASK_WEIGHT = 4;
+function rankDashboardTasks(tasks, memberId, maxCount = 8) {
+  return tasks.filter((task) => !isFinishedTask(task))
+    .sort((a, b) => compareTaskUrgency(a, b, memberId, DASHBOARD_TEAM_TASK_WEIGHT))
+    .slice(0, maxCount);
+}
 function dashboardTaskRow(task) {
+  const responsibility = Number(task.owner_id) === Number(state.me.id) ? "我总负责"
+    : taskParticipants(task).includes(Number(state.me.id)) ? "我参与" : "团队任务";
   const percent = Math.max(0, Math.min(100, Number(task.progress) || 0));
   const people = taskParticipants(task)
     .map((id) => memberById(id)?.name || `#${id}`).join("、") || "未分配";
@@ -23,7 +33,7 @@ function dashboardTaskRow(task) {
         ${badge(task.status, STATUS_CLASS[task.status] || "gray")}
         ${badge(daysLeftText(task), daysLeftClass(task))}
       </span>
-      <span class="ws-task-row-sub">${esc(taskProjectName(task) || "未归属造车组别")} · ${esc(people)}</span>
+      <span class="ws-task-row-sub">${esc(responsibility)} · ${esc(taskProjectName(task) || "未归属造车组别")} · ${esc(people)}</span>
       <span class="ws-task-progress-head"><span>任务进度</span><strong>${percent}%</strong></span>
       <span class="progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><span class="progress-inner blue" style="display:block;width:${percent}%"></span></span>
       ${activity}
@@ -47,7 +57,7 @@ function renderWorkspaceDashboard() {
   if (stats)
     stats.innerHTML = metrics.map(([label, value, note]) =>
       `<div class="ws-dashboard-stat"><span class="ws-label">${esc(label)}</span><strong class="ws-value">${value}</strong><span class="ws-footnote">${esc(note)}</span></div>`).join("");
-  const ranked = [...new Map([...mine, ...overdue, ...dueSoon, ...active].map((task) => [task.id, task])).values()].slice(0, 8);
+  const ranked = rankDashboardTasks(active, state.me.id);
   const target = document.getElementById("dashboard-task-list");
   if (target) target.innerHTML = ranked.map(dashboardTaskRow).join("") || '<p class="empty">当前没有待处理任务</p>';
 }
