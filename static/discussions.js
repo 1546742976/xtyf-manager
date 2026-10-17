@@ -109,6 +109,7 @@
   }
   function updateHeader(item) {
     const topic=item.topic;if(!topic)return;
+    document.dispatchEvent(new CustomEvent('discussion:rendered',{detail:{topic}}));
     $('collab-title').textContent=topic.withdrawn?'话题已撤回':topic.title;
     $('collab-topic-meta').textContent=`${topic.author_name} · ${date(topic.created_at)}`;
     $('collab-withdraw-topic').hidden=!topic.can_withdraw||topic.withdrawn;
