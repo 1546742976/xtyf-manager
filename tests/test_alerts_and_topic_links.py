@@ -1,5 +1,6 @@
 """Exception aggregation and discussion association use real auth with isolated data."""
 from datetime import datetime, timedelta, timezone
+from html import escape
 import unittest
 from uuid import uuid4
 from unittest.mock import patch
@@ -8,7 +9,7 @@ from test_tasks import app_module
 from common import get_db
 from modules.item_topics import migrate
 from modules.task_alerts import alert_page, collect_alerts
-from modules.mail_service import digest_content
+from modules.mail_service import digest_content, digest_items
 
 
 class AlertsAndTopicLinksTest(unittest.TestCase):
@@ -140,6 +141,67 @@ class AlertsAndTopicLinksTest(unittest.TestCase):
             self.assertIn('联系供应商',text);self.assertIn('联系供应商',html)
             self.assertIn('2026-10-19',text);self.assertIn('2026-10-19',html)
             self.assertIn(f'/tasks?task={task}',text);self.assertNotIn(f'/tasks?task={future}',text)
+
+    def test_dynamic_daily_groups_mail_scope_blocker_details_and_completed_exclusion(self):
+        colleague_name = self.name + '_colleague'
+        colleague = self.admin.post('/api/member', json={'name': colleague_name, 'username': colleague_name,
+            'password': 'repair-password', 'role': 'member'})
+        self.assertEqual(colleague.status_code, 200, colleague.get_json())
+        labels = [self.name + '采购组', self.name + '培训组']
+        stages = []
+        for label in labels:
+            group = self.admin.post('/api/groups', json={'name': label})
+            self.assertEqual(group.status_code, 200, group.get_json())
+            stages.append('group-' + str(group.get_json()['id']))
+        title = '动态目录邮件项目 ' + self.name
+        reason, next_action, follow_up = '<动态样件待到>', '联系供应商 & 协调组内复核', '2026-10-19'
+        created = self.admin.post('/api/daily-projects', json={'title': title, 'status': '阻塞',
+            'groups_mode': 'replace', 'groups': {stages[0]: [self.uid], stages[1]: [colleague.get_json()['id']]},
+            'blocker_reason': reason, 'blocker_next_action': next_action,
+            'blocker_helper_id': self.uid, 'blocker_follow_up': follow_up})
+        self.assertEqual(created.status_code, 200, created.get_json())
+        pid = created.get_json()['id']
+        with self.app.app_context():
+            db = get_db()
+            cfg = dict(self.app.config['MAIL_SETTINGS'], base_url='https://example.invalid')
+            with patch.dict(self.app.config, MAIL_SETTINGS=cfg):
+                for kind, hour, expected_labels in (('morning', 8, labels[:1]), ('daily', 22, labels)):
+                    at = datetime(2026, 10, 18, hour, tzinfo=timezone(timedelta(hours=8)))
+                    with self.subTest(kind=kind, completed=False):
+                        projects = [item for item in digest_items(db, self.uid, at, kind)[1] if item['id'] == pid]
+                        self.assertEqual(len(projects), 1, '多个动态组仍只汇总一个项目')
+                        self.assertEqual([group['label'] for group in projects[0]['groups']], expected_labels)
+                        text, markup = digest_content(db, self.uid, at, kind)
+                        for body in (text, markup):
+                            self.assertEqual(body.count(title), 1)
+                            for label in expected_labels:
+                                self.assertIn(label, body)
+                            if kind == 'morning':
+                                self.assertNotIn(labels[1], body)
+                        for label, value in (('阻塞原因', reason), ('下一步行动', next_action),
+                                             ('协助成员', self.name), ('下次跟进', follow_up)):
+                            self.assertIn(label + '：' + value, text)
+                            self.assertIn(label + '：' + escape(value), markup)
+                        self.assertNotIn(reason, markup, 'HTML 阻塞原因必须转义')
+        for index, stage in enumerate(stages):
+            project = self.admin.get(f'/api/daily-projects/{pid}').get_json()['project']
+            group = next(item for item in project['groups'] if item['stage'] == stage)
+            client = self.owner if index == 0 else self.admin
+            saved = client.post(f'/api/daily-projects/{pid}/groups/{stage}/progress', json={
+                'progress': 100, 'note': '完成本组工作', 'version': group['version'], 'project_version': project['version']})
+            self.assertEqual(saved.status_code, 200, saved.get_json())
+            current = self.admin.get(f'/api/daily-projects/{pid}').get_json()['project']
+            self.assertEqual((current['status'], current['progress']), ('阻塞', 50) if index == 0 else ('已完成', 100))
+        with self.app.app_context():
+            db = get_db()
+            with patch.dict(self.app.config, MAIL_SETTINGS=cfg):
+                for kind, hour in (('morning', 8), ('daily', 22)):
+                    at = datetime(2026, 10, 18, hour, tzinfo=timezone(timedelta(hours=8)))
+                    with self.subTest(kind=kind, completed=True):
+                        self.assertNotIn(pid, [item['id'] for item in digest_items(db, self.uid, at, kind)[1]])
+                        content = digest_content(db, self.uid, at, kind)
+                        for body in content or ():
+                            self.assertNotIn(title, body)
 
 
 if __name__ == '__main__': unittest.main()
