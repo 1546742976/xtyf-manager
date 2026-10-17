@@ -1,5 +1,6 @@
 """Mail tests never contact SMTP; cover binding, content and queue transitions."""
 import hashlib
+import re
 import smtplib
 import unittest
 import sqlite3
@@ -48,14 +49,22 @@ class DailyMailTest(unittest.TestCase):
         return self.admin.post('/api/member',json={'name':name,'username':name,'password':'mail-password'}).get_json()['id']
 
     def task(self, **fields):
-        result=self.admin.post('/api/task',json={'title':'团队任务 '+uuid4().hex[:6],**fields})
+        result=self.admin.post('/api/task',json={'title':'团队任务 '+uuid4().hex[:6],'status':'进行中',**fields})
         self.assertEqual(result.status_code,200,result.get_json())
         return result.get_json()['id']
 
     def project(self, **fields):
-        result=self.admin.post('/api/daily-projects',json={'title':'团队目标 '+uuid4().hex[:6],'groups':{'mechanical':[self.mid]},**fields})
+        result=self.admin.post('/api/daily-projects',json={'title':'团队目标 '+uuid4().hex[:6],'status':'进行中','groups':{'mechanical':[self.mid]},**fields})
         self.assertEqual(result.status_code,200,result.get_json())
         return result.get_json()['id']
+
+    def isolated_digest_db(self):
+        # Keep the real query/schema, without mutating other tests' shared fixtures.
+        db=sqlite3.connect(':memory:');db.row_factory=sqlite3.Row
+        self.addCleanup(db.close);self.db.backup(db)
+        for table in ('tasks','daily_projects'):
+            db.execute(f"UPDATE {table} SET status='未开始',due_date=NULL")
+        db.commit();return db
 
     def queue_job(self, kind, at, generation, day=None):
         queue(self.db,self.mid,kind,day or at.date().isoformat(),generation,at.timestamp(),uuid4().hex)
@@ -89,7 +98,7 @@ class DailyMailTest(unittest.TestCase):
 
     def test_morning_excludes_completed_cancelled_deleted_and_disabled_items(self):
         morning=self.at.replace(hour=8);expected_tasks=set();expected_projects=set()
-        for status,deleted,include in (('未开始',False,True),('进行中',False,True),
+        for status,deleted,include in (('未开始',False,False),('进行中',False,True),('阻塞',False,True),
                                       ('已完成',False,False),('已取消',False,False),('进行中',True,False)):
             tid=self.task(owner_id=self.mid);pid=self.project()
             completion='2026-10-15 07:00:00' if status=='已完成' else None
@@ -325,9 +334,9 @@ class DailyMailTest(unittest.TestCase):
         self.assertFalse(stale(exact,100,self.at+timedelta(days=1)))
 
     def test_team_digest_groups_roles_escaping_and_dates(self):
-        task=self.admin.post('/api/task',json={'title':'<script>目标</script>','owner_id':self.mid,'due_date':'2026-10-15'}).get_json()['id']
+        task=self.admin.post('/api/task',json={'title':'<script>目标</script>','status':'进行中','owner_id':self.mid,'due_date':'2026-10-15'}).get_json()['id']
         colleague=self.admin.post('/api/member',json={'name':'日报同事','username':'digest_'+uuid4().hex[:10],'password':'mail-password'}).get_json()['id']
-        other=self.admin.post('/api/task',json={'title':'参与事项','owner_id':colleague,'participant_ids':[self.mid]}).get_json()['id']
+        other=self.admin.post('/api/task',json={'title':'参与事项','status':'进行中','owner_id':colleague,'participant_ids':[self.mid]}).get_json()['id']
         pid=self.project(title='日常目标',groups={'mechanical':[self.mid],'vision':[self.mid],'electrical':[colleague]})
         old=(self.at-timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
         self.db.execute('UPDATE tasks SET created_at=? WHERE id IN (?,?)',(old,task,other))
@@ -376,37 +385,85 @@ class DailyMailTest(unittest.TestCase):
         self.assertEqual(self.db.execute('SELECT state FROM mail_jobs WHERE id=?',(job['id'],)).fetchone()[0],'unknown')
         self.assertNotEqual((claim(self.db,self.at) or {}).get('id'),job['id'])
 
-    def test_empty_digest_is_skipped_without_transport(self):
-        job=self.job('daily');sent=[]
-        # Shared integration fixtures contain other team tasks; empty means both team lists are empty.
-        with patch('modules.mail_service.digest_items',return_value=([],[])):
-            self.assertIsNone(digest_content(self.db,self.mid,self.at))
-            self.assertEqual(process_job(self.db,job,self.at,sent.append),'skipped')
-        self.assertEqual(sent,[])
-
-    def test_team_scope_includes_only_unfinished_and_completed_today(self):
-        cases=[('进行中',None,False,True),('未开始',None,False,True),
-               ('已完成','2026-10-15 00:00:00',False,True),
-               ('已完成','2026-10-15 23:59:59',False,True),
-               ('已完成','2026-10-14 23:59:59',False,False),
-               ('已完成','2026-10-16 00:00:00',False,False),
-               ('已完成',None,False,False),('已取消','2026-10-15 12:00:00',False,False),
-               ('进行中',None,True,False)]
-        fixture_tasks=set();fixture_projects=set();expected_tasks=set();expected_projects=set()
-        for status,completion,deleted,include in cases:
+    def test_filtered_empty_digests_skip_transport_but_test_mail_still_sends(self):
+        # These records exist and are in scope, but none qualifies for a digest.
+        fixtures=[]
+        for status,due,deleted in (('未开始',None,False),('未开始','2026-10-15',False),
+                                   ('未开始','2026-10-16',False),('已完成','2026-10-14',False),
+                                   ('已取消','2026-10-14',False),('阻塞','2026-10-14',True)):
             tid=self.task(owner_id=self.mid);pid=self.project()
-            values=(status,completion,'2026-10-15 12:00:00' if deleted else None,'2026-10-15 20:00:00')
-            # A title/date edit today must not make an older completion look like today's completion.
-            self.db.execute('UPDATE tasks SET status=?,completed_at=?,deleted_at=?,updated_at=?,created_at=? WHERE id=?',(*values,'2026-10-01 00:00:00',tid))
-            self.db.execute('UPDATE daily_projects SET status=?,completed_at=?,deleted_at=?,updated_at=? WHERE id=?',(*values,pid))
-            self.db.execute('UPDATE daily_groups SET enabled_at=? WHERE project_id=?',('2026-10-01 00:00:00',pid))
-            self.db.commit();fixture_tasks.add(tid);fixture_projects.add(pid)
-            if include:expected_tasks.add(tid);expected_projects.add(pid)
-        tasks,projects=digest_items(self.db,self.mid,self.at)
-        self.assertEqual({t['id'] for t in tasks}&fixture_tasks,expected_tasks)
-        self.assertEqual({p['id'] for p in projects}&fixture_projects,expected_projects)
-        self.assertTrue(all(not t['nudge'] for t in tasks if t['status']=='已完成'))
-        self.assertTrue(all(not g['nudge'] for p in projects if p['status']=='已完成' for g in p['groups']))
+            for table,item_id in (('tasks',tid),('daily_projects',pid)):
+                fixtures.append((table,item_id,status,due,deleted))
+        generation=self.bind()
+        jobs={kind:self.queue_job(kind,self.at,generation)|{'attempts':1} for kind in ('morning','daily','test')}
+        db=self.isolated_digest_db()
+        for table,item_id,status,due,deleted in fixtures:
+            db.execute(f'UPDATE {table} SET status=?,due_date=?,completed_at=?,deleted_at=? WHERE id=?',
+                       (status,due,'2026-10-15 07:00:00','2026-10-15 07:00:00' if deleted else None,item_id))
+        db.commit()
+        for kind in ('morning','daily'):
+            at=self.at.replace(hour=8) if kind=='morning' else self.at
+            with self.subTest(kind=kind):
+                self.assertEqual(digest_items(db,self.mid,at,kind=kind),([],[]))
+                self.assertIsNone(digest_content(db,self.mid,at,kind=kind))
+                transport=MagicMock()
+                self.assertEqual(process_job(db,jobs[kind],at,transport),'skipped')
+                transport.assert_not_called()
+                self.assertEqual(db.execute('SELECT state FROM mail_jobs WHERE id=?',(jobs[kind]['id'],)).fetchone()[0],'skipped')
+        sent=[]
+        self.assertEqual(process_job(db,jobs['test'],self.at,sent.append),'sent')
+        self.assertEqual(len(sent),1)
+        self.assertEqual(sent[0]['Subject'],'巡天御风｜测试邮件｜2026-10-15')
+        self.assertIn('测试邮件',sent[0].get_body(preferencelist=('plain',)).get_content())
+        self.assertIn('邮件模板预览成功',sent[0].get_body(preferencelist=('html',)).get_content())
+
+    def test_digest_status_deadline_and_deleted_matrix(self):
+        tid=self.task(title='筛选矩阵造车任务',owner_id=self.mid)
+        pid=self.project(title='筛选矩阵日常项目')
+        db=self.isolated_digest_db()
+        for kind in ('morning','daily','test'):
+            at=self.at.replace(hour=8) if kind=='morning' else self.at
+            for status in ('未开始','进行中','阻塞','已完成','已取消'):
+                for due in (None,'','2026-10-14','2026-10-15','2026-10-16'):
+                    for deleted in (False,True):
+                        included=not deleted and (status in ('进行中','阻塞') or
+                                                  (status=='未开始' and due=='2026-10-14'))
+                        with self.subTest(kind=kind,status=status,due=due,deleted=deleted):
+                            for table,item_id in (('tasks',tid),('daily_projects',pid)):
+                                db.execute(f'UPDATE {table} SET status=?,due_date=?,completed_at=?,deleted_at=? WHERE id=?',
+                                           (status,due,'2026-10-15 07:00:00' if status=='已完成' else None,
+                                            '2026-10-15 07:00:00' if deleted else None,item_id))
+                            db.commit()
+                            tasks,projects=digest_items(db,self.mid,at,kind=kind)
+                            self.assertEqual([item['id'] for item in tasks],[tid] if included else [])
+                            self.assertEqual([item['id'] for item in projects],[pid] if included else [])
+                            content=digest_content(db,self.mid,at,kind=kind)
+                            if included:
+                                for body in content:
+                                    self.assertIn('筛选矩阵造车任务',body)
+                                    self.assertIn('筛选矩阵日常项目',body)
+                                    self.assertNotIn('今日完成',body)
+                            else:
+                                self.assertIsNone(content)
+
+    def test_digest_overdue_uses_beijing_date_across_utc_boundaries(self):
+        tid=self.task(owner_id=self.mid);pid=self.project()
+        db=self.isolated_digest_db()
+        for table,item_id in (('tasks',tid),('daily_projects',pid)):
+            db.execute(f"UPDATE {table} SET status='未开始',due_date='2026-10-15' WHERE id=?",(item_id,))
+        db.commit()
+        for kind in ('morning','daily'):
+            for at,included in ((datetime(2026,10,15,15,59,59,tzinfo=timezone.utc),False),
+                                (datetime(2026,10,15,16,0,0,tzinfo=timezone.utc),True),
+                                (datetime(2026,10,15,23,59,59,tzinfo=timezone.utc),True),
+                                (datetime(2026,10,16,0,0,0,tzinfo=timezone.utc),True)):
+                with self.subTest(kind=kind,at=at):
+                    tasks,projects=digest_items(db,self.mid,at,kind=kind)
+                    self.assertEqual([item['id'] for item in tasks],[tid] if included else [])
+                    self.assertEqual([item['id'] for item in projects],[pid] if included else [])
+                    if included:
+                        self.assertEqual(tasks[0]['remaining'],'已逾期 1 天')
+                        self.assertEqual(projects[0]['remaining'],'已逾期 1 天')
 
     def test_no_personal_assignment_still_receives_team_brief(self):
         owner=self.colleague()
@@ -629,16 +686,35 @@ class DailyMailTest(unittest.TestCase):
         self.assertIn('<img src=x onerror=alert(1)>',text)
 
     def test_html_evening_summary_and_group_progress(self):
-        self.task(title='团队普通进行任务')
-        pid=self.project(title='完成进度组',groups={'mechanical':[self.mid],'vision':[self.mid]})
-        self.db.execute("UPDATE daily_groups SET progress=75 WHERE project_id=? AND stage='mechanical'",(pid,))
-        self.db.commit()
-        text,markup=digest_content(self.db,self.mid,self.at,kind='daily')
-        for expected in ('团队项目晚报','今日完成','各小组进度','机械组',
+        overdue=self.task(title='团队逾期待办任务',owner_id=self.mid)
+        current=self.task(title='团队普通进行任务',owner_id=self.mid)
+        pid=self.project(title='多组逾期项目',groups={'mechanical':[self.mid],'vision':[self.mid]})
+        undated=self.project(title='未设截止阻塞项目')
+        completed=self.task(title='今日完成不计入',owner_id=self.mid)
+        db=self.isolated_digest_db()
+        db.execute("UPDATE tasks SET status='未开始',due_date='2026-10-14' WHERE id=?",(overdue,))
+        db.execute("UPDATE tasks SET status='进行中',due_date='2026-10-15' WHERE id=?",(current,))
+        db.execute("UPDATE tasks SET status='已完成',due_date='2026-10-14',completed_at='2026-10-15 07:00:00' WHERE id=?",(completed,))
+        db.execute("UPDATE daily_projects SET status='进行中',due_date='2026-10-14' WHERE id=?",(pid,))
+        db.execute("UPDATE daily_projects SET status='阻塞',due_date=NULL WHERE id=?",(undated,))
+        db.execute("UPDATE daily_groups SET progress=75 WHERE project_id=? AND stage='mechanical'",(pid,))
+        db.commit()
+        text,markup=digest_content(db,self.mid,self.at,kind='daily')
+        for expected in ('团队项目晚报','已逾期','各小组进度','机械组',
                          '视觉组','进度 75%','查看项目详情'):
             self.assertIn(expected,markup)
+        stats=dict((label,int(number)) for number,label in re.findall(
+            r'<p class="mail-stat-number"[^>]*>(\d+)</p><p[^>]*>([^<]+)</p>',markup))
+        self.assertEqual(stats,{'造车任务':2,'日常项目':2,'已逾期':2})
+        for expected in ('造车任务 2 项','日常项目 2 项','已逾期 2 项'):
+            self.assertIn(expected,text)
+        for body in (text,markup):
+            self.assertNotIn('今日完成',body)
+            for title in ('团队逾期待办任务','团队普通进行任务','多组逾期项目','未设截止阻塞项目'):
+                self.assertIn(title,body)
         self.assertNotIn('您的角色',markup)
-        self.assertIn('完成进度组',text)
+        _,morning_html=digest_content(db,self.mid,self.at.replace(hour=8),kind='morning')
+        self.assertIn('需更新进度',morning_html)
 
     def test_html_verification_and_empty_test_mail_are_self_contained(self):
         verification=render_verification_html('123456')

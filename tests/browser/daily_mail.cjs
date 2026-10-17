@@ -42,7 +42,13 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     checks.push('both themes at 375/390/767/768/1280 CSS pixels without body overflow');
     await page.setViewportSize({width:1280,height:900});await page.goto(base+'/account');
     const mailPanel=page.locator('section').filter({has:page.locator('#email-form')});
-    assert.match(await mailPanel.textContent(),/08:00.*个人未完成任务早报.*22:00/);
+    const accountMailNotice=await mailPanel.textContent();
+    assert.match(accountMailNotice,/08:00.*个人任务早报.*22:00.*团队项目晚报/);
+    assert.match(accountMailNotice,/只收录进行中、阻塞或未开始但已逾期的造车任务和日常项目/);
+    assert.match(accountMailNotice,/已完成（包括当天完成）、已取消、已删除事项始终排除/);
+    assert.match(accountMailNotice,/截止日期早于发送当天（北京时间），今天截止不算逾期/);
+    assert.match(accountMailNotice,/个人范围无符合提醒条件的事项时不发送早报，全团队无符合提醒条件的事项时不发送晚报/);
+    assert.doesNotMatch(accountMailNotice,/未完成事项及当天完成事项|未完成及当天完成/);
     // Initial account loading populates the input; wait before entering a new address.
     await page.locator('#email-state').filter({hasText:'模拟模式'}).waitFor();
     await page.locator('#email-address').fill('browser@example.com');await page.locator('#email-form button').click();await page.locator('#email-result').filter({hasText:'模拟模式'}).waitFor();
@@ -53,6 +59,8 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.locator('#email-code').fill(code);
     await page.locator('#email-code-form button').click();
     await page.locator('#email-result').filter({hasText:'邮箱已验证'}).waitFor();
+    // The success message appears before the follow-up account refresh hides the form.
+    await page.locator('#email-code-form').waitFor({state:'hidden'});
     assert.equal(await page.locator('#email-code-form').isVisible(),false);
     await page.goto(base+'/admin/mail');await page.locator('[data-mail-member="1"]').click();await page.locator('[data-mail-member="1"]').filter({hasText:'恢复'}).waitFor();
     await page.goto(base+'/account');await page.locator('#email-state').filter({hasText:'管理员已暂停'}).waitFor();
@@ -63,9 +71,16 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.locator('#mail-refresh').click();
     await page.locator('#mail-jobs strong').filter({hasText:'个人任务早报'}).waitFor();
     await page.locator('#mail-jobs strong').filter({hasText:'团队项目晚报'}).waitFor();
-    assert.match(await page.locator('#mail-admin').textContent(),/08:00.*22:00/);
+    const adminMailNotice=await page.locator('#mail-admin').textContent();
+    assert.match(adminMailNotice,/08:00.*个人任务早报.*22:00.*团队项目晚报/);
+    assert.match(adminMailNotice,/只收录进行中、阻塞或未开始但已逾期的造车任务和日常项目/);
+    assert.match(adminMailNotice,/已完成（包括当天完成）、已取消、已删除事项始终排除/);
+    assert.match(adminMailNotice,/截止日期早于发送当天（北京时间），今天截止不算逾期/);
+    assert.match(adminMailNotice,/个人范围无符合提醒条件的事项时不发送早报，全团队无符合提醒条件的事项时不发送晚报/);
+    assert.match(adminMailNotice,/测试邮件使用相同筛选，无符合提醒条件的事项时仍发送测试提示/);
+    assert.doesNotMatch(adminMailNotice,/未完成事项及当天完成事项|未完成及当天完成/);
     await page.screenshot({path:path.join(output,'morning-evening-mail-admin.png'),fullPage:true});
-    await page.unroute('**/api/admin/mail?*');checks.push('08:00 personal and 22:00 team notices and separate admin record labels');
+    await page.unroute('**/api/admin/mail?*');checks.push('personal/team notices cover active, blocked and overdue-only filtering, Beijing deadline boundary and empty-digest behavior; separate admin record labels');
     await page.goto(base+'/');await page.locator('#daily-dashboard a').filter({hasText:'共同大目标'}).waitFor();
     const task=(await api(page,'/api/task',{title:'邮件链接目标'})).body;
     await page.goto(base+'/tasks?task='+task.id);await page.locator('#modal').filter({hasText:'邮件链接目标'}).waitFor();
