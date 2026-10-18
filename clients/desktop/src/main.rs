@@ -13,6 +13,7 @@ use url::Url;
 use sha2::{Digest, Sha256};
 mod updates;
 mod native_updates;
+mod website;
 
 struct Session {
     client: Client,
@@ -22,6 +23,10 @@ struct Session {
 }
 struct AppState {
     server: Mutex<String>,
+    effective_server: Mutex<Option<(String, String)>>,
+    website_epoch: std::sync::atomic::AtomicU64,
+    connection_gate: tokio::sync::Mutex<()>,
+    website_files: Mutex<std::collections::HashSet<PathBuf>>,
     directory: PathBuf,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     files: Mutex<HashMap<String, PathBuf>>,
@@ -57,6 +62,12 @@ fn local_url(url: &Url) -> bool {
             || (matches!(url.scheme(), "http" | "https") && url.host_str() == Some("tauri.localhost")))
 }
 impl AppState {
+    fn effective_server(&self) -> String {
+        let server = self.server.lock().unwrap().clone();
+        self.effective_server.lock().unwrap().as_ref()
+            .filter(|(configured, _)| configured == &server)
+            .map(|(_, effective)| effective.clone()).unwrap_or(server)
+    }
     fn session(&self, server: &str) -> Result<Arc<Session>, String> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(session) = sessions.get(server) { return Ok(session.clone()); }
@@ -84,7 +95,7 @@ impl Session {
     }
 }
 async fn send_request(state: &AppState, args: &Value) -> Result<reqwest::Response, String> {
-    let server = state.server.lock().unwrap().clone();
+    let server = state.effective_server();
     let session = state.session(&server)?;
     let url = server_path(&server, text(args, "path"))?;
     let method = Method::from_bytes(args.get("method").and_then(Value::as_str).unwrap_or("GET").as_bytes()).map_err(|e| e.to_string())?;
@@ -146,11 +157,14 @@ async fn response_value(response: reqwest::Response, binary: bool) -> Result<Val
     Ok(json!({"status":status,"headers":headers,"body":if binary {STANDARD.encode(&bytes)} else {String::from_utf8_lossy(&bytes).into_owned()},"encoding":if binary {"base64"} else {"text"}}))
 }
 async fn pick_files(state: &AppState, args: &Value) -> Result<Value, String> {
+    let generation = state.updates.lock().unwrap().generation;
     let mut dialog = rfd::AsyncFileDialog::new().set_title("选择文件");
     let extensions:Vec<&str>=text(args,"accept").split(',').filter_map(|s|s.trim().strip_prefix('.')).filter(|s|!s.is_empty()).collect();
     if !extensions.is_empty(){dialog=dialog.add_filter("支持的文件",&extensions);}
     let selected = if args.get("multiple").and_then(Value::as_bool).unwrap_or(false) {dialog.pick_files().await.unwrap_or_default()}
         else {dialog.pick_file().await.into_iter().collect()};
+    let runtime = state.updates.lock().unwrap();
+    if runtime.generation != generation { return Err("服务器已切换，请重新选择文件".into()); }
     let mut files = state.files.lock().unwrap();
     let mut result = Vec::new();
     for selected in selected {
@@ -159,6 +173,7 @@ async fn pick_files(state: &AppState, args: &Value) -> Result<Value, String> {
         result.push(json!({"handle":handle,"name":selected.file_name(),"mime":"application/octet-stream","size":fs::metadata(&path).map_err(|e|e.to_string())?.len()}));
         files.insert(handle, path);
     }
+    drop(runtime);
     Ok(json!(result))
 }
 async fn download(state: &AppState, args: &Value) -> Result<Value, String> {
@@ -214,6 +229,9 @@ fn external(app: &tauri::AppHandle, input: &str) -> Result<Value, String> {
 #[tauri::command]
 async fn native_call(app: tauri::AppHandle, webview: tauri::Webview, state: State<'_,AppState>, action: String, args: Value) -> Result<Value,String> {
     if !local_url(&webview.url().map_err(|e|e.to_string())?) {return Err("禁止远程页面调用本地功能".into());}
+    if webview.label() == "website-controls" {
+        return website::control(&app, &state, &action, &args);
+    }
     if webview.label().starts_with("external-controls-") {
         let id = webview.label().trim_start_matches("external-controls-");
         return match action.as_str() {
@@ -224,7 +242,10 @@ async fn native_call(app: tauri::AppHandle, webview: tauri::Webview, state: Stat
     }
     if webview.label() != "main" {return Err("窗口没有业务权限".into());}
     match action.as_str() {
-        "get_config"=>Ok(json!({"serverUrl":*state.server.lock().unwrap(),"version":env!("CARGO_PKG_VERSION"),"bridgeVersion":2,"capabilities":updates::CAPABILITIES,"platform":updates::platform()})),
+        "get_config"=>{let server=state.server.lock().unwrap().clone();Ok(json!({"serverUrl":server,"effectiveServerUrl":state.effective_server(),"version":env!("CARGO_PKG_VERSION"),"bridgeVersion":2,"capabilities":updates::CAPABILITIES,"platform":updates::platform()}))},
+        "probe_connection"=>website::probe(&state).await,
+        "open_website"=>{let prepared=website::prepare(&state).await?;website::open(&app, &state, prepared)},
+        "return_local"=>website::return_local(&app, text(&args,"intent")),
         "check_updates"=>native_updates::check(&state,args.get("retry").and_then(Value::as_bool).unwrap_or(false)).await,
         "update_status"=>Ok(state.updates.lock().unwrap().last_status.clone()),
         "ui_ready"=>native_updates::ready(&state,text(&args,"viewToken")),
@@ -234,11 +255,15 @@ async fn native_call(app: tauri::AppHandle, webview: tauri::Webview, state: Stat
             for token in state.requests.lock().unwrap().values(){token.cancel();}
             state.files.lock().unwrap().clear();
             fs::write(state.directory.join("server.json"),serde_json::to_vec_pretty(&json!({"serverUrl":server})).unwrap()).map_err(|e|e.to_string())?;
-            *state.server.lock().unwrap()=server.clone();
             let mut runtime=state.updates.lock().unwrap();
+            let mut configured=state.server.lock().unwrap();
+            *configured=server.clone();
+            *state.effective_server.lock().unwrap()=None;
             runtime.cancellation.cancel();
             *runtime=native_updates::Runtime::new(&state.directory,&server,runtime.generation+1);
+            drop(configured);
             drop(runtime);
+            website::close(&app);
             native_updates::schedule_reload(&app);
             Ok(Value::Null)
         },
@@ -289,13 +314,13 @@ fn main() {
         let server=saved.or_else(legacy_server).unwrap_or_else(||text(&defaults,"serverUrl").to_string());
         fs::write(directory.join("server.json"),serde_json::to_vec_pretty(&json!({"serverUrl":server}))?)?;
         let runtime=native_updates::Runtime::new(&directory,&server,0);
-        app.manage(AppState {server:Mutex::new(server),directory,sessions:Mutex::new(HashMap::new()),files:Mutex::new(HashMap::new()),requests:Mutex::new(HashMap::new()),updates:Mutex::new(runtime),update_gate:tokio::sync::Mutex::new(())});
+        app.manage(AppState {server:Mutex::new(server),effective_server:Mutex::new(None),website_epoch:std::sync::atomic::AtomicU64::new(0),connection_gate:tokio::sync::Mutex::new(()),website_files:Mutex::new(std::collections::HashSet::new()),directory,sessions:Mutex::new(HashMap::new()),files:Mutex::new(HashMap::new()),requests:Mutex::new(HashMap::new()),updates:Mutex::new(runtime),update_gate:tokio::sync::Mutex::new(())});
         let window=tauri::window::WindowBuilder::new(app,"workspace")
             .title("巡天御风管理系统").inner_size(1380.,900.).min_inner_size(360.,600.)
             .visible(smoke_directory().is_none())
             .build()?;
         let handle=app.handle().clone();
-        window.on_window_event(move |event| {if let tauri::WindowEvent::Resized(size)=event {if let Some(view)=handle.get_webview("main"){let _=view.set_size(*size);}}});
+        window.on_window_event(move |event| {if let tauri::WindowEvent::Resized(size)=event {if let Some(view)=handle.get_webview("main"){let _=view.set_size(*size);}website::resize(&handle,*size);}});
         native_updates::create_view(app.handle()).map_err(std::io::Error::other)?;
         Ok(())
     }).run(tauri::generate_context!()).expect("客户端启动失败");

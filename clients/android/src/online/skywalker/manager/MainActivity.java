@@ -19,7 +19,7 @@ import java.util.concurrent.*;
 /** The main WebView contains bundled or signed private assets only. Credentials stay native. */
 public class MainActivity extends Activity {
     private static final String LOCAL_ORIGIN = "https://appassets.androidplatform.net";
-    private static final int PICK_FILE = 10, SAVE_FILE = 11;
+    private static final int PICK_FILE = 10, SAVE_FILE = 11, SAVE_WEBSITE_FILE = 12;
     private WebView web, externalWeb;
     private Dialog externalDialog;
     private volatile WebMessagePort port;
@@ -33,7 +33,14 @@ public class MainActivity extends Activity {
     private final Map<String, Uri> files = new ConcurrentHashMap<>();
     private Pending picker, download;
     private ValueCallback<Uri[]> legacyPicker;
+    private WebView pickerView;
+    private WebsiteView website;
+    private WebsiteDownload websiteDownload;
     private boolean destroyed;
+    private static final class WebsiteDownload {
+        final WebsiteView owner; final File file; final long generation;
+        WebsiteDownload(WebsiteView owner, File file, long generation) { this.owner=owner; this.file=file; this.generation=generation; }
+    }
     private static final class Pending {
         final Object id; final JSONObject args; final WebMessagePort channel; final NativeHttpClient client; final UiUpdateStore updates;
         Pending(Object id, JSONObject args, WebMessagePort channel, NativeHttpClient client, UiUpdateStore updates) { this.id=id; this.args=args; this.channel=channel; this.client=client; this.updates=updates; }
@@ -45,9 +52,14 @@ public class MainActivity extends Activity {
     }
     private void connect(String value) throws IOException {
         String normalized = NativeHttpClient.normalize(value); if (client != null) client.cancelAll(); if (updates != null) updates.retire();
-        String key = "native.session.v1." + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(normalized.getBytes(StandardCharsets.UTF_8));
+        if (website != null) { website.close(); website = null; }
+        cancelFileOperations();
         SharedPreferences prefs = getPreferences(MODE_PRIVATE);
-        client = new NativeHttpClient(normalized, prefs.getString(key, ""), saved -> prefs.edit().putString(key, saved).apply());
+        client = new NativeHttpClient(normalized, new NativeHttpClient.Sessions() {
+            private String key(String origin) { return "native.session.v1." + Base64.getUrlEncoder().withoutPadding().encodeToString(origin.getBytes(StandardCharsets.UTF_8)); }
+            public String load(String origin) { return prefs.getString(key(origin), ""); }
+            public void save(String origin, String saved) { prefs.edit().putString(key(origin), saved).apply(); }
+        });
         updates = new UiUpdateStore(new File(getFilesDir(), "ui-updates"), normalized, BuildConfig.VERSION,
             new String(UiUpdateStore.read(getAssets().open("update-public-key.pem"), 16384), StandardCharsets.US_ASCII), client);
         server = normalized; prefs.edit().putString("server", normalized).apply(); files.clear();
@@ -66,8 +78,8 @@ public class MainActivity extends Activity {
         mainRoot = new LinearLayout(this); mainRoot.setOrientation(LinearLayout.VERTICAL); mainRoot.setBackgroundColor(Color.rgb(245,247,251));
         mainRoot.setOnApplyWindowInsetsListener((v, insets) -> { v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom()); return insets; });
         setContentView(mainRoot);
-        // Legacy WebView login cookies are deliberately not imported. HTTP sessions now live only in the native transport.
-        CookieManager.getInstance().setAcceptCookie(false); CookieManager.getInstance().removeAllCookies(null);
+        // Website sessions persist in WebView; native API credentials remain in their own origin-keyed store.
+        CookieManager.getInstance().setAcceptCookie(true);
         try { createMainView(updates.startView(true)); } catch (IOException error) { message(error.getMessage()); createMainView(null); }
     }
     private void createMainView(final File resourceRoot) {
@@ -154,6 +166,28 @@ public class MainActivity extends Activity {
         try {
             switch (action) {
                 case "get_config": reply(request, configuration(), null); break;
+                case "probe_connection": workers.execute(() -> {
+                    try {
+                        final JSONObject[] result = new JSONObject[1];
+                        request.client.probe(request.id.toString(), (status, headers, input) -> {
+                            byte[] bytes = UiUpdateStore.read(input, 1024 * 1024);
+                            try { result[0] = new JSONObject().put("status", status).put("headers", new JSONObject(headers)).put("body", new String(bytes, StandardCharsets.UTF_8)).put("encoding", "text"); }
+                            catch (JSONException error) { throw new IOException(error); }
+                        });
+                        if (request.client != client) throw new IOException("服务器已切换");
+                        reply(request, new JSONObject().put("serverUrl", server).put("effectiveServerUrl", request.client.effectiveServer()).put("response", result[0]), null);
+                    } catch (Exception error) { reply(request, null, error); }
+                }); break;
+                case "open_website": workers.execute(() -> {
+                    try {
+                        request.client.discoverWebsite("website-" + request.id);
+                        runOnUiThread(() -> {
+                            if (request.client != client || request.channel != port || destroyed) { reply(request, null, new IOException("页面或服务器已切换")); return; }
+                            openWebsite(); reply(request, new JSONObject(), null);
+                        });
+                    } catch (Exception error) { reply(request, null, error); }
+                }); break;
+                case "return_local": returnLocal(request.args.optString("intent", "return")); reply(request, new JSONObject(), null); break;
                 case "set_server":
                     connect(request.args.getString("serverUrl")); reply(request, configuration(), null);
                     mainHandler.postDelayed(() -> { try { createMainView(updates.startView(true)); } catch (IOException error) { message(error.getMessage()); createMainView(null); } }, 150); break;
@@ -175,8 +209,8 @@ public class MainActivity extends Activity {
         } catch (Exception error) { reply(request, null, error); }
     }
     private JSONObject configuration() throws JSONException {
-        return new JSONObject().put("serverUrl", server).put("version", BuildConfig.VERSION).put("bridgeVersion", 2)
-            .put("capabilities", new JSONArray(Arrays.asList("ui_updates", "image_preview"))).put("platform", "android");
+        return new JSONObject().put("serverUrl", server).put("effectiveServerUrl", client.effectiveServer()).put("version", BuildConfig.VERSION).put("bridgeVersion", 2)
+            .put("capabilities", new JSONArray(Arrays.asList("ui_updates", "image_preview", "website_fallback"))).put("platform", "android");
     }
     private JSONObject selectedImage(Pending request) throws Exception {
         Uri uri = files.get(request.args.getString("handle"));
@@ -260,7 +294,7 @@ public class MainActivity extends Activity {
                 if (data.getClipData() != null) for (int index = 0; index < data.getClipData().getItemCount(); index++) uris.add(data.getClipData().getItemAt(index).getUri());
                 else if (data.getData() != null) uris.add(data.getData());
             }
-            if (legacyPicker != null) { legacyPicker.onReceiveValue(uris.isEmpty() ? null : uris.toArray(new Uri[0])); legacyPicker = null; }
+            if (legacyPicker != null) { legacyPicker.onReceiveValue(uris.isEmpty() ? null : uris.toArray(new Uri[0])); legacyPicker = null; pickerView = null; }
             if (request != null && request.client == client && request.channel == port) try { JSONArray result = new JSONArray(); for (Uri uri : uris) result.put(selected(uri)); reply(request, result, null); } catch (Exception error) { reply(request, null, error); }
         }
         if (requestCode == SAVE_FILE && download != null) {
@@ -287,6 +321,19 @@ public class MainActivity extends Activity {
                 } catch (Exception error) { reply(request, null, error); }
             });
         }
+        if (requestCode == SAVE_WEBSITE_FILE && websiteDownload != null) {
+            WebsiteDownload request = websiteDownload; websiteDownload = null;
+            if (resultCode != RESULT_OK || data == null || data.getData() == null || !request.owner.valid(request.generation)) { request.owner.consumed(request.file); return; }
+            Uri destination = data.getData(); workers.execute(() -> {
+                try (InputStream input = new FileInputStream(request.file); OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                    if (output == null) throw new IOException("无法写入所选位置");
+                    byte[] bytes = new byte[65536]; int n;
+                    while ((n = input.read(bytes)) != -1) { if (!request.owner.valid(request.generation)) throw new InterruptedIOException("页面或服务器已切换，下载已取消"); output.write(bytes, 0, n); }
+                    runOnUiThread(() -> message("文件已保存"));
+                } catch (Exception error) { runOnUiThread(() -> message(error.getMessage())); }
+                finally { request.owner.consumed(request.file); }
+            });
+        }
     }
     private WebChromeClient chrome(boolean local) {
         return new WebChromeClient() {
@@ -297,11 +344,47 @@ public class MainActivity extends Activity {
                 new AlertDialog.Builder(MainActivity.this).setMessage(text).setPositiveButton("确定", (d,w) -> result.confirm()).setNegativeButton("取消", (d,w) -> result.cancel()).setOnCancelListener(d -> result.cancel()).show(); return true;
             }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
-                if (!local || picker != null || legacyPicker != null) { callback.onReceiveValue(null); return true; } legacyPicker = callback;
-                try { startActivityForResult(fileIntent(params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE, String.join(",", params.getAcceptTypes())), PICK_FILE); }
-                catch (ActivityNotFoundException error) { legacyPicker = null; callback.onReceiveValue(null); } return true;
+                if (!local) { callback.onReceiveValue(null); return true; }
+                return chooseWebsiteFile(view, callback, params);
             }
         };
+    }
+    private boolean chooseWebsiteFile(WebView view, ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) {
+        if (picker != null || legacyPicker != null) { callback.onReceiveValue(null); return true; }
+        legacyPicker = callback; pickerView = view;
+        try { startActivityForResult(fileIntent(params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE, String.join(",", params.getAcceptTypes())), PICK_FILE); }
+        catch (ActivityNotFoundException error) { legacyPicker = null; pickerView = null; callback.onReceiveValue(null); } return true;
+    }
+    private void cancelFileOperations() {
+        if (legacyPicker != null) legacyPicker.onReceiveValue(null); legacyPicker = null; pickerView = null;
+        if (picker != null) reply(picker, null, new IOException("服务器已切换，文件选择已取消")); picker = null;
+        if (download != null) reply(download, null, new IOException("服务器已切换，下载已取消")); download = null;
+        if (websiteDownload != null) websiteDownload.owner.consumed(websiteDownload.file); websiteDownload = null;
+    }
+    private void openWebsite() {
+        if (website != null) website.close();
+        website = new WebsiteView(this, new WebsiteView.Host() {
+            public void configure(WebView view) { MainActivity.this.configure(view); }
+            public void external(String url) { openExternal(url); }
+            public void local(String intent) { returnLocal(intent); }
+            public void message(String text) { MainActivity.this.message(text); }
+            public boolean choose(WebView view, ValueCallback<Uri[]> callback, WebChromeClient.FileChooserParams params) { return chooseWebsiteFile(view, callback, params); }
+            public void cancelChooser(WebView view) {
+                if (pickerView == view && legacyPicker != null) { legacyPicker.onReceiveValue(null); legacyPicker = null; pickerView = null; }
+            }
+            public void save(WebsiteView owner, File staged, String name, String type, long generation) throws IOException {
+                if (download != null || websiteDownload != null) throw new IOException("请先完成当前保存选择");
+                websiteDownload = new WebsiteDownload(owner, staged, generation);
+                try { startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(type).putExtra(Intent.EXTRA_TITLE, name), SAVE_WEBSITE_FILE); }
+                catch (ActivityNotFoundException error) { websiteDownload = null; throw new IOException("无法打开保存窗口", error); }
+            }
+        }, workers, client.effectiveServer());
+        website.show(); web.evaluateJavascript("window.dispatchEvent(new CustomEvent('xtyf-foreground',{detail:{active:false}}))", null);
+    }
+    private void returnLocal(String intent) {
+        if (website != null) { website.close(); website = null; }
+        if (!Arrays.asList("settings", "retry", "return").contains(intent)) intent = "return";
+        web.evaluateJavascript("window.dispatchEvent(new CustomEvent('xtyf-website-return',{detail:{intent:" + JSONObject.quote(intent) + "}}));window.dispatchEvent(new CustomEvent('xtyf-foreground',{detail:{active:true}}))", null);
     }
     private void openExternal(String value) {
         Uri uri = Uri.parse(value);
@@ -340,13 +423,15 @@ public class MainActivity extends Activity {
     @Override protected void onPause() {
         super.onPause(); if (web != null) { web.evaluateJavascript("window.dispatchEvent(new CustomEvent('xtyf-foreground',{detail:{active:false}}))", null); web.onPause(); }
         if (externalWeb != null) externalWeb.onPause();
+        if (website != null) website.pause();
     }
     @Override protected void onResume() {
-        super.onResume(); if (web != null) { web.onResume(); web.evaluateJavascript("window.dispatchEvent(new CustomEvent('xtyf-foreground',{detail:{active:true}}))", null); }
+        super.onResume(); if (web != null) { web.onResume(); web.evaluateJavascript("window.dispatchEvent(new CustomEvent('xtyf-foreground',{detail:{active:" + (website == null) + "}}))", null); }
         if (externalWeb != null) externalWeb.onResume();
+        if (website != null) website.resume();
     }
     @Override protected void onDestroy() {
         destroyed = true; mainHandler.removeCallbacksAndMessages(null); closePort(); if (updates != null) updates.retire(); if (client != null) client.cancelAll(); workers.shutdownNow();
-        if (legacyPicker != null) legacyPicker.onReceiveValue(null); if (externalDialog != null) externalDialog.dismiss(); if (web != null) web.destroy(); super.onDestroy();
+        cancelFileOperations(); if (website != null) website.close(); if (externalDialog != null) externalDialog.dismiss(); if (web != null) web.destroy(); super.onDestroy();
     }
 }

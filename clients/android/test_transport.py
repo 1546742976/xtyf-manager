@@ -20,6 +20,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='xtyf-android-http-') as temporary:
         subprocess.run([str(javac), '-encoding', 'UTF-8', '-d', temporary,
                         str(ROOT / 'clients/android/src/online/skywalker/manager/NativeHttpClient.java'),
+                        str(ROOT / 'clients/android/src/online/skywalker/manager/WebsitePolicy.java'),
                         str(ROOT / 'clients/android/tests/NativeHttpClientTest.java')], check=True)
         subprocess.run([str(java), '-cp', temporary, 'online.skywalker.manager.NativeHttpClientTest'], check=True, timeout=30)
 

@@ -38,6 +38,20 @@ public final class NativeHttpClientTest {
         NativeHttpClient secureServer = new NativeHttpClient("https://manager.skywalker-rm.online", "", value -> {});
         check("https://manager.skywalker-rm.online/api/client/bootstrap".equals(secureServer.resolve("/api/client/bootstrap").toString()), "Selected HTTPS server requests use HTTPS");
         fails(() -> secureServer.resolve("http://manager.skywalker-rm.online/api/client/bootstrap"), "Reject a scheme switch from HTTPS to HTTP");
+        check(NativeHttpClient.probeRedirectAllowed(URI.create("http://example.com/a"), URI.create("https://example.com/b")), "Anonymous probe permits default port HTTPS upgrade");
+        check(NativeHttpClient.probeRedirectAllowed(URI.create("http://example.com:8080/a"), URI.create("https://example.com:8080/b")), "Anonymous probe permits same custom port upgrade");
+        for (String destination : Arrays.asList("http://evil.example/a", "https://evil.example/a", "https://example.com:8443/a", "https://example.com:80/a", "https://u:p@example.com/a"))
+            check(!NativeHttpClient.probeRedirectAllowed(URI.create("http://example.com/a"), URI.create(destination)), "Reject unapproved probe redirect " + destination);
+        check(!NativeHttpClient.probeRedirectAllowed(URI.create("https://example.com/a"), URI.create("http://example.com/b")), "Reject HTTPS downgrade");
+        check(WebsitePolicy.trusted("https://example.com", "https://example.com/account#avatar"), "Website supports same origin fragments");
+        check(WebsitePolicy.blob("https://example.com", "blob:https://example.com/file-id"), "Accept this document origin Blob");
+        for (String value : Arrays.asList("https://evil.example/file", "https://example.com:8443/file", "https://user@example.com/file", "https://appassets.androidplatform.net/index.html", "file:///tmp/a", "blob:https://example.com/file"))
+            check(!WebsitePolicy.trusted("https://example.com", value), "Reject foreign or privileged website URL " + value);
+        check(!WebsitePolicy.blob("https://example.com", "blob:https://evil.example/file"), "Reject foreign Blob origin");
+        check(".._secret_.txt".equals(WebsitePolicy.filename("../secret\n.txt")), "Sanitize website download filename");
+        WebsitePolicy.size(256L * 1024 * 1024); assertions++;
+        fails(() -> WebsitePolicy.size(256L * 1024 * 1024 + 1), "Reject oversized website download");
+        fails(() -> WebsitePolicy.size(-1), "Reject invalid Blob size");
         for (String invalid : Arrays.asList("file:///tmp", "http://u:p@example.com", "http://example.com/path", "http://example.com?x", "http://example.com#x", "http://example.com:65536", "not a URL")) fails(() -> NativeHttpClient.normalize(invalid), "Reject " + invalid);
         AtomicInteger outsideHits = new AtomicInteger(), writeHits = new AtomicInteger(); AtomicReference<String> saved = new AtomicReference<>("");
         HttpServer outside = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -45,6 +59,16 @@ public final class NativeHttpClientTest {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         ExecutorService pool = Executors.newCachedThreadPool(); server.setExecutor(pool);
         CountDownLatch slowStarted = new CountDownLatch(1), slowFinished = new CountDownLatch(1);
+        List<String> probeCookies = Collections.synchronizedList(new ArrayList<>());
+        AtomicReference<String> probeRedirect = new AtomicReference<>(""); AtomicInteger probeStatus = new AtomicInteger(404);
+        AtomicInteger websiteHits = new AtomicInteger(); List<String> websiteCookies = Collections.synchronizedList(new ArrayList<>());
+        server.createContext("/", exchange -> { websiteHits.incrementAndGet(); websiteCookies.add(String.valueOf(exchange.getRequestHeaders().getFirst("Cookie"))); send(exchange, 200, "<html>Website</html>"); });
+        server.createContext("/api/client/bootstrap", exchange -> {
+            probeCookies.add(String.valueOf(exchange.getRequestHeaders().getFirst("Cookie")));
+            exchange.getResponseHeaders().add("Set-Cookie", "discovery=must-not-persist; Path=/");
+            if (!probeRedirect.get().isEmpty()) { exchange.getResponseHeaders().set("Location", probeRedirect.get()); send(exchange, 302, "redirect"); }
+            else send(exchange, probeStatus.get(), "<html>Old server</html>");
+        });
         server.createContext("/bootstrap", exchange -> {
             exchange.getResponseHeaders().add("Set-Cookie", "session=logged-in; Path=/; HttpOnly; Max-Age=3600");
             exchange.getResponseHeaders().add("Set-Cookie", "secure-only=hidden; Path=/; Secure");
@@ -72,6 +96,9 @@ public final class NativeHttpClientTest {
         try {
             String origin = "http://127.0.0.1:" + server.getAddress().getPort();
             NativeHttpClient client = new NativeHttpClient(origin, "", saved::set);
+            client.discoverWebsite("manual-open");
+            check(websiteHits.get() == 1 && "null".equals(websiteCookies.get(0)), "Manual website opening anonymously discovers root without bootstrap");
+            client.discoverWebsite("manual-open-again"); check(websiteHits.get() == 1, "Verified website root is reused without repeated discovery");
             fails(() -> client.resolve("//evil.example/path"), "Block network-path reference");
             fails(() -> client.resolve("https://127.0.0.1/path"), "Block protocol switch");
             fails(() -> client.resolve("/\\evil.example/path"), "Block ambiguous backslash");
@@ -80,6 +107,21 @@ public final class NativeHttpClientTest {
             });
             check(!saved.get().isEmpty(), "Persist session");
             check("GET|session=logged-in|token-1|1|".equals(get(client, "/echo")), "Cookie, csrf and protocol sent; foreign/secure cookies omitted");
+            client.probe("probe", (status, headers, input) -> check(status == 404, "Expose missing bootstrap to website fallback classifier"));
+            check(probeCookies.size() == 2 && "null".equals(probeCookies.get(0)) && "session=logged-in".equals(probeCookies.get(1)), "Discovery is anonymous; final bootstrap restores native authentication");
+            check(origin.equals(client.effectiveServer()), "Same origin discovery preserves selected origin");
+            check(!probeCookies.get(1).contains("discovery"), "Anonymous discovery cookie was not imported");
+            probeStatus.set(503); client.probe("unavailable", (status, headers, input) -> check(status == 503, "Preserve server outage instead of declaring missing protocol"));
+            probeStatus.set(200); client.probe("html", (status, headers, input) -> {
+                ByteArrayOutputStream output = new ByteArrayOutputStream(); NativeHttpClient.copy(input, output);
+                check(status == 200 && output.toString("UTF-8").startsWith("<html>"), "Return successful HTML unchanged for frontend fallback classification");
+            });
+            probeRedirect.set("http://127.0.0.1:" + outside.getAddress().getPort() + "/");
+            fails(() -> client.probe("foreign", (s,h,i) -> {}), "Anonymous probe refuses foreign port redirect");
+            check(outsideHits.get() == 0, "Anonymous probe never visits unapproved redirect target");
+            probeRedirect.set(""); probeStatus.set(404);
+            // Remove the synthetic final bootstrap cookie before legacy session assertions.
+            client.clear(); get(client, "/bootstrap");
             NativeHttpClient restored = new NativeHttpClient(origin, saved.get(), saved::set);
             check("GET|session=logged-in|token-1|1|".equals(get(restored, "/echo")), "Restore persistent session across process restart");
             get(restored, "/rotate"); check("token-2".equals(restored.csrf()), "Update rotated CSRF");
@@ -100,6 +142,8 @@ public final class NativeHttpClientTest {
             Future<?> pending = pool.submit(() -> { try { restored.request("/slow", "GET", Collections.emptyMap(), null, "slow", (s,h,input) -> NativeHttpClient.copy(input, new ByteArrayOutputStream())); throw new AssertionError("Cancellation must fail"); } catch (IOException expected) {} });
             check(slowStarted.await(5, TimeUnit.SECONDS), "Slow request started"); restored.cancel("slow"); slowFinished.countDown(); pending.get(5, TimeUnit.SECONDS); assertions++;
             restored.cancelAll(); fails(() -> get(restored, "/echo"), "Server switch retires queued old requests");
+            fails(() -> restored.probe("retired-probe", (s,h,i) -> {}), "Server switch also retires connection probes");
+            fails(() -> restored.discoverWebsite("retired-website"), "Server switch also retires manual website discovery");
             NativeHttpClient corrupt = new NativeHttpClient(origin, "not-base64", value -> {}); check("GET|null|null|1|".equals(get(corrupt, "/echo")), "Corrupt local session becomes anonymous");
             System.out.println("ANDROID_HTTP_TESTS_PASSED assertions=" + assertions);
         } finally { slowFinished.countDown(); server.stop(0); outside.stop(0); pool.shutdownNow(); }

@@ -2,7 +2,7 @@
 
 This contract is shared by the Python publisher, Rust desktop and Java Android hosts.
 Business API protocol stays **1**. Native bridge version is **2** and capabilities are
-`ui_updates` and `image_preview`. Platform keys: `windows-x86_64`, `ubuntu-aarch64`,
+`ui_updates`, `image_preview` and `website_fallback`. Platform keys: `windows-x86_64`, `ubuntu-aarch64`,
 `fedora-x86_64`, `android`.
 
 ## Signed release
@@ -67,7 +67,8 @@ pending/quarantined IDs and cancellation generation. Downloads stage privately;
 fully validate before publishing pending. Pin one complete resource root for each
 view lifetime. Retain bundled, current and previous; never remove an active root.
 Switching server cancels downloads, clears file handles and loads that server's root.
-Only the main trusted local view may call native operations. Remote views have no
+Only the main trusted local view may call business native operations. The separate
+local website toolbar has only navigation and return controls; remote views have no
 business bridge. An explicit installer download uses the existing native save dialog
 with `download({path,filename,expectedSha256})`; verify the signed SHA256 before making
 the saved file available. This does not launch or install the downloaded package.
@@ -85,3 +86,28 @@ incompatible server disables business calls but leaves native settings/update UI
 Checks: startup, 30 min while foreground, foreground return if last check >5 min,
 manual. Download does not reload an active page; cold startup applies pending.
 Runtime failures never clear server preferences, sessions, drafts or user files.
+
+## Website fallback capability
+
+`get_config` may additionally advertise `website_fallback` and `effectiveServerUrl`.
+The entered `serverUrl` remains the configuration/update-storage namespace.
+`probe_connection({})` discovers a same-host HTTP-to-HTTPS upgrade anonymously and
+returns `{serverUrl,effectiveServerUrl,response}`; `response` has the existing
+native request shape. Native authenticated traffic then uses the verified origin,
+with origin-specific session persistence. TLS verification is always enabled.
+Only HTTP 80 to HTTPS 443 or an unchanged custom port is accepted; cross-host,
+other port changes and downgrades are rejected. Mutating requests are not replayed.
+
+`open_website({})` opens the pinned server root in a separate persistent website
+view. It does not accept an arbitrary target URL. Remote documents have no generic
+business/native bridge. Native navigation controls call `return_local({intent})`,
+where intent is `settings`, `retry` or `return`; the preserved local shell receives
+`xtyf-website-return` with that intent. Returning never automatically reopens the
+website. Website cookies remain separate from native transport sessions; third-party
+cookies are not enabled. Switching server cancels old requests and pending file work.
+
+Cold startup uses website fallback only for 404/405 or successful responses without
+a compatible bootstrap. Network/TLS/5xx failures preserve local settings and offer
+manual recovery. Runtime handoff requires user confirmation and does not silently
+clear drafts. Bootstrap failure is not a local-resource health failure. The updater
+is configured after connection probing; website mode pauses foreground UI checks.

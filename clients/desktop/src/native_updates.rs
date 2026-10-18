@@ -40,8 +40,10 @@ pub(crate) async fn check_verified(state: &AppState, retry: bool, verify: impl F
         (runtime.server.clone(), runtime.generation, runtime.cancellation.clone())
     };
     let operation = async {
-        let session = state.session(&server)?;
-        let response = session.client.get(server_path(&server, "/api/client/updates")?).send().await.map_err(|e|e.to_string())?;
+        if *state.server.lock().unwrap() != server { return Err("服务器已切换，更新已取消".into()); }
+        let effective = state.effective_server();
+        let session = state.session(&effective)?;
+        let response = session.client.get(server_path(&effective, "/api/client/updates")?).send().await.map_err(|e|e.to_string())?;
         let metadata = updates::bounded_response(response, updates::METADATA_LIMIT).await?;
         let release = verify(&metadata)?;
         let bundle = {
@@ -56,7 +58,7 @@ pub(crate) async fn check_verified(state: &AppState, retry: bool, verify: impl F
             if runtime.active.as_ref().is_some_and(|b| b.id == release.bundle.id) { return Ok(runtime.status("current", "当前页面已是最新版本")); }
             release.bundle
         };
-        let response = session.client.get(server_path(&server, &bundle.url)?).send().await.map_err(|e|e.to_string())?;
+        let response = session.client.get(server_path(&effective, &bundle.url)?).send().await.map_err(|e|e.to_string())?;
         let bytes = updates::bounded_response(response, bundle.size).await?;
         let mut runtime = state.updates.lock().unwrap();
         if runtime.generation != generation || cancellation.is_cancelled() { return Err("服务器已切换，更新已取消".into()); }

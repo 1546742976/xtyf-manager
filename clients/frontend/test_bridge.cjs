@@ -78,6 +78,7 @@ async function startShell(bootstrap) {
     XTYFTemplates: { render: () => '<html><head></head><body></body></html>' },
   });
   vm.runInContext(source('update-runtime.js'), context, { filename: 'update-runtime.js' });
+  vm.runInContext(source('connection-runtime.js'), context, { filename: 'connection-runtime.js' });
   vm.runInContext(source('shell.js'), context, { filename: 'shell.js' });
   await new Promise(resolve => setImmediate(resolve));
   return { context, get };
@@ -99,4 +100,12 @@ test('server UI protocol rejection blocks business transport but preserves local
   await assert.rejects(context.XTYF.request('/api/tasks'), /服务器协议不兼容/);
   assert.equal(typeof context.XTYF.openSettings, 'function');
   assert.equal(get('page-host').children[0].children[0].textContent, '服务器需要更新');
+});
+
+test('absolute links recognize the verified effective origin as well as the saved origin', async () => {
+  const { context } = await startShell(async () => ({status:200,body:JSON.stringify({ok:true,protocolVersion:1,authenticated:false})}));
+  context.XTYF.config.effectiveServerUrl = 'https://effective.invalid';
+  assert.equal(context.XTYF.isServer(new URL('https://effective.invalid/account')),true);
+  assert.equal(context.XTYF.isServer(new URL('https://server.invalid/account')),true);
+  assert.equal(context.XTYF.isServer(new URL('https://other.invalid/account')),false);
 });

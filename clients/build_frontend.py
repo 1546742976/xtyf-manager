@@ -152,7 +152,7 @@ def build(output=DIST):
                 content = content.replace(start,"const saved=await window.XTYF.download(link.href,link.download);feedback.textContent=saved.cancelled?'已取消保存。':'附件已保存。';")
             destination.write_text(content, encoding="utf-8")
         else: shutil.copyfile(path, destination)
-    for name in ("index.html", "shell.css", "shell.js", "update-runtime.js", "bridge.js", "page-runtime.js", "pdf-viewer.html", "pdf-viewer.js", "external.html"):
+    for name in ("index.html", "shell.css", "shell.js", "update-runtime.js", "connection-runtime.js", "bridge.js", "page-runtime.js", "pdf-viewer.html", "pdf-viewer.js", "external.html"):
         shutil.copyfile(SOURCE / name, output / name)
     lock = json.loads((SOURCE / "vendor-lock.json").read_text(encoding="utf-8"))
     for name, expected in lock["files"].items():

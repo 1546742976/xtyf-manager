@@ -1,6 +1,6 @@
 # 本地界面客户端：Tauri 桌面端与 Android
 
-Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录页、全部业务页面、脚本、样式、字体和 PDF 阅读器随安装包内置。支持更新协议的客户端还可从配置服务器下载经过发布者签名验证的完整页面资源，在本地加载；主界面不直接加载服务器 HTML，也不使用在线 CDN。
+Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录页、全部业务页面、脚本、样式、字体和 PDF 阅读器随安装包内置。支持更新协议的客户端还可从配置服务器下载经过发布者签名验证的完整页面资源，在本地加载；兼容服务器优先使用本地界面；服务器缺少客户端接口时，可在应用内独立网站视图继续使用网站。
 
 默认服务器为 **http://manager.skywalker-rm.online/**。断网可以打开本地界面和服务器设置，业务操作需要联网。站外 HTTP/HTTPS 链接在 App 内独立浏览视图打开，具有返回、关闭入口，不调用系统浏览器。图片及 PDF 在 App 内预览，其余附件通过系统保存窗口下载。
 
@@ -13,7 +13,7 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 
 桌面升级保留服务器地址，首次从 Electron 迁移需要重新登录。Windows 安装器识别旧版 Electron 的卸载记录，保留用户数据后完成替换；Linux 保持 `xtyf-manager` 包名。Android 保留原服务器地址设置，新的原生会话首次需要登录。
 
-服务器地址支持 HTTP/HTTPS 根地址及自定义端口，按输入的协议连接，HTTPS 正常校验证书。客户端不再把默认域名的 HTTP 地址自动改为 HTTPS。升级保留已保存的服务器地址；若旧版已保存 HTTPS，可在服务器设置中改为上述 HTTP 地址。切换服务器会取消当前请求、清空页面状态，各服务器会话分别保存。
+服务器地址支持 HTTP/HTTPS 根地址及自定义端口，按输入的协议连接，HTTPS 正常校验证书。保存时保留输入协议；连接探测允许同主机从 HTTP 80 升级到 HTTPS 443，或保持同一自定义端口的 HTTPS 升级。实际连接地址会显示在设置中，不覆盖输入地址。不接受跨主机、非预期端口或 HTTPS 降级，也不自动重放提交请求。升级保留已保存的服务器地址。切换服务器会取消当前请求、清空页面状态，各服务器会话分别保存。
 
 ## 服务器兼容性
 
@@ -23,7 +23,9 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 - `POST /api/client/login`、`POST /api/client/logout`：JSON 认证接口，复用原有账号、Cookie、CSRF、限流和审计。
 - 其余功能继续调用既有业务 API。
 
-旧服务器缺少上述接口时，客户端显示本地“服务器需要更新”提示，保留重试和地址设置，不回退为远程网页外壳。现有浏览器网站继续使用原入口。
+支持 `website_fallback` 的客户端在冷启动遇到 bootstrap 404/405、成功返回 HTML 或不兼容协议时，自动在客户端内打开网站。超时、证书错误及 5xx 保留本地界面、重试、设置和手动打开网站入口；使用期间不会自动切换或重载，手动切换会提示未保存内容风险。旧客户端缺少此原生能力时仍显示原来的服务器更新提示。
+
+网站模式提供返回、主页、重载、设置和重试本地界面入口。网站登录 Cookie 持久化，与原生接口登录分开，首次进入可能需要重新登录；返回后不会循环自动打开网站。网站视图没有本地通用原生命令权限，普通选图、上传和下载使用网站自己的会话。网站功能以云端实际发布的版本为准，本地头像功能不会给尚未部署该功能的网站增加接口。
 
 **构建客户端不会部署服务器。** 服务器上线必须包含本次接口源码；服务器源码包仍通过 `python deploy/package_release.py` 从 Git HEAD 独立生成，未提交的代码不会自动进入该源码包。线上兼容性必须在服务器实际更新后验证。
 
@@ -119,7 +121,7 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 - 页面更新协议可用 `python -m unittest discover -s tests -p "test_client_u*.py"` 验证。跨语言测试先运行 `python tests/client_update_fixture.py .build-tools/client-update-fixture`，该命令仅使用临时签名密钥生成公共测试资源，不发布或生成安装包。
 - Android 原生存储与 HTTP 生命周期使用 `python clients/android/test_ui_updates.py --fixture .build-tools/client-update-fixture`；需要现有 JDK、Android SDK 以及固定 SHA-256 的测试用 `org.json:json:20240303` JAR（默认在 `.build-tools/client-ui-updates/android-tests/`）。该检查执行 JVM 断言并编译 Activity，不生成 APK。
 - 桌面原生检查为 `cargo test --manifest-path clients/desktop/Cargo.toml --locked`；本机回环 HTTP 测试应设置 `NO_PROXY=127.0.0.1,localhost`，避免系统代理介入隔离测试服务器。
-- 业务会话由原生网络层管理，保留 CSRF、服务端权限及认证；站外视图没有业务会话或原生接口权限。
+- 业务会话由原生网络层管理，保留 CSRF、服务端权限及认证；网站和站外视图不共享原生接口 Cookie 或通用原生命令权限。
 - 安装包检查包含本地资源清单、版本、真实架构、Linux 动态依赖和桌面入口；Ubuntu ARM64 的 GLIBC 上限为 2.35。
 - Windows、Android、Ubuntu ARM64、Fedora 的实际启动、导航、上传下载和业务操作分别记录。包检查、APK 签名与对齐通过不能替代目标系统运行验证。
 - 交付记录中的运行验证仅在确实执行后标记通过。模拟器测试与真机测试分别说明；未部署服务器不等于线上业务已经验收。

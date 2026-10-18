@@ -68,7 +68,7 @@ impl Drop for Scratch {
     fn drop(&mut self) { assert_eq!(self.0.parent(), Some(std::env::temp_dir().as_path())); let _ = fs::remove_dir_all(&self.0); }
 }
 fn state(server: &str, directory: &std::path::Path) -> AppState {
-    AppState { server: Mutex::new(server.into()), directory: directory.into(), sessions: Mutex::new(HashMap::new()), files: Mutex::new(HashMap::new()), requests: Mutex::new(HashMap::new()), updates: Mutex::new(native_updates::Runtime::new(directory,server,0)), update_gate: tokio::sync::Mutex::new(()) }
+    AppState { server: Mutex::new(server.into()), effective_server: Mutex::new(None), website_epoch:std::sync::atomic::AtomicU64::new(0), connection_gate:tokio::sync::Mutex::new(()), website_files:Mutex::new(std::collections::HashSet::new()), directory: directory.into(), sessions: Mutex::new(HashMap::new()), files: Mutex::new(HashMap::new()), requests: Mutex::new(HashMap::new()), updates: Mutex::new(native_updates::Runtime::new(directory,server,0)), update_gate: tokio::sync::Mutex::new(()) }
 }
 async fn call(state: &AppState, args: Value) -> Value { response_value(send_request(state, &args).await.unwrap(), false).await.unwrap() }
 fn echo(request: Incoming) -> Outgoing {
@@ -197,4 +197,75 @@ fn update_cancellation_and_oversized_download_preserve_active_state() {
     let scratch=Scratch::new();let app=state("http://localhost",&scratch.0);let old=app.updates.lock().unwrap().view.clone();
     {let mut runtime=app.updates.lock().unwrap();runtime.view=uuid::Uuid::new_v4().to_string();runtime.ready=false;}
     assert!(native_updates::ready(&app,&old).is_err());assert!(!app.updates.lock().unwrap().ready);ready_current(&app);assert!(app.updates.lock().unwrap().ready);
+}
+
+#[test]
+fn connection_probe_is_anonymous_then_restores_native_session() {
+    let calls = Arc::new(AtomicUsize::new(0)); let count = calls.clone();
+    let server = LocalServer::start(move |request| {
+        if request.path == "/seed" {
+            return Outgoing::text(200, "seeded").with("Set-Cookie", "session=native-only; Path=/; Max-Age=3600");
+        }
+        assert_eq!(request.path, "/api/client/bootstrap");
+        if count.fetch_add(1, Ordering::SeqCst) == 0 {
+            assert!(request.headers.get("cookie").is_none(), "Discovery must not send native credentials");
+            Outgoing::text(200, "{\"authenticated\":false}").with("Set-Cookie", "session=anonymous-probe; Path=/")
+        } else {
+            assert_eq!(request.headers.get("cookie").map(String::as_str), Some("session=native-only"));
+            Outgoing::text(200, "{\"authenticated\":true}").with("Content-Type", "application/json")
+        }
+    });
+    let scratch = Scratch::new(); let app = state(&server.origin, &scratch.0);
+    tauri::async_runtime::block_on(async {
+        call(&app, json!({"path":"/seed"})).await;
+        let token = app.updates.lock().unwrap().view.clone();
+        let result = website::probe(&app).await.unwrap();
+        assert_eq!(result["serverUrl"], server.origin);
+        assert_eq!(result["effectiveServerUrl"], server.origin);
+        assert_eq!(result["response"]["status"], 200);
+        assert_eq!(response_json(&result["response"])["authenticated"], true);
+        assert_eq!(app.updates.lock().unwrap().view, token, "Discovery must not reset the local resource trial");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    });
+}
+
+#[test]
+fn connection_probe_preserves_website_and_server_error_responses() {
+    for status in [200, 404, 405, 503] {
+        let server = LocalServer::start(move |_| Outgoing::text(status, "<!doctype html><title>Website</title>").with("Content-Type", "text/html"));
+        let scratch = Scratch::new(); let app = state(&server.origin, &scratch.0);
+        tauri::async_runtime::block_on(async {
+            let result = website::probe(&app).await.unwrap();
+            assert_eq!(result["response"]["status"], status);
+            assert_eq!(result["response"]["headers"]["content-type"], "text/html");
+        });
+    }
+}
+
+#[test]
+fn connection_probe_rejects_other_port_and_cancels_on_server_switch() {
+    let outside_hits = Arc::new(AtomicUsize::new(0)); let hits = outside_hits.clone();
+    let outside = LocalServer::start(move |_| { hits.fetch_add(1, Ordering::SeqCst); Outgoing::text(200, "unexpected") });
+    let destination = outside.origin.clone();
+    let server = LocalServer::start(move |_| Outgoing::text(302, "redirect").with("Location", &destination));
+    let scratch = Scratch::new(); let app = state(&server.origin, &scratch.0);
+    tauri::async_runtime::block_on(async {
+        assert!(website::probe(&app).await.is_err());
+        assert!(app.effective_server.lock().unwrap().is_none());
+        assert_eq!(outside_hits.load(Ordering::SeqCst), 0);
+    });
+    let entered = Arc::new(AtomicBool::new(false)); let marker = entered.clone();
+    let server = LocalServer::start(move |_| { marker.store(true, Ordering::SeqCst); thread::sleep(Duration::from_millis(100)); Outgoing::text(200, "{}") });
+    let scratch = Scratch::new(); let app = state(&server.origin, &scratch.0);
+    tauri::async_runtime::block_on(async {
+        let cancel = async {
+            for _ in 0..1000 { if entered.load(Ordering::SeqCst) { break; } tokio::time::sleep(Duration::from_millis(2)).await; }
+            let mut runtime = app.updates.lock().unwrap();
+            runtime.cancellation.cancel();
+            *runtime = native_updates::Runtime::new(&scratch.0, "http://new-server.example", 1);
+        };
+        let (result, _) = futures_util::future::join(website::probe(&app), cancel).await;
+        assert!(result.is_err());
+        assert!(app.effective_server.lock().unwrap().is_none());
+    });
 }

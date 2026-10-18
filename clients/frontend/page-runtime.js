@@ -103,7 +103,7 @@
     if(url.protocol==='blob:')return;
     event.preventDefault();event.stopImmediatePropagation();
     if(!['http:','https:','tauri:'].includes(url.protocol)){app.notify('此链接类型无法在应用内打开，可长按复制链接。');return;}
-    const same=app.isLocal(url)||(app.config.serverUrl&&url.origin===new URL(app.config.serverUrl).origin);
+    const same=app.isLocal(url)||app.isServer(url);
     if(!same)return app.openExternal(url.href).catch(error=>app.notify(error.message));
     const path=url.pathname+url.search+url.hash;
     if(app.isPage(path))return app.navigate(path);
@@ -124,7 +124,7 @@
     for(const img of images){
       const src=img.getAttribute('src');if(!src||/^(data:|blob:)/.test(src)||src.startsWith('/static/')||img.dataset.nativeLoading===src)continue;
       const u=new URL(src,window.XTYFLocation.href);
-      if(!app.isLocal(u)&&(!app.config.serverUrl||u.origin!==new URL(app.config.serverUrl).origin)){img.removeAttribute('src');img.alt+='（外部图片未加载）';continue;}
+      if(!app.isLocal(u)&&!app.isServer(u)){img.removeAttribute('src');img.alt+='（外部图片未加载）';continue;}
       img.dataset.nativeLoading=src;
       app.imageURL(u.pathname+u.search).then(url=>{if(own===app.generation&&img.isConnected)img.src=url;}).catch(error=>{if(error.name!=='AbortError'){img.alt+='（点击重试）';img.onclick=()=>{delete img.dataset.nativeLoading;loadImages(img);};}});
     }

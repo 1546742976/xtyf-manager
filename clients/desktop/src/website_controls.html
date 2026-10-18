@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>网站工具栏</title>
+<style>html{font:14px system-ui,sans-serif;color-scheme:light dark}body{margin:0;padding:5px 10px;background:Canvas;color:CanvasText}nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}button{font:inherit;padding:5px 9px;cursor:pointer}#status{margin-top:5px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}</style>
+<nav aria-label="网站导航"><button data-action="website_back">后退</button><button data-action="website_home">首页</button><button data-action="website_reload">重载</button><button data-intent="return">本地界面</button><button data-intent="settings">设置</button><button data-intent="retry">重试本地</button></nav><div id="status" role="status">网站模式 · 登录与文件操作由网站处理</div>
+<script>
+document.querySelector('nav').addEventListener('click',async event=>{
+  const button=event.target.closest('button');if(!button)return;
+  const intent=button.dataset.intent,action=intent?'return_local':button.dataset.action;
+  if(action!=='website_back'&&!confirm('继续可能丢失网站中未保存的内容，是否继续？'))return;
+  button.disabled=true;
+  try{await window.__TAURI_INTERNALS__.invoke('native_call',{action,args:intent?{intent}:{}});}
+  catch(error){document.getElementById('status').textContent=String(error);}
+  finally{button.disabled=false;}
+});
+</script></html>

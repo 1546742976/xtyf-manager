@@ -8,6 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Authenticated HTTP transport. Never shares CookieManager or credentials with a WebView. */
 final class NativeHttpClient {
     interface Persistence { void save(String value); }
+    interface Sessions { String load(String origin); void save(String origin, String value); }
     interface Body { void write(OutputStream output) throws IOException; }
     interface Consumer { void accept(int status, Map<String, String> headers, InputStream input) throws IOException; }
     private static final class StoredCookie {
@@ -15,13 +16,16 @@ final class NativeHttpClient {
         StoredCookie(HttpCookie cookie, long receivedAt) { this.cookie = cookie; this.receivedAt = receivedAt; }
         boolean expired() { return cookie.getMaxAge() == 0 || cookie.getMaxAge() > 0 && (System.currentTimeMillis() - receivedAt) / 1000 >= cookie.getMaxAge(); }
     }
-    private final URI origin;
-    private final Persistence persistence;
+    private final URI configuredOrigin;
+    private volatile URI origin;
+    private final Sessions sessions;
+    private final Object probeLock = new Object();
     private final List<StoredCookie> cookies = new ArrayList<>();
     private final Map<String, HttpURLConnection> active = new ConcurrentHashMap<>();
     private final Set<String> cancelled = Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
     private String csrf = "";
     private volatile boolean retired;
+    private volatile boolean discovered;
 
     static String normalize(String text) throws IOException {
         try {
@@ -35,12 +39,46 @@ final class NativeHttpClient {
         } catch (URISyntaxException | NullPointerException error) { throw new IOException("服务器地址无效", error); }
     }
     NativeHttpClient(String server, String saved, Persistence persistence) throws IOException {
-        this.origin = URI.create(normalize(server)); this.persistence = persistence; restore(saved);
+        this(server, singleOriginSessions(normalize(server), saved, persistence));
+    }
+    private static Sessions singleOriginSessions(String original, String saved, Persistence persistence) {
+        return new Sessions() {
+            public String load(String origin) { return original.equals(origin) ? saved : ""; }
+            public void save(String origin, String value) { if (original.equals(origin)) persistence.save(value); }
+        };
+    }
+    NativeHttpClient(String server, Sessions sessions) throws IOException {
+        this.origin = URI.create(normalize(server)); this.configuredOrigin = origin; this.sessions = sessions; restore(sessions.load(origin.toString()));
+    }
+    String effectiveServer() { return origin.toString(); }
+    void discoverWebsite(String requestId) throws IOException {
+        synchronized (probeLock) {
+            if (discovered) { checkCancelled(requestId); return; }
+            try {
+                URI reached = request(configuredOrigin.resolve("/"), "GET", Collections.emptyMap(), null,
+                    requestId, (status, headers, input) -> {}, true);
+                checkCancelled(requestId); adoptOrigin(reached);
+            } finally { cancelled.remove(requestId); }
+        }
+    }
+    private synchronized void adoptOrigin(URI reached) throws IOException {
+        URI actual = URI.create(normalize(reached.getScheme() + "://" + reached.getRawAuthority()));
+        if (!origin.equals(actual)) { origin = actual; cookies.clear(); csrf = ""; restore(sessions.load(actual.toString())); }
+        discovered = true;
     }
     private static int port(URI value) { return value.getPort() >= 0 ? value.getPort() : "https".equalsIgnoreCase(value.getScheme()) ? 443 : 80; }
     private boolean sameOrigin(URI value) {
-        return origin.getScheme().equalsIgnoreCase(value.getScheme()) && origin.getHost().equalsIgnoreCase(value.getHost()) && port(origin) == port(value)
+        return sameOrigin(origin, value);
+    }
+    static boolean sameOrigin(URI origin, URI value) {
+        return value.getHost() != null && origin.getScheme().equalsIgnoreCase(value.getScheme()) && origin.getHost().equalsIgnoreCase(value.getHost()) && port(origin) == port(value)
                 && value.getRawUserInfo() == null && value.getFragment() == null;
+    }
+    static boolean probeRedirectAllowed(URI from, URI to) {
+        return sameOrigin(from, to) || to.getHost() != null && from.getHost().equalsIgnoreCase(to.getHost())
+            && "http".equalsIgnoreCase(from.getScheme()) && "https".equalsIgnoreCase(to.getScheme())
+            && (port(from) == 80 && port(to) == 443 || port(from) != 80 && port(from) == port(to))
+            && to.getRawUserInfo() == null && to.getFragment() == null;
     }
     URI resolve(String path) throws IOException {
         try {
@@ -53,6 +91,10 @@ final class NativeHttpClient {
     void cancelAll() { retired = true; for (String id : active.keySet()) cancel(id); }
     private void checkCancelled(String id) throws InterruptedIOException { if (retired || cancelled.contains(id) || Thread.currentThread().isInterrupted()) throw new InterruptedIOException("请求已取消"); }
     synchronized String csrf() { return csrf; }
+    private synchronized String[] credentials(URI target) throws IOException {
+        if (!sameOrigin(target)) throw new IOException("服务器连接地址已更新，请重试");
+        return new String[]{cookieHeader(target), csrf};
+    }
     private synchronized String cookieHeader(URI target) {
         StringBuilder result = new StringBuilder(); cookies.removeIf(StoredCookie::expired);
         String targetPath = target.getPath().isEmpty() ? "/" : target.getPath();
@@ -66,6 +108,7 @@ final class NativeHttpClient {
         return result.toString();
     }
     private synchronized void receive(URI target, Map<String, List<String>> headers) {
+        if (!sameOrigin(target) || retired) return;
         for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
             if (entry.getKey() == null) continue;
             if ("X-CSRF-Token".equalsIgnoreCase(entry.getKey()) && !entry.getValue().isEmpty()) csrf = entry.getValue().get(0);
@@ -91,7 +134,7 @@ final class NativeHttpClient {
                 data.writeUTF(cookie.getName()); data.writeUTF(cookie.getValue()); data.writeUTF(cookie.getPath());
                 data.writeLong(cookie.getMaxAge()); data.writeLong(stored.receivedAt); data.writeBoolean(cookie.getSecure());
             }
-            data.close(); persistence.save(Base64.getEncoder().encodeToString(bytes.toByteArray()));
+            data.close(); sessions.save(origin.toString(), Base64.getEncoder().encodeToString(bytes.toByteArray()));
         } catch (IOException ignored) { /* An invalid cookie must not break the completed request. */ }
     }
     private synchronized void restore(String saved) {
@@ -106,7 +149,21 @@ final class NativeHttpClient {
         } catch (IOException | IllegalArgumentException error) { cookies.clear(); csrf = ""; }
     }
     void request(String path, String method, Map<String, String> headers, Body body, String requestId, Consumer consume) throws IOException {
-        URI target = resolve(path); String verb = method.toUpperCase(Locale.ROOT);
+        request(resolve(path), method, headers, body, requestId, consume, false);
+    }
+    void probe(String requestId, Consumer consume) throws IOException {
+        synchronized (probeLock) {
+            try {
+                URI reached = request(configuredOrigin.resolve("/api/client/bootstrap"), "GET", Collections.emptyMap(), null,
+                    requestId, (status, headers, input) -> {}, true);
+                checkCancelled(requestId);
+                adoptOrigin(reached);
+                request(reached, "GET", Collections.emptyMap(), null, requestId, consume, false);
+            } finally { cancelled.remove(requestId); }
+        }
+    }
+    private URI request(URI target, String method, Map<String, String> headers, Body body, String requestId, Consumer consume, boolean probe) throws IOException {
+        String verb = method.toUpperCase(Locale.ROOT);
         if (!Arrays.asList("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS").contains(verb)) throw new IOException("不支持的请求方法");
         try {
             for (int redirects = 0; redirects < 6; redirects++) {
@@ -119,17 +176,18 @@ final class NativeHttpClient {
                         if (!Arrays.asList("cookie", "host", "origin", "referer", "content-length", "connection", "transfer-encoding", "x-csrf-token", "authorization", "sec-fetch-site", "x-xtyf-client-protocol").contains(name.toLowerCase(Locale.ROOT))) connection.setRequestProperty(name, entry.getValue());
                     }
                     connection.setRequestProperty("X-XTYF-Client-Protocol", "1");
-                    String cookie = cookieHeader(target); if (!cookie.isEmpty()) connection.setRequestProperty("Cookie", cookie);
-                    String token = csrf(); if (!token.isEmpty()) connection.setRequestProperty("X-CSRF-Token", token);
+                    String[] credentials = probe ? new String[]{"", ""} : credentials(target);
+                    if (!credentials[0].isEmpty()) connection.setRequestProperty("Cookie", credentials[0]);
+                    if (!credentials[1].isEmpty()) connection.setRequestProperty("X-CSRF-Token", credentials[1]);
                     if (body != null) {
                         connection.setDoOutput(true); connection.setChunkedStreamingMode(65536);
                         try (OutputStream output = connection.getOutputStream()) { checkCancelled(requestId); body.write(output); }
                     }
-                    checkCancelled(requestId); int status = connection.getResponseCode(); receive(target, connection.getHeaderFields());
+                    checkCancelled(requestId); int status = connection.getResponseCode(); if (!probe) receive(target, connection.getHeaderFields());
                     String location = connection.getHeaderField("Location");
                     if (status >= 300 && status < 400 && location != null) {
                         URI redirected; try { redirected = target.resolve(location); } catch (IllegalArgumentException e) { throw new IOException("重定向地址无效", e); }
-                        if (!sameOrigin(redirected)) throw new IOException("已阻止向站外地址重定向");
+                        if (!(probe ? probeRedirectAllowed(target, redirected) : sameOrigin(redirected))) throw new IOException("服务器重定向到其他地址，请在设置中确认服务器地址");
                         // Never replay writes automatically, including 307/308 responses.
                         if (("GET".equals(verb) || "HEAD".equals(verb)) && Arrays.asList(301, 302, 303, 307, 308).contains(status)) { target = redirected; continue; }
                     }
@@ -140,11 +198,11 @@ final class NativeHttpClient {
                     InputStream source = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
                     try (InputStream input = source == null ? new ByteArrayInputStream(new byte[0]) : source) { consume.accept(status, responseHeaders, input); }
                     checkCancelled(requestId);
-                    if ("/api/client/logout".equals(target.getPath()) && status >= 200 && status < 300) clear(); return;
+                    if (!probe && "/api/client/logout".equals(target.getPath()) && status >= 200 && status < 300) clear(); return target;
                 } finally { active.remove(requestId, connection); connection.disconnect(); }
             }
             throw new IOException("服务器重定向次数过多");
-        } finally { cancelled.remove(requestId); }
+        } finally { if (!probe) cancelled.remove(requestId); }
     }
     static void copy(InputStream source, OutputStream target) throws IOException {
         byte[] buffer = new byte[65536]; int count;

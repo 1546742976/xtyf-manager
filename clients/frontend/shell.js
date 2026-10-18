@@ -14,6 +14,7 @@
   let config={serverUrl:'',version:''},bootstrap=anonymousBootstrap();
   let route='/',frame=null,sequence=0,generation=0,historyIndex=0,serverGeneration=0,bootSequence=0,bootstrapSequence=0,booting=false,compatible=false,preview=null,noticeTimer;
   let compatibilityRejected=false,nativeInitialized=false,locallyReady=false,healthySent=false,nativeForeground=true,updatesServer=null,updateState={status:'unavailable'};
+  let sessionStarted=false,websiteOpening=false,websiteActive=false;
   const requests=new Map(),resourceURLs=new Set();
   const host=document.getElementById('page-host'),settings=document.getElementById('client-settings'),previewDialog=document.getElementById('resource-preview');
   function notify(text){const el=document.getElementById('client-notice');el.textContent=text;el.hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>el.hidden=true,6000);}
@@ -29,7 +30,7 @@
     document.getElementById('updates-installer').hidden=!updateState.installer;
     if(updateState.status==='incompatible'&&!updateState.installer)document.getElementById('update-status').textContent+=' 暂无此平台的正式安装包。';
   }
-  const updates=XTYFUpdates.create({invoke:(action,args)=>XTYFNative.invoke(action,args),visible:()=>!document.hidden&&nativeForeground,changed:updateStatus});
+  const updates=XTYFUpdates.create({invoke:(action,args)=>XTYFNative.invoke(action,args),visible:()=>!document.hidden&&nativeForeground&&!websiteActive,changed:updateStatus});
   function markHealthy(){
     if(!nativeInitialized||!locallyReady||healthySent||!supports('ui_updates'))return;
     healthySent=true;
@@ -37,15 +38,17 @@
   }
   function pathFor(value){
     const url=new URL(value,localBase+route);
-    if(!isLocal(url)&&(!config.serverUrl||url.origin!==new URL(config.serverUrl).origin))throw new Error('业务请求仅允许连接当前服务器。');
+    if(!isLocal(url)&&!isServer(url))throw new Error('业务请求仅允许连接当前服务器。');
     return url.pathname+url.search;
   }
+  function isServer(url){return [config.serverUrl,config.effectiveServerUrl].some(value=>value&&url.origin===new URL(value).origin);}
   function bytes(response){return Uint8Array.from(atob(response.body||''),char=>char.charCodeAt(0));}
   function asResponse(result){
     const status=Number(result.status),headers=new Headers(result.headers||{});
     return new Response([204,205,304].includes(status)?null:result.encoding==='base64'?bytes(result):result.body??'',{status,headers});
   }
   async function request(input,options={}){
+    if(websiteActive)throw new Error('已切换到网站模式，请在网站中继续操作。');
     if(compatibilityRejected)throw new Error('服务器协议不兼容，请在客户端设置中检查更新或更换服务器。');
     const server=serverGeneration;
     let path=pathFor(input instanceof Request?input.url:input);
@@ -82,22 +85,28 @@
       const changesSession=path==='/api/client/login'||path==='/api/client/logout'||path==='/api/password'||path==='/api/account/preferences'||path==='/api/account/profile'||path==='/api/account/avatar'||/^\/api\/(?:admin\/permissions\/|member\/\d+\/profile)/.test(path);
       if(changesSession&&!['GET','HEAD','OPTIONS'].includes(method)&&response.ok){
         const info=await response.clone().json().catch(()=>({}));
-        if(info.ok!==false){try{await refreshBootstrap(server);}catch(_){}}
+        if(info.ok!==false){try{await refreshBootstrap(server);}catch(error){if(!error.superseded&&server===serverGeneration)connection(error.message);}}
       }
       return response;
     }finally{requests.delete(id);options.signal?.removeEventListener('abort',abort);}
   }
-  function cancelPage(){for(const item of requests.values())item.abort();requests.clear();for(const url of resourceURLs)URL.revokeObjectURL(url);resourceURLs.clear();}
-  async function refreshBootstrap(server=serverGeneration){
+  function cancelRequests(){for(const item of requests.values())item.abort();requests.clear();}
+  function cancelPage(){cancelRequests();for(const url of resourceURLs)URL.revokeObjectURL(url);resourceURLs.clear();}
+  async function refreshBootstrap(server=serverGeneration,probe=false){
     const attempt=++bootstrapSequence;
-    const result=await XTYFNative.invoke('request',{path:'/api/client/bootstrap',method:'GET',headers:{'X-XTYF-Client-Protocol':'1'},requestId:'bootstrap-'+(++sequence)});
+    const reply=probe&&supports('website_fallback')
+      ?await XTYFNative.invoke('probe_connection',{})
+      :await XTYFNative.invoke('request',{path:'/api/client/bootstrap',method:'GET',headers:{'X-XTYF-Client-Protocol':'1'},requestId:'bootstrap-'+(++sequence)});
     if(server!==serverGeneration||attempt!==bootstrapSequence)throw Object.assign(new DOMException('初始化已被替换','AbortError'),{superseded:true});
-    if(result.status===404){compatible=false;compatibilityRejected=true;throw Object.assign(new Error('服务器需要更新：请部署支持本地客户端的服务器版本。'),{incompatible:true});}
-    let data;try{data=JSON.parse(result.body);}catch(_){data=null;}
-    if(result.status<200||result.status>=300)throw new Error(data?.error||'服务器暂时不可用（'+result.status+'）');
-    if(!data||typeof data!=='object'||Array.isArray(data)||!XTYFUpdates.compatibleServer(data)){compatible=false;compatibilityRejected=true;throw Object.assign(new Error('服务器协议不兼容，请更新服务器或客户端后重试。'),{incompatible:true});}
-    if(result.status!==200||!data.ok)throw new Error(data.error||'服务器暂时不可用');
-    bootstrap=data;compatible=true;compatibilityRejected=false;connection('');return data;
+    if(probe&&supports('website_fallback')){
+      config.effectiveServerUrl=reply.effectiveServerUrl;
+      document.getElementById('effective-server-url').textContent='实际连接：'+(config.effectiveServerUrl||config.serverUrl);
+    }
+    const result=probe&&supports('website_fallback')?reply.response:reply;
+    const outcome=XTYFConnection.classify(result,XTYFUpdates.compatibleServer);
+    if(outcome.mode==='website'){compatible=false;compatibilityRejected=true;throw Object.assign(new Error(outcome.message),{incompatible:true});}
+    if(outcome.mode==='error')throw new Error(outcome.message);
+    bootstrap=outcome.data;compatible=true;compatibilityRejected=false;connection('');return bootstrap;
   }
   function normalized(value){const u=new URL(value,localBase+route);return u.pathname+u.search+u.hash;}
   function setRoute(value,replace=false,render=true){
@@ -108,7 +117,7 @@
   }
   function navigate(value,replace=false){
     const u=new URL(value,localBase+route);
-    if(!isLocal(u)&&(!config.serverUrl||u.origin!==new URL(config.serverUrl).origin))return XTYFNative.invoke('open_external',{url:u.href}).catch(error=>notify(error.message));
+    if(!isLocal(u)&&!isServer(u))return XTYFNative.invoke('open_external',{url:u.href}).catch(error=>notify(error.message));
     setRoute(u.pathname+u.search+u.hash,replace);
   }
   function localError(title,message){
@@ -116,9 +125,10 @@
     const section=document.createElement('section');section.className='local-error';
     const h=document.createElement('h1');h.textContent=title;
     const p=document.createElement('p');p.textContent=message;
-    const retry=document.createElement('button');retry.textContent='重试';retry.onclick=boot;
+    const retry=document.createElement('button');retry.textContent='重试';retry.onclick=()=>boot();
     const edit=document.createElement('button');edit.textContent='服务器设置';edit.onclick=openSettings;
     section.append(h,p,retry,edit);host.replaceChildren(section);
+    if(supports('website_fallback')){const website=document.createElement('button');website.textContent='打开网站';website.onclick=()=>openWebsite();section.append(website);}
     locallyReady=true;markHealthy();
   }
   function renderRoute(){
@@ -147,24 +157,59 @@
     frame.srcdoc=html.replace('<head>','<head><base href="'+localBase+'/"><script src="/page-runtime.js"></script>');
     host.replaceChildren(frame);document.title='巡天御风管理系统';
   }
+  async function openWebsite(automatic=false){
+    if(websiteOpening||websiteActive||!supports('website_fallback'))return;
+    if(!automatic&&!window.confirm('在客户端内打开网站？未保存的表单、头像裁剪及上传状态可能丢失。'))return;
+    websiteOpening=true;
+    const server=serverGeneration;
+    try{
+      await XTYFNative.invoke('open_website',{});
+      if(server!==serverGeneration)return;
+      websiteActive=true;cancelRequests();updates.visibility();if(settings.open)settings.close();
+      // Manual recovery may discover an HTTPS root even when bootstrap failed.
+      const current=await XTYFNative.invoke('get_config',{}).catch(()=>null);
+      if(server!==serverGeneration)return;
+      if(current){config={...config,...current};document.getElementById('effective-server-url').textContent='实际连接：'+(config.effectiveServerUrl||config.serverUrl);}
+      connection('已在客户端内打开网站。返回后可调整地址或重新尝试本地界面。');
+      locallyReady=true;markHealthy();
+    }catch(error){if(server===serverGeneration)connection('网站打开失败：'+error.message);}
+    finally{websiteOpening=false;}
+  }
   async function boot(){
     if(booting)return;booting=true;const server=serverGeneration,attempt=++bootSequence;
+    const cold=!sessionStarted;
+    const identity=value=>JSON.stringify([!!value.authenticated,value.me?.id,!!value.me?.must_change_password,value.permissions||{}]);
+    const previousIdentity=identity(bootstrap);
     try{
       const nextConfig=await XTYFNative.invoke('get_config',{});
       if(server!==serverGeneration||attempt!==bootSequence)return;
       config=nextConfig;document.getElementById('server-url').value=config.serverUrl;
       document.getElementById('client-version').textContent='客户端 '+config.version;
       nativeInitialized=true;document.getElementById('client-updates').hidden=!supports('ui_updates');
-      if(updatesServer!==config.serverUrl){updatesServer=config.serverUrl;updates.configure(config);}
+      document.getElementById('connection-website').hidden=!supports('website_fallback');
+      document.getElementById('settings-website').hidden=!supports('website_fallback');
+      document.getElementById('effective-server-url').textContent=supports('website_fallback')?'实际连接：'+(config.effectiveServerUrl||config.serverUrl):'';
       markHealthy();
-      await refreshBootstrap(server);
+      await refreshBootstrap(server,true);
       if(server!==serverGeneration||attempt!==bootSequence)return;
-      renderRoute();
+      // A connectivity retry must not replace the user's form/crop document.
+      // Authentication or permission changes still need the authoritative page.
+      if(cold||!frame||previousIdentity!==identity(bootstrap))renderRoute();
     }catch(error){
       if(server!==serverGeneration||attempt!==bootSequence||error.superseded)return;
-      if(error.incompatible)localError('服务器需要更新',error.message);
-      else{connection('暂时无法连接服务器，页面已在本地打开。'+(error.message?' '+error.message:''));if(!frame)renderRoute();}
-    }finally{if(attempt===bootSequence)booting=false;}
+      if(error.incompatible){
+        if(cold&&supports('website_fallback'))await openWebsite(true);
+        else if(!cold&&frame)connection(error.message+' 当前输入已保留，可手动打开网站。');
+        else localError('服务器需要更新',error.message);
+      }else{
+        const message='暂时无法连接服务器，页面已在本地打开。'+(error.message?' '+error.message:'');
+        connection(message);if(!frame)localError('暂时无法连接服务器',message);
+      }
+    }finally{if(attempt===bootSequence){
+      booting=false;sessionStarted=true;
+      const updateKey=config.serverUrl+'|'+(config.effectiveServerUrl||'');
+      if(updatesServer!==updateKey){updatesServer=updateKey;updates.configure(config);}
+    }}
   }
   function openSettings(){document.getElementById('server-url').value=config.serverUrl;document.getElementById('settings-error').textContent='';settings.showModal();}
   async function download(value,filename='download'){
@@ -207,14 +252,22 @@
     if(historyIndex>0){history.back();return true;}
     if(route!=='/'&&!route.startsWith('/login')){navigate('/',true);return true;}return false;
   }
-  window.XTYF={request,download,readResource,imageURL,preview:previewResource,navigate,notify,openSettings,localBase,isLocal,
+  window.XTYF={request,download,readResource,imageURL,preview:previewResource,navigate,notify,openSettings,localBase,isLocal,isServer,
     supports,pageReady:own=>{if(own===generation){locallyReady=true;markHealthy();}},
     invoke:(action,args)=>XTYFNative.invoke(action,args),get route(){return route;},get bootstrap(){return bootstrap;},get config(){return config;},get generation(){return generation;},
     replaceRoute:value=>setRoute(value,true,false),isPage:value=>Object.hasOwn(routes,new URL(value,localBase).pathname.replace(/\/$/,'')||'/'),
     openExternal:url=>XTYFNative.invoke('open_external',{url}),get compatible(){return compatible;}};
   window.XTYFClient={back};
   document.getElementById('client-settings-open').onclick=openSettings;document.getElementById('settings-cancel').onclick=()=>settings.close();
-  document.getElementById('connection-retry').onclick=boot;
+  document.getElementById('connection-retry').onclick=()=>boot();
+  document.getElementById('connection-website').onclick=()=>openWebsite();
+  document.getElementById('settings-website').onclick=()=>openWebsite();
+  window.addEventListener('xtyf-website-return',event=>{
+    websiteActive=false;updates.visibility();
+    connection(compatible?'':'已返回本地界面。可重试连接、调整地址或再次打开网站。');
+    if(event.detail?.intent==='settings')openSettings();
+    else if(event.detail?.intent==='retry')boot();
+  });
   document.getElementById('updates-check').onclick=()=>updates.check(true);
   document.getElementById('updates-apply').onclick=async()=>{
     if(updateState.status!=='pending'||!window.confirm('立即重载页面？未保存的表单、头像裁剪及上传状态可能丢失。'))return;
@@ -244,7 +297,7 @@
     serverGeneration++;bootSequence++;bootstrapSequence++;booting=false;updates.dispose();updatesServer=null;
     try{
       const result=await XTYFNative.invoke('set_server',{serverUrl:document.getElementById('server-url').value.trim()});
-      config={...config,...result};cancelPage();bootstrap=anonymousBootstrap();compatible=false;compatibilityRejected=false;historyIndex=0;
+      config={...config,...result};cancelPage();bootstrap=anonymousBootstrap();compatible=false;compatibilityRejected=false;historyIndex=0;websiteActive=false;
       if(previewDialog.open)closePreview();
       settings.close();navigate('/login',true);await boot();
     }catch(error){document.getElementById('settings-error').textContent=error.message;await boot();}finally{button.disabled=false;}
