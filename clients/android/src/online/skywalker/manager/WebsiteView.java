@@ -5,10 +5,10 @@ import android.content.*;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.*;
+import android.view.KeyEvent;
 import android.webkit.*;
 import android.webkit.CookieManager;
-import android.widget.*;
+import android.widget.FrameLayout;
 import org.json.*;
 import java.io.*;
 import java.net.*;
@@ -34,8 +34,6 @@ final class WebsiteView {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Dialog dialog;
     private final WebView web;
-    private final LinearLayout controls;
-    private final Button menu;
     private volatile long generation;
     private volatile boolean closed;
     private final Set<HttpURLConnection> connections = Collections.synchronizedSet(new HashSet<HttpURLConnection>());
@@ -52,25 +50,9 @@ final class WebsiteView {
         dialog = new Dialog(activity, android.R.style.Theme_Material_Light_NoActionBar);
         FrameLayout root = new FrameLayout(activity);
         root.setOnApplyWindowInsetsListener((v, insets) -> { v.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom()); return insets; });
-        LinearLayout content = new LinearLayout(activity); content.setOrientation(LinearLayout.VERTICAL);
-        controls = new LinearLayout(activity); controls.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout actions = new LinearLayout(activity); HorizontalScrollView scroll = new HorizontalScrollView(activity); scroll.addView(actions);
         web = new WebView(activity); host.configure(web);
         web.getSettings().setSupportMultipleWindows(true);
-        actions.addView(button("返回", () -> { if (web.canGoBack()) web.goBack(); else leave("return"); }));
-        actions.addView(button("首页", () -> confirm(() -> web.loadUrl(origin + "/"))));
-        actions.addView(button("重载", () -> confirm(web::reload)));
-        actions.addView(button("设置", () -> leave("settings")));
-        actions.addView(button("本地界面", () -> leave("retry")));
-        TextView address = new TextView(activity); address.setText("网站模式 · " + origin); address.setPadding(12, 4, 12, 4);
-        controls.addView(scroll); controls.addView(address);
-        content.addView(controls); content.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
-        root.addView(content, new FrameLayout.LayoutParams(-1, -1));
-        menu = button("菜单", () -> setControlsVisible(controls.getVisibility() != View.VISIBLE));
-        menu.setMinHeight(dp(48)); menu.setMinimumHeight(dp(48));
-        FrameLayout.LayoutParams menuLayout = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.END);
-        menuLayout.setMargins(dp(12), dp(12), dp(12), dp(12));
-        root.addView(menu, menuLayout); setControlsVisible(false); dialog.setContentView(root);
+        root.addView(web, new FrameLayout.LayoutParams(-1, -1)); dialog.setContentView(root);
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 if (WebsitePolicy.trusted(origin, request.getUrl().toString())) return false;
@@ -122,22 +104,13 @@ final class WebsiteView {
         dialog.setOnKeyListener((d,key,event) -> {
             if (key != KeyEvent.KEYCODE_BACK) return false;
             if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) {
-                if (controls.getVisibility() == View.VISIBLE) setControlsVisible(false);
-                else if (web.canGoBack()) web.goBack();
+                if (web.canGoBack()) web.goBack();
                 else leave("return");
             }
             return true;
         });
         dialog.setOnDismissListener(d -> { closed = true; invalidate(); web.destroy(); });
     }
-    private int dp(int value) { return Math.round(value * activity.getResources().getDisplayMetrics().density); }
-    private void setControlsVisible(boolean visible) {
-        // Keep the same WebView and document: toggling the menu must not navigate or discard drafts.
-        controls.setVisibility(visible ? View.VISIBLE : View.GONE);
-        menu.setText(visible ? "收起菜单" : "菜单");
-        menu.setContentDescription(visible ? "收起客户端菜单" : "展开客户端菜单");
-    }
-    private Button button(String text, Runnable action) { Button button = new Button(activity); button.setText(text); button.setAllCaps(false); button.setOnClickListener(v -> action.run()); return button; }
     private void confirm(Runnable action) {
         new AlertDialog.Builder(activity).setMessage("未保存的内容可能丢失，是否继续？").setPositiveButton("继续", (d,w) -> action.run()).setNegativeButton("取消", null).show();
     }

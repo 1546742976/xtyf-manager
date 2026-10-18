@@ -68,7 +68,7 @@ impl Drop for Scratch {
     fn drop(&mut self) { assert_eq!(self.0.parent(), Some(std::env::temp_dir().as_path())); let _ = fs::remove_dir_all(&self.0); }
 }
 fn state(server: &str, directory: &std::path::Path) -> AppState {
-    AppState { server: Mutex::new(server.into()), effective_server: Mutex::new(None), website_epoch:std::sync::atomic::AtomicU64::new(0), website_menu_open:std::sync::atomic::AtomicBool::new(false), connection_gate:tokio::sync::Mutex::new(()), website_files:Mutex::new(std::collections::HashSet::new()), directory: directory.into(), sessions: Mutex::new(HashMap::new()), files: Mutex::new(HashMap::new()), requests: Mutex::new(HashMap::new()), updates: Mutex::new(native_updates::Runtime::new(directory,server,0)), update_gate: tokio::sync::Mutex::new(()) }
+    AppState { server: Mutex::new(server.into()), effective_server: Mutex::new(None), website_epoch:std::sync::atomic::AtomicU64::new(0), connection_gate:tokio::sync::Mutex::new(()), website_files:Mutex::new(std::collections::HashSet::new()), directory: directory.into(), sessions: Mutex::new(HashMap::new()), files: Mutex::new(HashMap::new()), requests: Mutex::new(HashMap::new()), updates: Mutex::new(native_updates::Runtime::new(directory,server,0)), update_gate: tokio::sync::Mutex::new(()) }
 }
 async fn call(state: &AppState, args: Value) -> Value { response_value(send_request(state, &args).await.unwrap(), false).await.unwrap() }
 fn echo(request: Incoming) -> Outgoing {

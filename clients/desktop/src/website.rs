@@ -1,8 +1,5 @@
 use super::*;
-use std::borrow::Cow;
 use tauri::webview::{DownloadEvent, NewWindowResponse, PermissionResponse, WebviewBuilder};
-
-const TOOLBAR_HEIGHT: f64 = 80.0;
 
 /// Discovery is anonymous. A server may upgrade its own HTTP origin, but never
 /// redirect credentials to another host/port or downgrade an HTTPS connection.
@@ -105,10 +102,19 @@ fn browse_elsewhere(app: &tauri::AppHandle, url: &Url) {
     let _ = app.run_on_main_thread(move || { let _ = external(&handle, &address); });
 }
 
-fn download_status(app: &tauri::AppHandle, message: &str) {
-    if let Some(view) = app.get_webview("website-controls") {
-        let _ = view.eval(&format!("document.getElementById('status').textContent={};", json!(message)));
-    }
+fn download_error(app: &tauri::AppHandle, generation: u64, epoch: u64, message: String) {
+    let app = app.clone();
+    // Never open a modal dialog from a WebView download callback. Ignore late
+    // failures from a closed website or a server that is no longer selected.
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        if state.updates.lock().unwrap().generation != generation
+            || state.website_epoch.load(std::sync::atomic::Ordering::SeqCst) != epoch
+            || app.get_webview("website-page").is_none() { return; }
+        rfd::AsyncMessageDialog::new().set_title("网站文件下载失败")
+            .set_description(message).set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok).show().await;
+    });
 }
 
 fn save_download(source: &std::path::Path, target: &std::path::Path, current: impl Fn() -> bool) -> Result<(), String> {
@@ -126,41 +132,18 @@ fn save_download(source: &std::path::Path, target: &std::path::Path, current: im
     result
 }
 
-fn menu_bounds(app: &tauri::AppHandle, size: tauri::PhysicalSize<u32>) -> (tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>, u32) {
-    let scale = app.get_window("workspace").and_then(|w| w.scale_factor().ok()).unwrap_or(1.0);
-    let pixels = |value: f64| (value * scale).round() as u32;
-    if app.state::<AppState>().website_menu_open.load(std::sync::atomic::Ordering::SeqCst) {
-        let height = pixels(TOOLBAR_HEIGHT).min(size.height);
-        (tauri::PhysicalPosition::new(0, 0), tauri::PhysicalSize::new(size.width, height), height)
-    } else {
-        let width = pixels(68.0).min(size.width);
-        let height = pixels(40.0).min(size.height);
-        let x = size.width.saturating_sub(width + pixels(8.0));
-        let y = size.height.saturating_sub(height + pixels(8.0));
-        (tauri::PhysicalPosition::new(x as i32, y as i32), tauri::PhysicalSize::new(width, height), 0)
-    }
-}
-
 pub fn resize(app: &tauri::AppHandle, size: tauri::PhysicalSize<u32>) {
-    let (position, controls_size, height) = menu_bounds(app, size);
-    if let Some(view) = app.get_webview("website-controls") {
-        let _ = view.set_position(position);
-        let _ = view.set_size(controls_size);
-    }
     if let Some(view) = app.get_webview("website-page") {
-        let _ = view.set_position(tauri::PhysicalPosition::new(0, height as i32));
-        let _ = view.set_size(tauri::PhysicalSize::new(size.width, size.height.saturating_sub(height)));
+        let _ = view.set_position(tauri::PhysicalPosition::new(0, 0));
+        let _ = view.set_size(size);
     }
 }
 
 pub fn close(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.website_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    state.website_menu_open.store(false, std::sync::atomic::Ordering::SeqCst);
     let downloads:Vec<_> = state.website_files.lock().unwrap().drain().collect();
-    for label in ["website-page", "website-controls"] {
-        if let Some(view) = app.get_webview(label) { let _ = view.close(); }
-    }
+    if let Some(view) = app.get_webview("website-page") { let _ = view.close(); }
     // Tauri suppresses DownloadFinished after a view has been removed. Retain
     // its private paths here and clean them after the engine releases its files.
     if !downloads.is_empty() {
@@ -189,25 +172,6 @@ pub fn return_local(app: &tauri::AppHandle, intent: &str) -> Result<Value, Strin
     Ok(json!({"returned":true}))
 }
 
-pub fn control(app: &tauri::AppHandle, state: &AppState, action: &str, args: &Value) -> Result<Value, String> {
-    if action == "return_local" { return return_local(app, text(args, "intent")); }
-    let view = app.get_webview("website-page").ok_or("网站页面已关闭")?;
-    if action == "website_menu" {
-        let expanded = args.get("expanded").and_then(Value::as_bool).ok_or("菜单状态无效")?;
-        let size = app.get_window("workspace").ok_or("主窗口不存在")?.inner_size().map_err(|e| e.to_string())?;
-        state.website_menu_open.store(expanded, std::sync::atomic::Ordering::SeqCst);
-        resize(app, size);
-        return Ok(json!({"expanded":expanded}));
-    }
-    match action {
-        "website_back" => view.eval("history.back()"),
-        "website_reload" => view.reload(),
-        "website_home" => view.navigate(server_path(&view.url().map_err(|e|e.to_string())?.origin().ascii_serialization(), "/")?),
-        _ => return Err("网站工具栏没有业务权限".into()),
-    }.map_err(|e| e.to_string())?;
-    Ok(Value::Null)
-}
-
 pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Result<Value, String> {
     let runtime = state.updates.lock().unwrap();
     let configured = state.server.lock().unwrap();
@@ -221,19 +185,6 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
     let epoch = state.website_epoch.load(std::sync::atomic::Ordering::SeqCst);
     let window = app.get_window("workspace").ok_or("主窗口不存在")?;
     let size = window.inner_size().map_err(|e| e.to_string())?;
-    state.website_menu_open.store(false, std::sync::atomic::Ordering::SeqCst);
-    let (position, controls_size, _) = menu_bounds(app, size);
-    let mut toolbar = WebviewBuilder::new("website-controls", WebviewUrl::App("website-controls.html".into()))
-        .on_navigation(local_url)
-        .on_web_resource_request(|request, response| {
-            if request.uri().path() != "/website-controls.html" { return; }
-            *response.status_mut() = tauri::http::StatusCode::OK;
-            *response.body_mut() = Cow::Borrowed(include_bytes!("website_controls.html"));
-            response.headers_mut().remove("Content-Length");
-            response.headers_mut().insert("Content-Type", "text/html; charset=utf-8".parse().unwrap());
-            response.headers_mut().insert("Cache-Control", "no-store".parse().unwrap());
-        });
-    if smoke_directory().is_some() { toolbar = toolbar.data_directory(state.directory.join("webview")); }
     let navigate_app = app.clone(); let navigate_origin = origin.clone();
     let popup_app = app.clone(); let popup_origin = origin.clone();
     let download_origin = origin.clone(); let download_app = app.clone();
@@ -267,7 +218,6 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
                     download_app.state::<AppState>().website_files.lock().unwrap().insert(temporary.clone());
                     pending.lock().unwrap().insert(temporary.clone(), (name, url.to_string()));
                     *destination = temporary;
-                    download_status(&download_app, "正在下载，完成后请选择保存位置");
                     true
                 },
                 DownloadEvent::Finished { path, success, url } => {
@@ -276,7 +226,9 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
                             if !success || !current() {
                                 let _ = fs::remove_file(&path);
                                 download_app.state::<AppState>().website_files.lock().unwrap().remove(&path);
-                                download_status(&download_app, "文件下载已取消或失败，原文件未更改");
+                                if !success && current() {
+                                    download_error(&download_app, generation, epoch, "文件下载失败，请重试；原文件未更改".into());
+                                }
                             } else {
                                 let app = download_app.clone();
                                 tauri::async_runtime::spawn(async move {
@@ -288,9 +240,9 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
                                     }
                                     if let Some(target) = selected {
                                         if let Err(error) = save_download(&path, target.path(), || state.updates.lock().unwrap().generation == generation && state.website_epoch.load(std::sync::atomic::Ordering::SeqCst) == epoch) {
-                                            download_status(&app, &format!("文件保存失败，原文件未更改：{error}"));
-                                        } else { download_status(&app, "文件已保存"); }
-                                    } else { let _ = fs::remove_file(&path); download_status(&app, "已取消保存，原文件未更改"); }
+                                            download_error(&app, generation, epoch, format!("文件保存失败，原文件未更改：{error}"));
+                                        }
+                                    } else { let _ = fs::remove_file(&path); }
                                     state.website_files.lock().unwrap().remove(&path);
                                 });
                             }
@@ -299,7 +251,7 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
                         let mut files = pending.lock().unwrap();
                         let paths:Vec<_> = files.iter().filter(|(_, (_, source))| source == url.as_str()).map(|(path, _)| path.clone()).collect();
                         for path in paths { files.remove(&path); let _ = fs::remove_file(&path); download_app.state::<AppState>().website_files.lock().unwrap().remove(&path); }
-                        download_status(&download_app, "文件下载失败，请重试");
+                        download_error(&download_app, generation, epoch, "文件下载失败，请重试".into());
                     }
                     true
                 },
@@ -312,12 +264,6 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
     if smoke_directory().is_some() { builder = builder.data_directory(state.directory.join("webview")); }
     match window.add_child(builder, tauri::PhysicalPosition::new(0, 0), size) {
         Ok(view) => {
-            // Create the trusted controls last so the small menu entry remains
-            // above the full-height website without giving the site native IPC.
-            if let Err(error) = window.add_child(toolbar, position, controls_size) {
-                close(app);
-                return Err(error.to_string());
-            }
             if let Some(local) = app.get_webview("main") { let _ = local.hide(); }
             let _ = view.set_focus();
             Ok(json!({"opened":true,"effectiveServerUrl":origin.origin().ascii_serialization()}))
