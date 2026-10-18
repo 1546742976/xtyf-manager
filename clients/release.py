@@ -1,4 +1,4 @@
-"""Increment the shared version, build four installers, then replace old releases locally."""
+"""Build four installers for a new version or an explicitly confirmed current-version rebuild."""
 from __future__ import annotations
 
 import argparse
@@ -80,6 +80,70 @@ def requested_config(root, requested):
     if version_parts(requested) <= version_parts(current['version']):
         raise ValueError(f'Confirmed version {requested} must be newer than the released {current["version"]}')
     return {**current, 'version': requested, 'versionCode': current['versionCode'] + 1}
+
+
+def rebuild_config(root, requested):
+    """Rebuild only the current release, without rewriting any version metadata."""
+    if not requested:
+        raise ValueError('--rebuild-current requires an explicit --version X.Y.Z')
+    version_parts(requested)
+    config = read_json(root / 'clients/config.json')
+    current = release_state(root)
+    report_path = root / 'dist/clients/build-report.json'
+    report = read_json(report_path) if report_path.is_file() else {}
+    if (requested != config['version'] or requested != current['version']
+            or report.get('version') != requested
+            or report.get('android', {}).get('versionCode') != config['versionCode']
+            or current['versionCode'] != config['versionCode']):
+        raise ValueError('Same-version rebuild must match the current config and latest published version/versionCode')
+    for relative in ('clients/desktop/tauri.conf.json', 'clients/desktop/package.json', 'clients/desktop/package-lock.json'):
+        value = read_json(root / relative)
+        if value.get('version') != requested or ('packages' in value and value['packages'][''].get('version') != requested):
+            raise ValueError(f'Version metadata does not match the current release: {relative}')
+    for relative, pattern in (
+        ('clients/desktop/Cargo.toml', r'(?m)^version\s*=\s*"([^"]+)"'),
+        ('clients/desktop/Cargo.lock', r'\[\[package\]\]\s*name = "xtyf-manager"\s*version = "([^"]+)"'),
+    ):
+        match = re.search(pattern, (root / relative).read_text(encoding='utf-8'))
+        if not match or match[1] != requested:
+            raise ValueError(f'Version metadata does not match the current release: {relative}')
+    manifest = ET.parse(root / 'clients/android/AndroidManifest.xml').getroot()
+    if (manifest.get(f'{{{ANDROID_NS}}}versionName') != requested
+            or manifest.get(f'{{{ANDROID_NS}}}versionCode') != str(config['versionCode'])):
+        raise ValueError('Android version metadata does not match the current release')
+    return config
+
+
+def source_revision(root):
+    """Record the source identity; fake-builder tests need not be Git checkouts."""
+    try:
+        commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, check=True, capture_output=True, text=True).stdout.strip()
+        status = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=root, check=True, capture_output=True, text=True).stdout
+        return {'commit': commit, 'trackedChanges': bool(status)}
+    except (OSError, subprocess.CalledProcessError):
+        return {'commit': None, 'trackedChanges': None}
+
+
+def backup_current_release(root, output, names, snapshots, version):
+    directory = (output / '.rebuild-backups').resolve()
+    if not directory.is_relative_to(output):
+        raise RuntimeError('Rebuild backup must stay inside the client release directory')
+    directory.mkdir(exist_ok=True)
+    backup = Path(tempfile.mkdtemp(prefix=f'{version}-', dir=directory))
+    for relative in names:
+        source = output / relative
+        if source.exists():
+            if source.is_symlink() or not source.resolve().is_relative_to(output):
+                raise RuntimeError(f'Unexpected installer path: {source}')
+            target = backup / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+    for relative, content in snapshots.items():
+        if content is not None:
+            target = backup / ('version-metadata/' + relative if relative in VERSION_FILES else str(Path(relative).relative_to('dist/clients')))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+    return backup
 
 
 def sync_versions(root, config):
@@ -209,15 +273,17 @@ def verify_shared_frontend(root, staging, version, windows, linux):
     return digest
 
 
-def release(root=ROOT, runner=run_command, requested_version=None):
+def release(root=ROOT, runner=run_command, requested_version=None, rebuild_current=False):
     root = Path(root).resolve()
     output = (root / 'dist/clients').resolve()
     if not output.is_relative_to(root):
         raise RuntimeError('Client release output must stay inside the project')
     output.mkdir(parents=True, exist_ok=True)
     with release_lock(output):
-        config = requested_config(root, requested_version) if requested_version else next_config(root)
+        config = (rebuild_config(root, requested_version) if rebuild_current else
+                  requested_config(root, requested_version) if requested_version else next_config(root))
         version = config['version']
+        source_info = source_revision(root)
         # Fail on missing Linux tools before changing versions or building other platforms.
         runner([sys.executable, root / 'clients/build_linux.py', '--check'], root)
         powershell = shutil.which('pwsh') or shutil.which('powershell') or 'powershell'
@@ -226,8 +292,10 @@ def release(root=ROOT, runner=run_command, requested_version=None):
         snapshots = {relative: (root / relative).read_bytes() if (root / relative).exists() else None for relative in rollback_files}
         staging = Path(tempfile.mkdtemp(prefix='.release-', dir=output)).resolve()
         published = []
+        backup = None
         try:
-            sync_versions(root, config)
+            if not rebuild_current:
+                sync_versions(root, config)
             print(f'Building version {version}, Android versionCode {config["versionCode"]}', flush=True)
             runner([sys.executable, root / 'clients/build_frontend.py'], root)
             runner([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', root / 'clients/build_windows.ps1', '-OutputDirectory', staging / 'windows'], root)
@@ -248,9 +316,18 @@ def release(root=ROOT, runner=run_command, requested_version=None):
             windows = windows_verification(staging, version)
             linux = linux_verification(staging, version)
             frontend_digest = verify_shared_frontend(root, staging, version, windows, linux)
+            blockmap = names[0] + '.blockmap'
+            if rebuild_current:
+                for relative in VERSION_FILES:
+                    if (root / relative).read_bytes() != snapshots[relative]:
+                        raise RuntimeError(f'Same-version rebuild changed version metadata: {relative}')
+                backup = backup_current_release(root, output, names + [blockmap], snapshots, version)
             report = {
                 'createdAt': datetime.now(timezone.utc).isoformat(),
                 'version': version, 'serverUrl': config['serverUrl'], 'artifacts': artifacts,
+                'releaseMode': 'same-version-rebuild' if rebuild_current else 'new-version',
+                'source': source_info,
+                'previousReleaseBackup': backup.relative_to(output).as_posix() if backup else None,
                 'windows': windows,
                 'android': {'package': 'online.skywalker.manager', 'versionCode': config['versionCode'], 'signatureAndAlignmentVerified': True, 'localResourcesVerified': True, 'frontendManifestSha256': frontend_digest, 'runtimeUiVerified': False},
                 'linux': linux,
@@ -261,27 +338,47 @@ def release(root=ROOT, runner=run_command, requested_version=None):
             write_json(staging / 'build-report.json', report)
             (staging / 'SHA256SUMS.txt').write_text(''.join(a['sha256'] + '  ' + a['file'] + '\n' for a in artifacts), encoding='utf-8')
             # All four installers and their validation passed before any is published.
-            blockmap = names[0] + '.blockmap'
-            for relative in names + ([blockmap] if (staging / blockmap).is_file() else []):
+            publish_names = names + ([blockmap] if (staging / blockmap).is_file() else [])
+            for relative in publish_names:
                 destination = output / relative
-                if destination.exists():
+                if destination.exists() and not rebuild_current:
                     raise RuntimeError(f'Refusing to overwrite an existing release: {destination}')
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 published.append(destination)
-                shutil.copy2(staging / relative, destination)
+                if rebuild_current:
+                    (staging / relative).replace(destination)
+                else:
+                    shutil.copy2(staging / relative, destination)
+            if rebuild_current and (backup / blockmap).is_file() and blockmap not in publish_names:
+                published.append(output / blockmap)
+                (output / blockmap).unlink()
             # Reports are replaced only after all four installer copies succeed.
             for name in ('build-report.json', 'SHA256SUMS.txt'):
                 (staging / name).replace(output / name)
         except BaseException:
+            recovery_errors = []
             for relative, content in snapshots.items():
                 path = root / relative
-                if content is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    path.write_bytes(content)
+                try:
+                    if content is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.write_bytes(content)
+                except OSError as exc:
+                    recovery_errors.append(f'{path}: {exc}')
             for path in published:
-                path.unlink(missing_ok=True)
-            print('Release failed; previous version and installers were preserved.', file=sys.stderr)
+                previous = backup / path.relative_to(output) if backup else None
+                try:
+                    if previous is not None and previous.is_file():
+                        shutil.copy2(previous, path)
+                    else:
+                        path.unlink(missing_ok=True)
+                except OSError as exc:
+                    recovery_errors.append(f'{path}: {exc}')
+            if recovery_errors:
+                print(f'Release failed; automatic recovery needs attention. Backup: {backup}\n' + '\n'.join(recovery_errors), file=sys.stderr)
+            else:
+                print('Release failed; previous version and installers were preserved.', file=sys.stderr)
             raise
         finally:
             if staging.parent != output.resolve() or not staging.name.startswith('.release-'):
@@ -310,12 +407,15 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Preview the next version without writing files or building')
     parser.add_argument('--version', metavar='X.Y.Z',
                         help='Release this exact confirmed version instead of auto-incrementing the patch')
+    parser.add_argument('--rebuild-current', action='store_true',
+                        help='Rebuild the explicit current --version without incrementing versionCode; retain old installers in a backup')
     args = parser.parse_args()
     if args.dry_run:
-        config = requested_config(ROOT, args.version) if args.version else next_config(ROOT)
+        config = (rebuild_config(ROOT, args.version) if args.rebuild_current else
+                  requested_config(ROOT, args.version) if args.version else next_config(ROOT))
         print(json.dumps(config, ensure_ascii=False, indent=2))
     else:
-        release(requested_version=args.version)
+        release(requested_version=args.version, rebuild_current=args.rebuild_current)
 
 
 if __name__ == '__main__':

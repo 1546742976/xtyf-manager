@@ -324,6 +324,138 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(module.read_json(self.root / 'clients/config.json')['version'], '2.0.0')
         self.assertEqual(module.next_config(self.root)['version'], '2.0.1')
 
+    def assert_current_release_unchanged(self):
+        self.assert_rollback()
+        for file in self.old:
+            self.assertEqual(file.read_bytes(), b'previous installer', str(file))
+
+    def test_rebuild_requires_an_explicit_exact_current_version(self):
+        for requested in (None, '1.0.8', '1.0.10', '2.0'):
+            with self.subTest(requested=requested):
+                with self.assertRaises(ValueError):
+                    module.release(self.root, self.builder, requested_version=requested, rebuild_current=True)
+                self.assert_current_release_unchanged()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(module.rebuild_config(self.root, '1.0.9'), self.config)
+
+    def test_rebuild_rejects_reverted_or_inconsistent_version_metadata(self):
+        cases = (
+            ('clients/config.json', self.original['clients/config.json'].replace(b'1.0.9', b'1.0.8')),
+            ('dist/clients/build-report.json', b'{"version":"1.0.9","android":{"versionCode":12}}'),
+            ('clients/desktop/Cargo.lock', b'[[package]]\nname = "xtyf-manager"\nversion = "1.0.8"\n'),
+            ('clients/android/AndroidManifest.xml', self.original['clients/android/AndroidManifest.xml'].replace(b'"11"', b'"12"')),
+        )
+        for relative, content in cases:
+            with self.subTest(relative=relative):
+                path = self.root / relative
+                path.write_bytes(content)
+                with self.assertRaises(ValueError):
+                    module.rebuild_config(self.root, '1.0.9')
+                self.assertEqual(path.read_bytes(), content)
+                path.write_bytes(self.original[relative])
+        newer = self.output / 'linux/XTYF-Manager-1.0.20-arm64.deb'
+        newer.write_bytes(b'newer release')
+        with self.assertRaises(ValueError):
+            module.rebuild_config(self.root, '1.0.9')
+
+    def test_rebuild_preserves_version_bytes_and_backs_up_previous_delivery(self):
+        revision = {'commit': 'a' * 40, 'trackedChanges': False}
+        with patch.object(module, 'source_revision', return_value=revision):
+            report = module.release(self.root, self.builder, requested_version='1.0.9', rebuild_current=True)
+        self.assertEqual(report['version'], '1.0.9')
+        self.assertEqual(report['android']['versionCode'], 11)
+        self.assertEqual(report['releaseMode'], 'same-version-rebuild')
+        self.assertEqual(report['source'], revision)
+        self.assertEqual(len(self.calls), 6)
+        backup = self.output / report['previousReleaseBackup']
+        self.assertTrue(backup.is_relative_to(self.output / '.rebuild-backups'))
+        for relative in module.VERSION_FILES:
+            self.assertEqual((self.root / relative).read_bytes(), self.original[relative])
+            self.assertEqual((backup / 'version-metadata' / relative).read_bytes(), self.original[relative])
+        for file in self.old:
+            self.assertNotEqual(file.read_bytes(), b'previous installer')
+            self.assertEqual((backup / file.relative_to(self.output)).read_bytes(), b'previous installer')
+        for name in ('build-report.json', 'SHA256SUMS.txt'):
+            self.assertEqual((backup / name).read_bytes(), self.original['dist/clients/' + name])
+        for artifact in report['artifacts']:
+            self.assertEqual(hashlib.sha256((self.output / artifact['file']).read_bytes()).hexdigest(), artifact['sha256'])
+        self.assertEqual(module.next_config(self.root)['versionCode'], 12)
+
+    def test_rebuild_build_failure_keeps_previous_delivery(self):
+        def fail_linux(command, root):
+            if '--output-dir' in command and Path(command[1]).name == 'build_linux.py':
+                raise subprocess.CalledProcessError(1, command)
+            self.builder(command, root)
+        with self.assertRaises(subprocess.CalledProcessError):
+            module.release(self.root, fail_linux, requested_version='1.0.9', rebuild_current=True)
+        self.assert_current_release_unchanged()
+        self.assertFalse((self.output / '.rebuild-backups').exists())
+
+    def test_rebuild_rejects_builder_version_mutation_before_publication(self):
+        def mutate_version(command, root):
+            self.builder(command, root)
+            if '--output-dir' in command and Path(command[1]).name == 'build_linux.py':
+                path = root / 'clients/desktop/Cargo.toml'
+                path.write_bytes(path.read_bytes() + b'\n')
+        with self.assertRaisesRegex(RuntimeError, 'changed version metadata'):
+            module.release(self.root, mutate_version, requested_version='1.0.9', rebuild_current=True)
+        self.assert_current_release_unchanged()
+
+    def test_rebuild_backup_failure_does_not_replace_old_files(self):
+        original_copy = module.shutil.copy2
+        def fail_backup(source, destination):
+            if '.rebuild-backups' in Path(destination).parts and Path(destination).suffix == '.rpm':
+                Path(destination).write_bytes(b'incomplete backup')
+                raise OSError('simulated backup disk error')
+            return original_copy(source, destination)
+        with patch.object(module.shutil, 'copy2', fail_backup), self.assertRaisesRegex(OSError, 'backup disk error'):
+            module.release(self.root, self.builder, requested_version='1.0.9', rebuild_current=True)
+        self.assert_current_release_unchanged()
+        self.assertTrue(list((self.output / '.rebuild-backups').glob('*')))
+
+    def test_rebuild_each_publish_failure_restores_all_old_files_and_retains_backup(self):
+        original_replace = Path.replace
+        targets = [file.name for file in self.old] + ['build-report.json', 'SHA256SUMS.txt']
+        for name in targets:
+            with self.subTest(name=name):
+                def fail_publish(path, destination):
+                    if Path(destination).name == name:
+                        raise OSError('simulated replacement failure')
+                    return original_replace(path, destination)
+                with patch.object(Path, 'replace', fail_publish), self.assertRaisesRegex(OSError, 'replacement failure'):
+                    module.release(self.root, self.builder, requested_version='1.0.9', rebuild_current=True)
+                self.assert_current_release_unchanged()
+        backups = list((self.output / '.rebuild-backups').glob('*'))
+        self.assertEqual(len(backups), len(targets))
+        for backup in backups:
+            for file in self.old:
+                self.assertEqual((backup / file.relative_to(self.output)).read_bytes(), b'previous installer')
+            self.assertEqual((backup / 'build-report.json').read_bytes(), self.original['dist/clients/build-report.json'])
+
+    def test_rebuild_removes_only_stale_blockmap_and_keeps_backup(self):
+        blockmap = self.old[0].with_suffix('.exe.blockmap')
+        blockmap.write_bytes(b'previous blockmap')
+        report = module.release(self.root, self.builder, requested_version='1.0.9', rebuild_current=True)
+        self.assertFalse(blockmap.exists())
+        backup = self.output / report['previousReleaseBackup']
+        self.assertEqual((backup / blockmap.relative_to(self.output)).read_bytes(), b'previous blockmap')
+
+    def test_rebuild_new_blockmap_is_removed_on_failure_without_old_blockmap(self):
+        def with_blockmap(command, root):
+            self.builder(command, root)
+            if '-OutputDirectory' in command:
+                out = Path(command[command.index('-OutputDirectory') + 1])
+                (out / 'XTYF-Manager-Setup-1.0.9-x64.exe.blockmap').write_bytes(b'new blockmap')
+        original_replace = Path.replace
+        def fail_report(path, destination):
+            if path.name == 'SHA256SUMS.txt':
+                raise OSError('simulated report failure')
+            return original_replace(path, destination)
+        with patch.object(Path, 'replace', fail_report), self.assertRaises(OSError):
+            module.release(self.root, with_blockmap, requested_version='1.0.9', rebuild_current=True)
+        self.assert_current_release_unchanged()
+        self.assertFalse(self.old[0].with_suffix('.exe.blockmap').exists())
+
 
 if __name__ == '__main__':
     unittest.main()
