@@ -15,7 +15,7 @@ from modules.workspace_settings import DARK_THEMES, LIGHT_THEMES, THEME_MODES, p
 PROTOCOL_VERSION = 1
 PUBLIC_USER_FIELDS = (
     "id", "name", "username", "role", "group_name", "must_change_password",
-    "ui_theme", "theme_mode", "light_theme", "dark_theme",
+    "ui_theme", "theme_mode", "light_theme", "dark_theme", "avatar_url",
 )
 
 
@@ -37,6 +37,7 @@ def create_client_blueprint(authenticate, statuses, priorities):
         return jsonify(
             ok=True,
             protocolVersion=PROTOCOL_VERSION,
+            uiCompatibility={"protocolMin": 1, "protocolMax": 1},
             authenticated=user is not None,
             user=public_user,
             me=public_user,

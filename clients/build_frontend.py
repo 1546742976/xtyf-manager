@@ -162,9 +162,12 @@ def build(output=DIST):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, destination)
     config = json.loads((ROOT / "clients" / "config.json").read_text(encoding="utf-8"))
-    manifest = {"protocolVersion":1,"version":config["version"],"templates":sorted(templates),"files":{}}
+    manifest = {"protocolVersion":1,"version":config["version"],"templates":sorted(templates),"files":{},"sizes":{}}
     for path in sorted(output.rglob("*")):
-        if path.is_file() and path.name != "asset-manifest.json": manifest["files"][path.relative_to(output).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        if path.is_file() and path.name != "asset-manifest.json":
+            name = path.relative_to(output).as_posix()
+            manifest["files"][name] = hashlib.sha256(path.read_bytes()).hexdigest()
+            manifest["sizes"][name] = path.stat().st_size
     (output / "asset-manifest.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n", encoding="utf-8")
     print(f"Local frontend: {len(templates)} templates, {len(manifest['files'])} assets -> {output}")
     return manifest

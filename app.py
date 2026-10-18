@@ -53,6 +53,7 @@ from modules.mail_service import configure as configure_mail
 from modules.security import init_security, migrate_security, write_initial_credentials
 from modules.workspace_settings import bp as workspace_settings_bp, migrate as migrate_workspace, theme_context
 from modules.client_api import create_client_blueprint
+from modules.client_updates import bp as client_updates_bp
 
 # ---- 关键路径与端口（secret.key 用于会话签名，首次运行自动生成）----
 SECRET_PATH = os.environ.get("PROGRESS_SECRET_PATH", os.path.join(BASE_DIR, "secret.key"))
@@ -576,6 +577,7 @@ def export_csv():
 
 # ---- 模块导入即初始化（幂等）：gunicorn 启动时自动完成建表与兜底账号 ----
 app.register_blueprint(create_client_blueprint(authenticate_login, STATUSES, PRIORITIES))
+app.register_blueprint(client_updates_bp)
 init_db()
 
 # ---- 本地调试入口（线上由 systemd 调用 gunicorn，不会走到这里）----

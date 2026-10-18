@@ -187,11 +187,13 @@ def init_security(app):
         native_client = request.headers.get("X-XTYF-Client-Protocol") == "1"
         if native_client and user is None and request.endpoint not in {
             "client_api.bootstrap", "client_api.login", "client_api.logout", "security.get_csrf",
+            "client_updates.updates", "client_updates.bundle_download",
         }:
             return _error("未登录", "authentication_required", 401)
         if user and user["must_change_password"] and request.endpoint not in {
             "static", "account", "api_password", "logout", "security.get_csrf",
             "client_api.bootstrap", "client_api.logout",
+            "client_updates.updates", "client_updates.bundle_download",
         }:
             if native_client or "/api/" in request.path:
                 return _error("请先在账户设置中修改初始密码", "password_change_required")

@@ -1,6 +1,6 @@
 # 本地界面客户端：Tauri 桌面端与 Android
 
-Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录页、全部业务页面、脚本、样式、字体和 PDF 阅读器随安装包内置。客户端只向配置服务器请求数据和文件；主界面不加载服务器 HTML，也不使用在线 CDN。
+Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录页、全部业务页面、脚本、样式、字体和 PDF 阅读器随安装包内置。支持更新协议的客户端还可从配置服务器下载经过发布者签名验证的完整页面资源，在本地加载；主界面不直接加载服务器 HTML，也不使用在线 CDN。
 
 默认服务器为 **http://manager.skywalker-rm.online/**。断网可以打开本地界面和服务器设置，业务操作需要联网。站外 HTTP/HTTPS 链接在 App 内独立浏览视图打开，具有返回、关闭入口，不调用系统浏览器。图片及 PDF 在 App 内预览，其余附件通过系统保存窗口下载。
 
@@ -28,6 +28,21 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 **构建客户端不会部署服务器。** 服务器上线必须包含本次接口源码；服务器源码包仍通过 `python deploy/package_release.py` 从 Git HEAD 独立生成，未提交的代码不会自动进入该源码包。线上兼容性必须在服务器实际更新后验证。
 
 ## 统一版本交付
+
+### 页面资源发布（不生成安装包）
+
+页面构建标识独立于客户端版本；纯页面发布不递增 `clients/config.json`。
+服务器发布入口 `python deploy/package_release.py` 从同一个 Git HEAD 构建网站源码及配套页面，校验后将签名资源放入源码包内的 `client-ui-release/`，随服务端一起上线。该命令只生成本地交付文件，不部署服务器。
+
+- 签名公钥为受版本控制的 `clients/update-public-key.pem`。独立私钥保存在被忽略的 `clients/signing/ui-update-private.pem`；需单独离线备份，不能放进源码包、安装包或服务器公开目录。
+- 默认读取该私钥，也可使用 `--ui-signing-key <path>` 或 `XTYF_UI_SIGNING_KEY`。密钥缺失或与公钥不匹配时发布失败，不生成无签名更新。
+- 发布序号在私钥旁的 `.sequence` 文件中单调递增。回退页面也须重新发布，使用更高序号指向旧页面内容；不要恢复较旧的序号文件。并行发布锁失败时先检查另一发布进程，不自动删除锁。
+- 默认没有安装包下载入口。已有正式发布产物时，通过 `--installers <reviewed.json>` 提供 `windows-x86_64`、`ubuntu-aarch64`、`fedora-x86_64`、`android` 的 `{version,url,sha256}`。先核对正式构建报告、SHA256SUMS 和实际上传文件；URL 必须是当前服务器内的路径，不能填写待构建产物。
+- 更新接口 `/api/client/updates` 和 `/api/client/ui/<id>.zip` 仅公开签名清单与公共页面，不含账户、数据库、头像、附件或配置。没有发布资源时客户端继续使用原界面。
+
+完整数据格式、资源限额和原生操作见 [页面更新协议](update-protocol.md)。旧客户端必须先安装一次支持此协议的版本。发布资源不能给旧壳增加新原生能力；能力不兼容时提示升级。页面更新与系统安装包更新是两条独立流程。
+
+### 安装包交付
 
 生成安装包前按 [项目交付约定](../AGENTS.md) 询问是否生成及目标版本号。先完成代码修改与必要验证，在项目根目录预览发布入口预计生成的版本：
 
