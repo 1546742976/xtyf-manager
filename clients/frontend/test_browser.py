@@ -28,7 +28,10 @@ def run():
     print('Preparing browser session...',flush=True)
     app=app_module.app
     client=app.test_client()
-    client.post('/login',json={'username':'admin','password':'ci-test-password-only'})
+    initial=client.post('/login',json={'username':'admin','password':'123456'})
+    assert initial.status_code==200 and initial.get_json()['ok'], 'isolated fixture login failed'
+    rotated=client.post('/api/password',json={'old':'123456','new':'ci-test-password-only'})
+    assert rotated.status_code==200 and rotated.get_json()['ok'], 'isolated fixture password setup failed'
     client.post('/logout')
     content=b'BT /F1 18 Tf 50 750 Td (Packaged PDF preview) Tj ET'
     objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',b'<< /Length '+str(len(content)).encode()+b' >>\nstream\n'+content+b'\nendstream']
@@ -100,15 +103,22 @@ def run():
             assert frame.locator('#main-content').evaluate('el=>document.activeElement===el')
             assert page.locator('#page-host iframe').get_attribute('srcdoc')
             results.append('local skip link keeps packaged page and keyboard focus')
-            pages=[('/tasks','任务中心'),('/tasks?type=daily','任务中心'),('/manage','任务管理'),('/members','成员管理'),('/discussions/','协作'),('/funds/','资金'),('/invoices/','发票'),('/account','账户'),('/account/email/verify#token=test','邮箱'),('/admin/mail','邮件'),('/admin/security','权限')]
+            pages=[('/tasks','任务中心'),('/tasks?type=daily','任务中心'),('/manage','任务管理'),('/members','成员管理'),('/discussions/','协作'),('/funds/','资金'),('/invoices/','发票'),('/account','账户'),('/admin/mail','邮件'),('/admin/security','权限')]
             for path,label in pages:
                 page.evaluate('(path)=>XTYF.navigate(path)',path)
                 frame.locator('h1').first.wait_for();page.wait_for_timeout(400)
                 text=frame.locator('body').inner_text()
                 assert label in text,(path,text[:200])
                 assert page.locator('#page-host iframe').get_attribute('srcdoc'),path
+                if path=='/account':
+                    assert frame.locator('#email-form').is_visible()
+                    assert frame.locator('#email-code').get_attribute('pattern')=='[0-9]{6}'
+                    results.append('account contains the current six-digit email verification controls')
                 results.append('local route '+path)
                 print(results[-1],flush=True)
+            page.evaluate("XTYF.navigate('/account/email/verify#token=test')")
+            page.get_by_role('heading',name='本地页面不存在').wait_for()
+            results.append('removed legacy email-link template uses the local unavailable-page message')
             page.evaluate("XTYF.navigate('/account')")
             frame.locator('h1').first.wait_for()
             frame.locator('[data-theme-toggle]').first.click()

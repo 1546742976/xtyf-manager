@@ -42,6 +42,12 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 
 完整数据格式、资源限额和原生操作见 [页面更新协议](update-protocol.md)。旧客户端必须先安装一次支持此协议的版本。发布资源不能给旧壳增加新原生能力；能力不兼容时提示升级。页面更新与系统安装包更新是两条独立流程。
 
+`clients/ui_release.py` 是发布流程内部使用的资源构建器，也可用于隔离测试。直接运行它会读取当前工作目录的源码，`--source-version` 只是调用者提供的标识；正式交付应使用上面的 `deploy/package_release.py`，由 Git HEAD 决定源码与页面来源。
+
+新版客户端在启动、前台每 30 分钟，以及距离上次检查超过 5 分钟重新回到前台时检查更新。下载完成后当前页面继续使用原版本，下次启动启用新版。服务器设置中的“立即重载”会先提示未保存内容可能丢失；也可手动检查或重试失败版本。启动失败自动回退，断网仍可进入本地页面和设置。切换服务器时，各服务器的缓存和更新记录相互隔离。
+
+新桥接协议支持从已选择的文件句柄读取图片预览，因此客户端可使用账户页的头像裁剪、保存和恢复默认功能。旧客户端没有 `image_preview` 能力时仍隐藏编辑入口。安装包下载只保存已验签清单中当前平台的文件，并检查 SHA-256；完成系统安装仍需用户操作。
+
 ### 安装包交付
 
 生成安装包前按 [项目交付约定](../AGENTS.md) 询问是否生成及目标版本号。先完成代码修改与必要验证，在项目根目录预览发布入口预计生成的版本：
@@ -110,6 +116,9 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 
 ## 验证边界
 
+- 页面更新协议可用 `python -m unittest discover -s tests -p "test_client_u*.py"` 验证。跨语言测试先运行 `python tests/client_update_fixture.py .build-tools/client-update-fixture`，该命令仅使用临时签名密钥生成公共测试资源，不发布或生成安装包。
+- Android 原生存储与 HTTP 生命周期使用 `python clients/android/test_ui_updates.py --fixture .build-tools/client-update-fixture`；需要现有 JDK、Android SDK 以及固定 SHA-256 的测试用 `org.json:json:20240303` JAR（默认在 `.build-tools/client-ui-updates/android-tests/`）。该检查执行 JVM 断言并编译 Activity，不生成 APK。
+- 桌面原生检查为 `cargo test --manifest-path clients/desktop/Cargo.toml --locked`；本机回环 HTTP 测试应设置 `NO_PROXY=127.0.0.1,localhost`，避免系统代理介入隔离测试服务器。
 - 业务会话由原生网络层管理，保留 CSRF、服务端权限及认证；站外视图没有业务会话或原生接口权限。
 - 安装包检查包含本地资源清单、版本、真实架构、Linux 动态依赖和桌面入口；Ubuntu ARM64 的 GLIBC 上限为 2.35。
 - Windows、Android、Ubuntu ARM64、Fedora 的实际启动、导航、上传下载和业务操作分别记录。包检查、APK 签名与对齐通过不能替代目标系统运行验证。

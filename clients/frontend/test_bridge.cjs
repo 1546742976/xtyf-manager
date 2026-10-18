@@ -72,11 +72,12 @@ async function startShell(bootstrap) {
     return bootstrap();
   });
   Object.assign(context, {
-    document: { getElementById: get, createElement: element },
+    document: { getElementById: get, createElement: element, addEventListener() {} },
     location: { protocol: 'https:', host: 'tauri.localhost', hash: '' },
     history: { replaceState() {}, pushState() {} },
     XTYFTemplates: { render: () => '<html><head></head><body></body></html>' },
   });
+  vm.runInContext(source('update-runtime.js'), context, { filename: 'update-runtime.js' });
   vm.runInContext(source('shell.js'), context, { filename: 'shell.js' });
   await new Promise(resolve => setImmediate(resolve));
   return { context, get };
@@ -90,5 +91,12 @@ test('local bootstrap failure displays the actual native error', async () => {
 
 test('old-server 404 still shows local server-update page', async () => {
   const { get } = await startShell(async () => ({ status: 404, body: '<html>Old login page</html>' }));
+  assert.equal(get('page-host').children[0].children[0].textContent, '服务器需要更新');
+});
+
+test('server UI protocol rejection blocks business transport but preserves local settings', async () => {
+  const { context, get } = await startShell(async () => ({status:200, body:JSON.stringify({ok:true,protocolVersion:1,uiCompatibility:{protocolMin:2,protocolMax:2}})}));
+  await assert.rejects(context.XTYF.request('/api/tasks'), /服务器协议不兼容/);
+  assert.equal(typeof context.XTYF.openSettings, 'function');
   assert.equal(get('page-host').children[0].children[0].textContent, '服务器需要更新');
 });

@@ -1,18 +1,20 @@
 "use strict";
 
-// The native client keeps its existing initial avatar until its image transport is supported.
+// Authenticated native images are read by the host; browser images remain same-origin.
 (() => {
   const isNative = () => typeof window.XTYF?.invoke === "function";
   function safeUrl(value) {
     if (typeof value !== "string" || !value) return null;
     try {
       const parsed = new URL(value, location.href);
-      return parsed.origin === location.origin && parsed.pathname === "/api/account/avatar"
+      const local = isNative() && typeof window.XTYF.isLocal === 'function'
+        ? window.XTYF.isLocal(parsed) : parsed.origin === location.origin;
+      return local && parsed.pathname === "/api/account/avatar"
         ? parsed.pathname + parsed.search : null;
     } catch (_) { return null; }
   }
   function render(host, value) {
-    const url = isNative() ? null : safeUrl(value);
+    const url = isNative() && typeof window.XTYF.imageURL !== 'function' ? null : safeUrl(value);
     host.dataset.avatarUrl = url || "";
     host.querySelector("[data-avatar-image]")?.remove();
     const initial = host.querySelector("[data-avatar-initial]");
@@ -33,7 +35,15 @@
       image.remove();
     });
     host.append(image);
-    image.src = url;
+    if (isNative()) {
+      window.XTYF.imageURL(url).then(source => {
+        if (host.contains(image)) image.src = source;
+      }).catch(() => {
+        if (!host.contains(image)) return;
+        initial.hidden = false;
+        image.remove();
+      });
+    } else image.src = url;
   }
   function setUrl(value) {
     document.querySelectorAll("[data-account-avatar]").forEach(host => render(host, value));

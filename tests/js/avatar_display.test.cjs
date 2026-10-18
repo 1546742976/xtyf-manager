@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function fixture({native = false, url = '/api/account/avatar?v=old'} = {}) {
+function fixture({native = false, imageURL, isLocal, protocol = 'https:', url = '/api/account/avatar?v=old'} = {}) {
   const images = [];
   const hosts = Array.from({length:3}, () => {
     const initial = {hidden:false};
@@ -15,8 +15,8 @@ function fixture({native = false, url = '/api/account/avatar?v=old'} = {}) {
       contains(image) { return this.images.includes(image); }};
   });
   let ready;
-  const context = {URL, location:{href:'https://team.example/account', origin:'https://team.example'},
-    window:native ? {XTYF:{invoke(){}}} : {},
+  const context = {URL, location:{href:protocol+'//team.example/account', origin:protocol+'//team.example'},
+    window:native ? {XTYF:{invoke(){}, imageURL, isLocal}} : {},
     Image:class {
       constructor() { this.dataset = {}; this.events = {}; images.push(this); }
       addEventListener(name, listener) { this.events[name] = listener; }
@@ -62,4 +62,30 @@ test('native client keeps initials without starting unsupported image requests',
   api.setUrl('/api/account/avatar?v=new');
   assert.equal(images.length, 0);
   hosts.forEach(host => assert.equal(host.initial.hidden, false));
+});
+
+test('native avatar uses authenticated host transport and does not expose API src to the webview', async () => {
+  const calls=[];
+  const {hosts,images}=fixture({native:true,imageURL:async path=>{calls.push(path);return 'blob:private-avatar';}});
+  assert.equal(images[0].src,undefined);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls,Array(3).fill('/api/account/avatar?v=old'));
+  images.forEach(image=>{assert.equal(image.src,'blob:private-avatar');image.events.load();});
+  hosts.forEach(host=>assert.equal(host.initial.hidden,true));
+});
+test('native stale resource response cannot restore an avatar that was reset', async () => {
+  const pending=[];
+  const {hosts,images,api}=fixture({native:true,imageURL:()=>new Promise(resolve=>pending.push(resolve))});
+  api.setUrl(null); pending.forEach(resolve=>resolve('blob:obsolete'));
+  await new Promise(resolve=>setImmediate(resolve));
+  images.forEach(image=>assert.equal(image.src,undefined));
+  hosts.forEach(host=>{assert.equal(host.initial.hidden,false);assert.equal(host.images.length,0);});
+});
+test('native custom schemes use protocol and host identity instead of opaque URL origins', async () => {
+  const {api,images}=fixture({native:true,protocol:'tauri:',imageURL:async()=>'blob:avatar',
+    isLocal:url=>url.protocol==='tauri:'&&url.host==='team.example'});
+  assert.equal(api.safeUrl('/api/account/avatar?v=local'),'/api/account/avatar?v=local');
+  assert.equal(api.safeUrl('tauri://other-host/api/account/avatar'),null);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(images.length,3);images.forEach(image=>assert.equal(image.src,'blob:avatar'));
 });

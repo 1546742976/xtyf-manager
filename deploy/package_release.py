@@ -14,6 +14,12 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def archive_head(commit):
+    # git archive honors core.autocrlf. Preserve locked vendor bytes even when
+    # the publisher normally checks out Windows CRLF working files.
+    return subprocess.check_output(['git', '-c', 'core.autocrlf=false', 'archive', '--format=tar', commit], cwd=ROOT)
+
+
 def build_ui_from_head(files, commit, private_key, installers=None):
     """Execute the archived builder so website and UI always represent one commit."""
     with tempfile.TemporaryDirectory(prefix='xtyf-release-head-') as temporary:
@@ -41,7 +47,7 @@ def main():
     parser.add_argument('--installers', type=Path, help='Reviewed map of already published installer paths and hashes')
     args = parser.parse_args()
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
-    raw = subprocess.check_output(['git', 'archive', '--format=tar', commit], cwd=ROOT)
+    raw = archive_head(commit)
     with tarfile.open(fileobj=io.BytesIO(raw)) as source:
         members = source.getmembers()
         files = {}

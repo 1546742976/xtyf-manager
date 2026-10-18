@@ -36,7 +36,8 @@ if (typeof window !== "undefined") window.AvatarCrop = AvatarCrop;
 
 if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded", () => {
   const editor = document.getElementById("avatar-editor");
-  if (!editor || typeof window.XTYF?.invoke === "function") return;
+  const native = typeof window.XTYF?.invoke === "function";
+  if (!editor || (native && !window.XTYF.supports?.('image_preview'))) return;
   editor.hidden = false;
   const $ = id => document.getElementById(id);
   const fileInput = $("avatar-file"), dialog = $("avatar-crop-dialog");
@@ -102,13 +103,28 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
     if (file.size > 10 * 1024 * 1024) {
       message(feedback, "图片不能超过 10 MiB，请选择较小的图片。", true); return;
     }
-    if (!file.size || (file.type && !["image/jpeg", "image/png", "image/webp"].includes(file.type))) {
+    // Native document providers may report application/octet-stream for valid images.
+    // The selected-handle reader checks real bytes before any preview is decoded.
+    if (!file.size || (!native && file.type && !["image/jpeg", "image/png", "image/webp"].includes(file.type))) {
       message(feedback, "请选择 JPG、PNG 或 WebP 静态图片。", true); return;
     }
     setBusy(true);
     message(feedback, "正在读取图片…");
-    const url = URL.createObjectURL(file);
+    let url = null;
     try {
+      let source = file;
+      if (native) {
+        if (!file.handle) throw new Error("请通过客户端文件选择器选择图片。");
+        const data = await window.XTYF.invoke('read_selected_image', {handle:file.handle});
+        if (!Number.isInteger(data.size) || data.size <= 0 || data.size > 10 * 1024 * 1024 ||
+            !["image/jpeg", "image/png", "image/webp"].includes(data.mime) || typeof data.body !== 'string' ||
+            data.body.length > 4 * Math.ceil(10 * 1024 * 1024 / 3)) throw new Error("图片预览数据无效，请重新选择。");
+        const bytes = Uint8Array.from(atob(data.body), char => char.charCodeAt(0));
+        if (bytes.length !== data.size) throw new Error("图片预览不完整，请重新选择。");
+        // Only the preview uses these bytes. The original selected handle remains in the draft for upload.
+        source = new Blob([bytes], {type:data.mime});
+      }
+      url = URL.createObjectURL(source);
       const image = await new Promise((resolve, reject) => {
         const source = new Image();
         source.onload = () => resolve(source);
@@ -127,7 +143,7 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
       message(cropResult, "");
       save.textContent = "保存头像";
     } catch (error) {
-      URL.revokeObjectURL(url);
+      if (url) URL.revokeObjectURL(url);
       message(feedback, error.message || "读取失败，请重新选择图片。", true);
       return;
     } finally { setBusy(false); }
