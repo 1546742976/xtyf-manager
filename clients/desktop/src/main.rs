@@ -25,6 +25,7 @@ struct AppState {
     server: Mutex<String>,
     effective_server: Mutex<Option<(String, String)>>,
     website_epoch: std::sync::atomic::AtomicU64,
+    website_menu_open: std::sync::atomic::AtomicBool,
     connection_gate: tokio::sync::Mutex<()>,
     website_files: Mutex<std::collections::HashSet<PathBuf>>,
     directory: PathBuf,
@@ -314,7 +315,7 @@ fn main() {
         let server=saved.or_else(legacy_server).unwrap_or_else(||text(&defaults,"serverUrl").to_string());
         fs::write(directory.join("server.json"),serde_json::to_vec_pretty(&json!({"serverUrl":server}))?)?;
         let runtime=native_updates::Runtime::new(&directory,&server,0);
-        app.manage(AppState {server:Mutex::new(server),effective_server:Mutex::new(None),website_epoch:std::sync::atomic::AtomicU64::new(0),connection_gate:tokio::sync::Mutex::new(()),website_files:Mutex::new(std::collections::HashSet::new()),directory,sessions:Mutex::new(HashMap::new()),files:Mutex::new(HashMap::new()),requests:Mutex::new(HashMap::new()),updates:Mutex::new(runtime),update_gate:tokio::sync::Mutex::new(())});
+        app.manage(AppState {server:Mutex::new(server),effective_server:Mutex::new(None),website_epoch:std::sync::atomic::AtomicU64::new(0),website_menu_open:std::sync::atomic::AtomicBool::new(false),connection_gate:tokio::sync::Mutex::new(()),website_files:Mutex::new(std::collections::HashSet::new()),directory,sessions:Mutex::new(HashMap::new()),files:Mutex::new(HashMap::new()),requests:Mutex::new(HashMap::new()),updates:Mutex::new(runtime),update_gate:tokio::sync::Mutex::new(())});
         let window=tauri::window::WindowBuilder::new(app,"workspace")
             .title("巡天御风管理系统").inner_size(1380.,900.).min_inner_size(360.,600.)
             .visible(smoke_directory().is_none())

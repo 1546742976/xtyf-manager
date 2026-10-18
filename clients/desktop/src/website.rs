@@ -126,14 +126,27 @@ fn save_download(source: &std::path::Path, target: &std::path::Path, current: im
     result
 }
 
-fn toolbar_height(app: &tauri::AppHandle) -> u32 {
+fn menu_bounds(app: &tauri::AppHandle, size: tauri::PhysicalSize<u32>) -> (tauri::PhysicalPosition<i32>, tauri::PhysicalSize<u32>, u32) {
     let scale = app.get_window("workspace").and_then(|w| w.scale_factor().ok()).unwrap_or(1.0);
-    (TOOLBAR_HEIGHT * scale).round() as u32
+    let pixels = |value: f64| (value * scale).round() as u32;
+    if app.state::<AppState>().website_menu_open.load(std::sync::atomic::Ordering::SeqCst) {
+        let height = pixels(TOOLBAR_HEIGHT).min(size.height);
+        (tauri::PhysicalPosition::new(0, 0), tauri::PhysicalSize::new(size.width, height), height)
+    } else {
+        let width = pixels(68.0).min(size.width);
+        let height = pixels(40.0).min(size.height);
+        let x = size.width.saturating_sub(width + pixels(8.0));
+        let y = size.height.saturating_sub(height + pixels(8.0));
+        (tauri::PhysicalPosition::new(x as i32, y as i32), tauri::PhysicalSize::new(width, height), 0)
+    }
 }
 
 pub fn resize(app: &tauri::AppHandle, size: tauri::PhysicalSize<u32>) {
-    let height = toolbar_height(app).min(size.height);
-    if let Some(view) = app.get_webview("website-controls") { let _ = view.set_size(tauri::PhysicalSize::new(size.width, height)); }
+    let (position, controls_size, height) = menu_bounds(app, size);
+    if let Some(view) = app.get_webview("website-controls") {
+        let _ = view.set_position(position);
+        let _ = view.set_size(controls_size);
+    }
     if let Some(view) = app.get_webview("website-page") {
         let _ = view.set_position(tauri::PhysicalPosition::new(0, height as i32));
         let _ = view.set_size(tauri::PhysicalSize::new(size.width, size.height.saturating_sub(height)));
@@ -143,6 +156,7 @@ pub fn resize(app: &tauri::AppHandle, size: tauri::PhysicalSize<u32>) {
 pub fn close(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.website_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    state.website_menu_open.store(false, std::sync::atomic::Ordering::SeqCst);
     let downloads:Vec<_> = state.website_files.lock().unwrap().drain().collect();
     for label in ["website-page", "website-controls"] {
         if let Some(view) = app.get_webview(label) { let _ = view.close(); }
@@ -175,9 +189,16 @@ pub fn return_local(app: &tauri::AppHandle, intent: &str) -> Result<Value, Strin
     Ok(json!({"returned":true}))
 }
 
-pub fn control(app: &tauri::AppHandle, _state: &AppState, action: &str, args: &Value) -> Result<Value, String> {
+pub fn control(app: &tauri::AppHandle, state: &AppState, action: &str, args: &Value) -> Result<Value, String> {
     if action == "return_local" { return return_local(app, text(args, "intent")); }
     let view = app.get_webview("website-page").ok_or("网站页面已关闭")?;
+    if action == "website_menu" {
+        let expanded = args.get("expanded").and_then(Value::as_bool).ok_or("菜单状态无效")?;
+        let size = app.get_window("workspace").ok_or("主窗口不存在")?.inner_size().map_err(|e| e.to_string())?;
+        state.website_menu_open.store(expanded, std::sync::atomic::Ordering::SeqCst);
+        resize(app, size);
+        return Ok(json!({"expanded":expanded}));
+    }
     match action {
         "website_back" => view.eval("history.back()"),
         "website_reload" => view.reload(),
@@ -200,7 +221,8 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
     let epoch = state.website_epoch.load(std::sync::atomic::Ordering::SeqCst);
     let window = app.get_window("workspace").ok_or("主窗口不存在")?;
     let size = window.inner_size().map_err(|e| e.to_string())?;
-    let height = toolbar_height(app).min(size.height);
+    state.website_menu_open.store(false, std::sync::atomic::Ordering::SeqCst);
+    let (position, controls_size, _) = menu_bounds(app, size);
     let mut toolbar = WebviewBuilder::new("website-controls", WebviewUrl::App("website-controls.html".into()))
         .on_navigation(local_url)
         .on_web_resource_request(|request, response| {
@@ -212,7 +234,6 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
             response.headers_mut().insert("Cache-Control", "no-store".parse().unwrap());
         });
     if smoke_directory().is_some() { toolbar = toolbar.data_directory(state.directory.join("webview")); }
-    window.add_child(toolbar, tauri::PhysicalPosition::new(0, 0), tauri::PhysicalSize::new(size.width, height)).map_err(|e| e.to_string())?;
     let navigate_app = app.clone(); let navigate_origin = origin.clone();
     let popup_app = app.clone(); let popup_origin = origin.clone();
     let download_origin = origin.clone(); let download_app = app.clone();
@@ -289,8 +310,14 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
     // reqwest sessions. Sharing the local shell's WebView environment also
     // preserves normal cookie behavior for same-origin windows on Windows.
     if smoke_directory().is_some() { builder = builder.data_directory(state.directory.join("webview")); }
-    match window.add_child(builder, tauri::PhysicalPosition::new(0, height as i32), tauri::PhysicalSize::new(size.width, size.height.saturating_sub(height))) {
+    match window.add_child(builder, tauri::PhysicalPosition::new(0, 0), size) {
         Ok(view) => {
+            // Create the trusted controls last so the small menu entry remains
+            // above the full-height website without giving the site native IPC.
+            if let Err(error) = window.add_child(toolbar, position, controls_size) {
+                close(app);
+                return Err(error.to_string());
+            }
             if let Some(local) = app.get_webview("main") { let _ = local.hide(); }
             let _ = view.set_focus();
             Ok(json!({"opened":true,"effectiveServerUrl":origin.origin().ascii_serialization()}))

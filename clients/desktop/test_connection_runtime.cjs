@@ -22,6 +22,43 @@ async function start(){
 }
 async function pageMatching(predicate){const page=await until(()=>browser.contexts().flatMap(context=>context.pages()).find(page=>!page.isClosed()&&predicate(page)),'WebView target');page.setDefaultTimeout(20000);return page;}
 async function invoke(page,action,args={}){return page.evaluate(({action,args})=>window.__TAURI_INTERNALS__.invoke('native_call',{action,args}),{action,args});}
+async function collapsedWebsiteMenu(toolbar,remote,local){
+  await toolbar.getByRole('button',{name:'打开客户端菜单',exact:true}).waitFor();
+  assert.equal(await toolbar.locator('#menu-toggle').getAttribute('aria-expanded'),'false');
+  assert.equal(await toolbar.locator('#website-navigation').isVisible(),false);
+  assert.equal(await toolbar.getByRole('button',{name:'设置',exact:true}).isVisible(),false);
+  const fullHeight=await local.evaluate(()=>innerHeight);
+  await until(async()=>Math.abs(await remote.evaluate(()=>innerHeight)-fullHeight)<=1,'collapsed menu leaves the website at full window height');
+}
+async function checkWebsiteMenu(toolbar,remote,local){
+  await collapsedWebsiteMenu(toolbar,remote,local);
+  const fullHeight=await remote.evaluate(()=>innerHeight);
+  const documentMarker=await remote.evaluate(()=>{window.websiteMenuDocumentMarker=crypto.randomUUID();return window.websiteMenuDocumentMarker;});
+  await remote.locator('#draft').fill('draft preserved while toggling client menu');
+  let confirmations=0;
+  const dismissUnexpected=dialog=>{confirmations++;return dialog.dismiss();};
+  toolbar.on('dialog',dismissUnexpected);
+  try{
+    await toolbar.getByRole('button',{name:'打开客户端菜单',exact:true}).click();
+    await toolbar.getByRole('button',{name:'收起客户端菜单',exact:true}).waitFor();
+    assert.equal(await toolbar.locator('#menu-toggle').getAttribute('aria-expanded'),'true');
+    assert.equal(await toolbar.locator('#website-navigation').isVisible(),true);
+    await toolbar.getByRole('button',{name:'设置',exact:true}).waitFor();
+    await until(async()=>Math.abs(await remote.evaluate(()=>innerHeight)-(fullHeight-80))<=1,'expanded toolbar uses 80 CSS pixels');
+    assert.equal(await remote.evaluate(()=>window.websiteMenuDocumentMarker),documentMarker,'expanding the menu must not reload the website');
+    assert.equal(await remote.locator('#draft').inputValue(),'draft preserved while toggling client menu');
+    await toolbar.getByRole('button',{name:'收起客户端菜单',exact:true}).click();
+    await collapsedWebsiteMenu(toolbar,remote,local);
+    assert.equal(await remote.evaluate(()=>window.websiteMenuDocumentMarker),documentMarker,'collapsing the menu must not reload the website');
+    assert.equal(await remote.locator('#draft').inputValue(),'draft preserved while toggling client menu');
+    await toolbar.getByRole('button',{name:'打开客户端菜单',exact:true}).press('Enter');
+    await toolbar.getByRole('button',{name:'收起客户端菜单',exact:true}).press('Escape');
+    await collapsedWebsiteMenu(toolbar,remote,local);
+    assert.equal(await remote.evaluate(()=>window.websiteMenuDocumentMarker),documentMarker,'keyboard toggling must keep the website document');
+    assert.equal(await remote.locator('#draft').inputValue(),'draft preserved while toggling client menu');
+    assert.equal(confirmations,0,'showing or hiding the menu must not prompt about unsaved content');
+  }finally{toolbar.off('dialog',dismissUnexpected);}
+}
 async function stop(){
   if(browser){await browser.close().catch(()=>{});browser=null;}
   if(application){if(application.exitCode===null){application.kill();await Promise.race([once(application,'exit'),sleep(5000)]);}application=null;}
@@ -117,9 +154,10 @@ async function main(){
   let remote=await pageMatching(page=>page.url().startsWith(origin));remote.on('pageerror',error=>errors.push(error.message));
   await remote.getByRole('heading',{name:'测试网站登录'}).waitFor();checks.push('404 bootstrap automatically opens a real website inside WebView2');
   const toolbar=await pageMatching(page=>page.url().endsWith('/website-controls.html'));
-  await toolbar.getByRole('button',{name:'设置',exact:true}).waitFor();
+  await collapsedWebsiteMenu(toolbar,remote,local);checks.push('Website navigation starts hidden behind an accessible menu button and the website fills the window');
   await remote.locator('#login').click();await remote.getByRole('heading',{name:'已登录测试网站'}).waitFor();
   const denied=await remote.evaluate(async()=>{try{return {returned:await window.__TAURI_INTERNALS__.invoke('native_call',{action:'get_config',args:{}})};}catch(error){return {denied:String(error)};}});assert(denied.denied);assert(!denied.returned);checks.push('Website login works; remote document cannot call generic native IPC');
+  await checkWebsiteMenu(toolbar,remote,local);checks.push('Opening and collapsing the client menu resizes the website without reloading, losing its draft, or showing a leave-page confirmation');
   const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64');
   await remote.locator('#image').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:image});await remote.locator('#upload').click();await remote.getByText('上传成功',{exact:true}).waitFor();assert(uploaded);checks.push('Real website file input uploads a synthetic image using website authentication');
   await saveDownload(remote,'#http-download','saved-http.txt','synthetic authenticated download');
@@ -128,9 +166,15 @@ async function main(){
   await remote.locator('#popup').click();await remote.waitForURL(origin+'/next');await remote.getByRole('heading',{name:'已登录测试网站'}).waitFor();checks.push('Same-origin new-window link remains inside the authenticated website view');
   await remote.locator('#outside').click();await pageMatching(page=>page.url().startsWith(outside));assert.equal(outsideCookie,false);checks.push('Offsite links open an independent view without website cookies');
   await remote.locator('#draft').fill('unsaved website draft');
+  await toolbar.getByRole('button',{name:'打开客户端菜单',exact:true}).click();
+  await toolbar.getByRole('button',{name:'设置',exact:true}).waitFor();
   toolbar.once('dialog',dialog=>dialog.dismiss());await toolbar.getByRole('button',{name:'设置',exact:true}).click();assert.equal(await remote.locator('#draft').inputValue(),'unsaved website draft');
   toolbar.once('dialog',dialog=>dialog.accept());await toolbar.getByRole('button',{name:'设置',exact:true}).click();await local.waitForFunction(()=>document.getElementById('client-settings').open);assert.equal(await local.locator('#server-url').inputValue(),origin);checks.push('Returning to local settings asks before leaving and keeps server configuration');
-  await stop();local=await start();remote=await pageMatching(page=>page.url().startsWith(origin));await remote.getByRole('heading',{name:'已登录测试网站'}).waitFor();checks.push('Website login survives a cold application restart');
+  await invoke(local,'open_website');remote=await pageMatching(page=>page.url().startsWith(origin));await remote.getByRole('heading',{name:'已登录测试网站'}).waitFor();
+  const reopenedToolbar=await pageMatching(page=>page.url().endsWith('/website-controls.html'));await collapsedWebsiteMenu(reopenedToolbar,remote,local);checks.push('Reopening website mode resets the toolbar to its collapsed default');
+  await reopenedToolbar.getByRole('button',{name:'打开客户端菜单',exact:true}).click();await reopenedToolbar.getByRole('button',{name:'设置',exact:true}).waitFor();
+  await stop();local=await start();remote=await pageMatching(page=>page.url().startsWith(origin));await remote.getByRole('heading',{name:'已登录测试网站'}).waitFor();
+  await collapsedWebsiteMenu(await pageMatching(page=>page.url().endsWith('/website-controls.html')),remote,local);checks.push('Website login survives a cold application restart and its toolbar starts collapsed');
   const before=await invoke(local,'probe_connection');assert.equal(before.response.status,404);const nativeCookieFiles=fs.readdirSync(profile).filter(name=>name.startsWith('session-'));for(const file of nativeCookieFiles)assert(!fs.readFileSync(path.join(profile,file),'utf8').includes('website_session'));checks.push('Website cookies remain independent of the native request session');
   await remote.locator('#slow-download').click();await until(()=>slowStarted&&fs.readdirSync(path.join(profile,'website-downloads')).length>0,'slow download has private partial bytes');
   const next='http://127.0.0.1:9',oldLocal=local;await invoke(local,'set_server',{serverUrl:next});await until(()=>remote.isClosed(),'old website closes on server switch');
