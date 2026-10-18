@@ -42,19 +42,25 @@ def get_db():
 
 
 # ---- 当前登录用户：读取会话 uid 并查库（is_active=1 才有效；返回 dict）----
+def avatar_url(key):
+    return "/api/account/avatar?v=" + key if key else None
+
+
 def current_user():
     uid = session.get("uid")
     if not uid:
         return None
     row = get_db().execute(
         "SELECT id, name, username, role, group_name, session_version, must_change_password, ui_theme, "
-        "theme_mode, light_theme, dark_theme "
+        "theme_mode, light_theme, dark_theme, avatar_key "
         "FROM members WHERE id = ? AND is_active = 1 AND deleted_at IS NULL",
         (uid,),
     ).fetchone()
     if row is None or session.get("session_version") != row["session_version"]:
         return None
-    return dict(row)
+    user = dict(row)
+    user["avatar_url"] = avatar_url(user.pop("avatar_key"))
+    return user
 
 
 # ---- 装饰器：要求已登录。API 路径（含 /api/）返回 401 JSON，普通页面重定向到登录页 ----
