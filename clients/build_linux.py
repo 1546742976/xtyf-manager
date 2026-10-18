@@ -209,7 +209,8 @@ def build(root, output, cache, env):
     config = json.loads((root / 'clients/config.json').read_text(encoding='utf-8'))
     desktop = root / 'clients/desktop'
     frontend = root / 'clients/frontend/dist'
-    for required in (desktop / 'Cargo.lock', desktop / 'package-lock.json', frontend / 'asset-manifest.json'):
+    for required in (desktop / 'Cargo.lock', desktop / 'package-lock.json', frontend / 'asset-manifest.json',
+                     root / 'clients/update-public-key.pem'):
         if not required.is_file():
             raise RuntimeError(f'Missing build input: {required}; build the shared frontend first.')
     manifest_data = json.loads((frontend / 'asset-manifest.json').read_text(encoding='utf-8'))
@@ -231,6 +232,7 @@ def build(root, output, cache, env):
     shutil.copytree(desktop, source, ignore=shutil.ignore_patterns('node_modules', 'target', 'gen', '.git'))
     shutil.copytree(frontend, inputs / 'frontend/dist')
     shutil.copy2(root / 'clients/config.json', inputs / 'config.json')
+    shutil.copy2(root / 'clients/update-public-key.pem', inputs / 'update-public-key.pem')
     # NTFS source permissions appear as 0777 in WSL. Tauri's RPM resources
     # preserve modes, so normalize bundled non-executable assets before build.
     for assets in (source / 'icons', inputs / 'frontend/dist'):

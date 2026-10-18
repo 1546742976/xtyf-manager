@@ -56,8 +56,10 @@ the verified current-platform entry. `retry:true` allows retry of a quarantined 
 `update_status({})` returns current local state without network.
 `apply_update({})` activates the validated pending bundle and recreates/reloads the
 main view; callers must obtain a user reload confirmation first.
-`ui_ready({})` marks locally rendered UI + bridge initialization healthy (no network
-success required). Startup trial watchdog: 15 seconds, then try previous successful
+`ui_ready({viewToken})` marks locally rendered UI + bridge initialization healthy (no network
+success required). Desktop injects an immutable `window.__XTYF_VIEW_TOKEN__` per view
+and rejects acknowledgements from a previous view; Android binds calls to the current
+view's message port and accepts a null token. Startup trial watchdog: 15 seconds, then try previous successful
 version once, then bundled UI. Persist unconfirmed trial so a crash also rolls back.
 
 Native host owns per-normalized-server state, highest sequence, current/previous/
@@ -66,7 +68,9 @@ fully validate before publishing pending. Pin one complete resource root for eac
 view lifetime. Retain bundled, current and previous; never remove an active root.
 Switching server cancels downloads, clears file handles and loads that server's root.
 Only the main trusted local view may call native operations. Remote views have no
-business bridge. Installer link opens in the existing isolated external view.
+business bridge. An explicit installer download uses the existing native save dialog
+with `download({path,filename,expectedSha256})`; verify the signed SHA256 before making
+the saved file available. This does not launch or install the downloaded package.
 
 `read_selected_image({handle})` returns `{body:"BASE64", mime:"image/png", size:123}`.
 Only previously picked current-session handles, max 10 MiB; inspect JPEG/PNG/WebP

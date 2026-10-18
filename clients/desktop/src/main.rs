@@ -10,6 +10,9 @@ use tauri::{Manager, State, WebviewUrl};
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+use sha2::{Digest, Sha256};
+mod updates;
+mod native_updates;
 
 struct Session {
     client: Client,
@@ -23,8 +26,14 @@ struct AppState {
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     files: Mutex<HashMap<String, PathBuf>>,
     requests: Mutex<HashMap<String, CancellationToken>>,
+    updates: Mutex<native_updates::Runtime>,
+    update_gate: tokio::sync::Mutex<()>,
 }
 fn text<'a>(value: &'a Value, key: &str) -> &'a str { value.get(key).and_then(Value::as_str).unwrap_or("") }
+fn smoke_directory() -> Option<PathBuf> {
+    #[cfg(debug_assertions)] { std::env::var_os("XTYF_SMOKE_DIR").map(PathBuf::from) }
+    #[cfg(not(debug_assertions))] { None }
+}
 fn normalize_server(input: &str) -> Result<String, String> {
     let url = Url::parse(input.trim()).map_err(|_| "请输入完整的 HTTP/HTTPS 网站根地址")?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() || !url.username().is_empty()
@@ -153,6 +162,8 @@ async fn pick_files(state: &AppState, args: &Value) -> Result<Value, String> {
     Ok(json!(result))
 }
 async fn download(state: &AppState, args: &Value) -> Result<Value, String> {
+    let expected_hash=args.get("expectedSha256").and_then(Value::as_str);
+    if expected_hash.is_some_and(|value|value.len()!=64 || !value.bytes().all(|b|b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {return Err("下载校验值无效".into());}
     let name = PathBuf::from(text(args,"filename"));
     let name = name.file_name().and_then(|n|n.to_str()).filter(|n|!n.is_empty()).unwrap_or("download");
     let Some(target) = rfd::AsyncFileDialog::new().set_title("保存文件").set_file_name(name).save_file().await else {return Ok(json!({"cancelled":true}));};
@@ -166,10 +177,12 @@ async fn download(state: &AppState, args: &Value) -> Result<Value, String> {
     let _cleanup = PartialFile(temporary.clone());
     let result = async {
         let mut file = tokio::fs::File::create(&temporary).await.map_err(|e|e.to_string())?;
+        let mut digest=Sha256::new();
         let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {file.write_all(&chunk.map_err(|e|e.to_string())?).await.map_err(|e|e.to_string())?;}
+        while let Some(chunk) = stream.next().await {let chunk=chunk.map_err(|e|e.to_string())?;digest.update(&chunk);file.write_all(&chunk).await.map_err(|e|e.to_string())?;}
         file.flush().await.map_err(|e|e.to_string())?;
         drop(file);
+        if expected_hash.is_some_and(|expected|format!("{:x}",digest.finalize())!=expected) {return Err("安装包校验失败，原有文件未更改，请重新下载".into());}
         tokio::fs::rename(&temporary,target.path()).await.map_err(|e|e.to_string())?;
         Ok(json!({"cancelled":false,"path":target.path().to_string_lossy()}))
     }.await;
@@ -182,8 +195,8 @@ fn external(app: &tauri::AppHandle, input: &str) -> Result<Value, String> {
     let id = uuid::Uuid::new_v4().simple().to_string();
     let window = tauri::window::WindowBuilder::new(app,format!("external-{id}"))
         .title("网页浏览 — 巡天御风").inner_size(1100.,800.)
-        .visible(std::env::var_os("XTYF_SMOKE_DIR").is_none()).build().map_err(|e|e.to_string())?;
-    let smoke_profile = std::env::var_os("XTYF_SMOKE_DIR").map(|path|PathBuf::from(path).join("webview"));
+        .visible(smoke_directory().is_none()).build().map_err(|e|e.to_string())?;
+    let smoke_profile = smoke_directory().map(|path|path.join("webview"));
     let mut toolbar = tauri::webview::WebviewBuilder::new(format!("external-controls-{id}"),WebviewUrl::App("external.html".into()));
     if let Some(path) = &smoke_profile {toolbar = toolbar.data_directory(path.clone());}
     window.add_child(toolbar,tauri::LogicalPosition::new(0.,0.),tauri::LogicalSize::new(1100.,48.)).map_err(|e|e.to_string())?;
@@ -211,16 +224,29 @@ async fn native_call(app: tauri::AppHandle, webview: tauri::Webview, state: Stat
     }
     if webview.label() != "main" {return Err("窗口没有业务权限".into());}
     match action.as_str() {
-        "get_config"=>Ok(json!({"serverUrl":*state.server.lock().unwrap(),"version":env!("CARGO_PKG_VERSION")})),
+        "get_config"=>Ok(json!({"serverUrl":*state.server.lock().unwrap(),"version":env!("CARGO_PKG_VERSION"),"bridgeVersion":2,"capabilities":updates::CAPABILITIES,"platform":updates::platform()})),
+        "check_updates"=>native_updates::check(&state,args.get("retry").and_then(Value::as_bool).unwrap_or(false)).await,
+        "update_status"=>Ok(state.updates.lock().unwrap().last_status.clone()),
+        "ui_ready"=>native_updates::ready(&state,text(&args,"viewToken")),
+        "apply_update"=>native_updates::apply(&app,&state),
         "set_server"=>{
             let server = normalize_server(text(&args,"serverUrl"))?;
             for token in state.requests.lock().unwrap().values(){token.cancel();}
             state.files.lock().unwrap().clear();
             fs::write(state.directory.join("server.json"),serde_json::to_vec_pretty(&json!({"serverUrl":server})).unwrap()).map_err(|e|e.to_string())?;
-            *state.server.lock().unwrap()=server;
+            *state.server.lock().unwrap()=server.clone();
+            let mut runtime=state.updates.lock().unwrap();
+            runtime.cancellation.cancel();
+            *runtime=native_updates::Runtime::new(&state.directory,&server,runtime.generation+1);
+            drop(runtime);
+            native_updates::schedule_reload(&app);
             Ok(Value::Null)
         },
         "pick_files"=>pick_files(&state,&args).await,
+        "read_selected_image"=>{
+            let path=state.files.lock().unwrap().get(text(&args,"handle")).cloned().ok_or("文件选择已失效，请重新选择")?;
+            updates::image_preview(&path)
+        },
         "open_external"=>external(&app,text(&args,"url")),
         "cancel"=>{if let Some(token)=state.requests.lock().unwrap().get(text(&args,"requestId")){token.cancel();}Ok(Value::Null)},
         "request"|"read_resource"|"download"=>{
@@ -256,20 +282,21 @@ fn main() {
     }
     tauri::Builder::default().invoke_handler(tauri::generate_handler![native_call]).setup(|app|{
         app.remove_menu()?;
-        let directory=std::env::var_os("XTYF_SMOKE_DIR").map(PathBuf::from).unwrap_or(app.path().app_config_dir()?);
+        let directory=smoke_directory().unwrap_or(app.path().app_config_dir()?);
         fs::create_dir_all(&directory)?;
         let defaults:Value=serde_json::from_str(include_str!("../../config.json"))?;
         let saved=fs::read(directory.join("server.json")).ok().and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok()).and_then(|v|normalize_server(text(&v,"serverUrl")).ok());
         let server=saved.or_else(legacy_server).unwrap_or_else(||text(&defaults,"serverUrl").to_string());
         fs::write(directory.join("server.json"),serde_json::to_vec_pretty(&json!({"serverUrl":server}))?)?;
-        let mut main_view=tauri::webview::WebviewWindowBuilder::new(app,"main",WebviewUrl::App("index.html".into()));
-        if std::env::var_os("XTYF_SMOKE_DIR").is_some() {main_view=main_view.data_directory(directory.join("webview"));}
-        app.manage(AppState {server:Mutex::new(server),directory,sessions:Mutex::new(HashMap::new()),files:Mutex::new(HashMap::new()),requests:Mutex::new(HashMap::new())});
-        main_view
+        let runtime=native_updates::Runtime::new(&directory,&server,0);
+        app.manage(AppState {server:Mutex::new(server),directory,sessions:Mutex::new(HashMap::new()),files:Mutex::new(HashMap::new()),requests:Mutex::new(HashMap::new()),updates:Mutex::new(runtime),update_gate:tokio::sync::Mutex::new(())});
+        let window=tauri::window::WindowBuilder::new(app,"workspace")
             .title("巡天御风管理系统").inner_size(1380.,900.).min_inner_size(360.,600.)
-            .visible(std::env::var_os("XTYF_SMOKE_DIR").is_none())
-            .on_permission_request(|_,_|tauri::webview::PermissionResponse::Deny)
-            .on_navigation(local_url).on_new_window(|_,_|tauri::webview::NewWindowResponse::Deny).build()?;
+            .visible(smoke_directory().is_none())
+            .build()?;
+        let handle=app.handle().clone();
+        window.on_window_event(move |event| {if let tauri::WindowEvent::Resized(size)=event {if let Some(view)=handle.get_webview("main"){let _=view.set_size(*size);}}});
+        native_updates::create_view(app.handle()).map_err(std::io::Error::other)?;
         Ok(())
     }).run(tauri::generate_context!()).expect("客户端启动失败");
 }

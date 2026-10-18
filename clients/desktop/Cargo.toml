@@ -21,6 +21,10 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["fs", "io-util", "sync"] }
 tokio-util = { version = "0.7", features = ["io", "rt"] }
 futures-util = "0.3"
+ring = "0.17"
+sha2 = "0.10"
+zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
+tempfile = "3"
 
 [profile.release]
 strip = true

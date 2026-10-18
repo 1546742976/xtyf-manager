@@ -25,6 +25,9 @@ impl LocalServer {
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => { thread::sleep(Duration::from_millis(5)); continue; },
                     Err(error) => panic!("accept: {error}"),
                 };
+                // Windows accepted sockets inherit the listener's nonblocking mode.
+                // Blocking HTTP parsing must not treat a not-yet-written request as EOF.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new(); if reader.read_line(&mut line).unwrap_or(0) == 0 { continue; }
@@ -47,7 +50,10 @@ impl LocalServer {
                 let response = handler(incoming);
                 let mut head = format!("HTTP/1.1 {} Test\r\nConnection: close\r\nContent-Length: {}\r\n", response.status, response.body.len());
                 for (name, value) in response.headers { head += &format!("{name}: {value}\r\n"); }
-                head += "\r\n"; stream.write_all(head.as_bytes()).unwrap(); stream.write_all(&response.body).unwrap();
+                head += "\r\n";
+                if let Err(error)=stream.write_all(head.as_bytes()).and_then(|_|stream.write_all(&response.body)) {
+                    assert!(matches!(error.kind(),std::io::ErrorKind::BrokenPipe|std::io::ErrorKind::ConnectionAborted|std::io::ErrorKind::ConnectionReset),"fixture response: {error}");
+                }
             }
         });
         Self { origin, stopped, worker: Some(worker) }
@@ -62,7 +68,7 @@ impl Drop for Scratch {
     fn drop(&mut self) { assert_eq!(self.0.parent(), Some(std::env::temp_dir().as_path())); let _ = fs::remove_dir_all(&self.0); }
 }
 fn state(server: &str, directory: &std::path::Path) -> AppState {
-    AppState { server: Mutex::new(server.into()), directory: directory.into(), sessions: Mutex::new(HashMap::new()), files: Mutex::new(HashMap::new()), requests: Mutex::new(HashMap::new()) }
+    AppState { server: Mutex::new(server.into()), directory: directory.into(), sessions: Mutex::new(HashMap::new()), files: Mutex::new(HashMap::new()), requests: Mutex::new(HashMap::new()), updates: Mutex::new(native_updates::Runtime::new(directory,server,0)), update_gate: tokio::sync::Mutex::new(()) }
 }
 async fn call(state: &AppState, args: Value) -> Value { response_value(send_request(state, &args).await.unwrap(), false).await.unwrap() }
 fn echo(request: Incoming) -> Outgoing {
@@ -145,4 +151,50 @@ fn multipart_uses_selected_handle_and_streams_bytes() {
         assert!(body.contains("name=\"note\"")); assert!(body.contains("test note")); assert!(body.contains("filename=\"selected.txt\"")); assert!(body.contains("selected file content"));
         assert!(send_request(&app, &json!({"path":"/upload","method":"POST","multipart":{"files":[{"field":"file","handle":"missing"}]}})).await.is_err());
     });
+}
+
+fn verify_update_test(bytes: &[u8]) -> Result<Option<(updates::Release,String)>,String> {
+    updates::parse_release_with_key(bytes,include_str!("updates/fixtures/TEST-ONLY-public.pem"))
+}
+fn ready_current(app: &AppState) { let token=app.updates.lock().unwrap().view.clone();native_updates::ready(app,&token).unwrap(); }
+#[test]
+fn signed_update_network_coalescing_pending_restart_and_no_repeat_download() {
+    let envelopes:Value=serde_json::from_str(include_str!("updates/fixtures/signed-envelopes.json")).unwrap();
+    let release=Arc::new(AtomicUsize::new(0));let server_release=release.clone();let metadata_hits=Arc::new(AtomicUsize::new(0));let metadata_counter=metadata_hits.clone();let download_hits=Arc::new(AtomicUsize::new(0));let download_counter=download_hits.clone();
+    let server=LocalServer::start(move |request| {
+        let is_b=server_release.load(Ordering::SeqCst)>0;
+        if request.path=="/api/client/updates" {metadata_counter.fetch_add(1,Ordering::SeqCst);thread::sleep(Duration::from_millis(30));Outgoing::text(200,&envelopes[if is_b {"bundle-b"}else{"valid"}].to_string())}
+        else {download_counter.fetch_add(1,Ordering::SeqCst);Outgoing {status:200,headers:vec![],body:if is_b {include_bytes!("updates/fixtures/bundle-B.zip").to_vec()}else{include_bytes!("updates/fixtures/bundle-A.zip").to_vec()}}}
+    });
+    let scratch=Scratch::new();let app=state(&server.origin,&scratch.0);
+    tauri::async_runtime::block_on(async {
+        let (first,second)=futures_util::future::join(native_updates::check_verified(&app,false,verify_update_test),native_updates::check_verified(&app,false,verify_update_test)).await;
+        let first=first.unwrap();assert_eq!(first["status"],"pending","{first}");assert_eq!(second.unwrap()["status"],"pending");assert_eq!(metadata_hits.load(Ordering::SeqCst),1);assert_eq!(download_hits.load(Ordering::SeqCst),1);assert!(app.updates.lock().unwrap().active.is_none());
+        assert_eq!(native_updates::check_verified(&app,false,verify_update_test).await.unwrap()["status"],"pending");assert_eq!(download_hits.load(Ordering::SeqCst),1);
+        let restarted=state(&server.origin,&scratch.0);assert_eq!(restarted.updates.lock().unwrap().active.as_ref().unwrap().version,"A");ready_current(&restarted);
+        assert_eq!(native_updates::check_verified(&restarted,false,verify_update_test).await.unwrap()["status"],"current");assert_eq!(download_hits.load(Ordering::SeqCst),1);
+        release.store(1,Ordering::SeqCst);assert_eq!(native_updates::check_verified(&restarted,false,verify_update_test).await.unwrap()["status"],"pending");assert_eq!(restarted.updates.lock().unwrap().active.as_ref().unwrap().version,"A");
+        let next=state(&server.origin,&scratch.0);assert_eq!(next.updates.lock().unwrap().active.as_ref().unwrap().version,"B");ready_current(&next);assert_eq!(download_hits.load(Ordering::SeqCst),2);
+    });
+}
+
+#[test]
+fn update_cancellation_and_oversized_download_preserve_active_state() {
+    let envelopes:Value=serde_json::from_str(include_str!("updates/fixtures/signed-envelopes.json")).unwrap();
+    let entered=Arc::new(AtomicBool::new(false));let marker=entered.clone();
+    let server=LocalServer::start(move |request| {if request.path=="/api/client/updates" {marker.store(true,Ordering::SeqCst);thread::sleep(Duration::from_millis(100));Outgoing::text(200,&envelopes["valid"].to_string())}else{Outgoing::text(200,"bad zip")}});
+    let scratch=Scratch::new();let app=state(&server.origin,&scratch.0);
+    tauri::async_runtime::block_on(async {
+        let cancel=async {for _ in 0..1000 {if entered.load(Ordering::SeqCst) {break;}tokio::time::sleep(Duration::from_millis(2)).await;}let mut runtime=app.updates.lock().unwrap();runtime.cancellation.cancel();*runtime=native_updates::Runtime::new(&scratch.0,"http://different-server.example",1);};
+        let (result,_)=futures_util::future::join(native_updates::check_verified(&app,false,verify_update_test),cancel).await;
+        assert!(entered.load(Ordering::SeqCst),"Update request did not reach fixture server: {result:?}");assert!(result.is_err());let runtime=app.updates.lock().unwrap();assert!(runtime.store.as_ref().unwrap().state.pending.is_none());assert_eq!(runtime.store.as_ref().unwrap().state.highest,0);
+    });
+    let server=LocalServer::start(|_|Outgoing::text(200,"12345"));let scratch=Scratch::new();let app=state(&server.origin,&scratch.0);
+    tauri::async_runtime::block_on(async {let response=app.session(&server.origin).unwrap().client.get(format!("{}/data",server.origin)).send().await.unwrap();assert!(updates::bounded_response(response,4).await.is_err());});
+}
+
+#[test] fn old_view_ready_cannot_confirm_a_replacement_trial() {
+    let scratch=Scratch::new();let app=state("http://localhost",&scratch.0);let old=app.updates.lock().unwrap().view.clone();
+    {let mut runtime=app.updates.lock().unwrap();runtime.view=uuid::Uuid::new_v4().to_string();runtime.ready=false;}
+    assert!(native_updates::ready(&app,&old).is_err());assert!(!app.updates.lock().unwrap().ready);ready_current(&app);assert!(app.updates.lock().unwrap().ready);
 }

@@ -41,6 +41,9 @@ def main():
     frontend = CLIENT / 'frontend/dist'
     if not (frontend / 'index.html').is_file() or not (frontend / 'asset-manifest.json').is_file():
         raise RuntimeError('Shared local frontend is missing; run python clients/build_frontend.py first')
+    update_public_key = CLIENT / 'update-public-key.pem'
+    if not update_public_key.is_file():
+        raise RuntimeError('Pinned UI update public key is missing')
     asset_manifest = json.loads((frontend / 'asset-manifest.json').read_text(encoding='utf-8'))
     if asset_manifest.get('version') != config['version']:
         raise RuntimeError('Shared frontend version does not match the Android build version')
@@ -73,6 +76,7 @@ def main():
     run(args.jdk / 'bin/jar.exe', 'cf', work / 'classes.jar', '-C', work / 'classes', '.')
     run(java, '-cp', tools / 'lib/d8.jar', 'com.android.tools.r8.D8', '--release', '--min-api', '26', '--lib', platform, '--output', work / 'dex', work / 'classes.jar')
     with zipfile.ZipFile(work / 'resources.apk') as base, zipfile.ZipFile(work / 'unsigned.apk', 'w') as apk:
+        apk.write(update_public_key, 'assets/update-public-key.pem', compress_type=zipfile.ZIP_DEFLATED)
         for entry in base.infolist(): apk.writestr(entry, base.read(entry.filename))
         for dex in (work / 'dex').glob('*.dex'): apk.write(dex, dex.name, compress_type=zipfile.ZIP_DEFLATED)
         for name in sorted([*asset_manifest['files'], 'asset-manifest.json']):

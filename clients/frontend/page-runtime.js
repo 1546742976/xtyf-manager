@@ -3,6 +3,8 @@
   'use strict';
   const app=parent.XTYF,OriginalFormData=window.FormData,selected=new WeakMap(),localOrigin=app.localBase;
   const own=app.generation,controllers=new Set();
+  let failedLocally=false;
+  window.addEventListener('error',event=>{if(event.error)failedLocally=true;});
   const current=()=>new URL(app.route,localOrigin);
   window.XTYFLocation={
     get href(){return current().href;},set href(value){app.navigate(value);},
@@ -137,5 +139,6 @@
     if(window.XTYFLocation.pathname==='/login'){
       const form=document.getElementById('login-form'),link=document.createElement('button');link.type='button';link.className='btn block';link.textContent='服务器地址设置';link.onclick=app.openSettings;form?.append(link);
     }
+    if(!failedLocally)app.pageReady?.(own);
   });
 })();

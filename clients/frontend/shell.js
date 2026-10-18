@@ -7,16 +7,34 @@
     '/account':['account.html','account'], '/manage':['manage.html','manage','manage_tasks'],
     '/members':['members.html','members','manage_members'], '/discussions':['discussions.html','discussions'],
     '/funds':['funds.html','funds','access_funds'], '/invoices':['invoices.html','invoices'],
-    '/account/email/verify':['email_verify.html','account'], '/admin/mail':['mail_admin.html','mail','manage_mail'],
+    '/admin/mail':['mail_admin.html','mail','manage_mail'],
     '/admin/security':['security.html','security','manage_security']
   };
   const anonymousBootstrap=()=>({authenticated:false,me:null,user:null,permissions:{},role_names:{admin:'管理员',manager:'管理人员',member:'成员'},statuses:[],priorities:[]});
   let config={serverUrl:'',version:''},bootstrap=anonymousBootstrap();
   let route='/',frame=null,sequence=0,generation=0,historyIndex=0,serverGeneration=0,bootSequence=0,bootstrapSequence=0,booting=false,compatible=false,preview=null,noticeTimer;
+  let compatibilityRejected=false,nativeInitialized=false,locallyReady=false,healthySent=false,nativeForeground=true,updatesServer=null,updateState={status:'unavailable'};
   const requests=new Map(),resourceURLs=new Set();
   const host=document.getElementById('page-host'),settings=document.getElementById('client-settings'),previewDialog=document.getElementById('resource-preview');
   function notify(text){const el=document.getElementById('client-notice');el.textContent=text;el.hidden=false;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>el.hidden=true,6000);}
   function connection(text=''){const el=document.getElementById('connection-status');el.querySelector('span').textContent=text;el.hidden=!text;}
+  function supports(capability){return XTYFUpdates.supports(config,capability);}
+  function updateStatus(value){
+    updateState=value||{status:'unavailable'};
+    const labels={current:'当前页面已是最新版本。',pending:'新页面已下载，将在下次启动生效。',unavailable:'服务器暂未发布页面更新。',incompatible:'此更新需要升级客户端。',failed:'页面更新失败，可手动重试。'};
+    document.getElementById('update-status').textContent=updateState.message||labels[updateState.status]||'正在检查页面更新…';
+    document.getElementById('update-version').textContent='当前页面：'+(updateState.currentVersion||'内置版本')+(updateState.pendingVersion?' · 待生效：'+updateState.pendingVersion:'');
+    document.getElementById('updates-check').disabled=updateState.status==='checking';
+    document.getElementById('updates-apply').hidden=updateState.status!=='pending';
+    document.getElementById('updates-installer').hidden=!updateState.installer;
+    if(updateState.status==='incompatible'&&!updateState.installer)document.getElementById('update-status').textContent+=' 暂无此平台的正式安装包。';
+  }
+  const updates=XTYFUpdates.create({invoke:(action,args)=>XTYFNative.invoke(action,args),visible:()=>!document.hidden&&nativeForeground,changed:updateStatus});
+  function markHealthy(){
+    if(!nativeInitialized||!locallyReady||healthySent||!supports('ui_updates'))return;
+    healthySent=true;
+    XTYFNative.invoke('ui_ready',{viewToken:window.__XTYF_VIEW_TOKEN__||null}).catch(error=>notify('页面已打开，但更新确认失败：'+error.message));
+  }
   function pathFor(value){
     const url=new URL(value,localBase+route);
     if(!isLocal(url)&&(!config.serverUrl||url.origin!==new URL(config.serverUrl).origin))throw new Error('业务请求仅允许连接当前服务器。');
@@ -28,6 +46,7 @@
     return new Response([204,205,304].includes(status)?null:result.encoding==='base64'?bytes(result):result.body??'',{status,headers});
   }
   async function request(input,options={}){
+    if(compatibilityRejected)throw new Error('服务器协议不兼容，请在客户端设置中检查更新或更换服务器。');
     const server=serverGeneration;
     let path=pathFor(input instanceof Request?input.url:input);
     if(path.split('?')[0]==='/login')path='/api/client/login';
@@ -60,7 +79,7 @@
       if(response.status===401&&path!=='/api/client/login'&&path!=='/api/client/bootstrap'&&route.split('?')[0]!=='/login'){
         bootstrap=anonymousBootstrap();setTimeout(()=>{if(server===serverGeneration)navigate('/login?next='+encodeURIComponent(route),true);},0);
       }else if(response.status===403){const data=await response.clone().json().catch(()=>({}));if(data.reason==='password_change_required')setTimeout(()=>{if(server===serverGeneration)navigate('/account',true);},0);}
-      const changesSession=path==='/api/client/login'||path==='/api/client/logout'||path==='/api/password'||path==='/api/account/preferences'||path==='/api/account/profile'||/^\/api\/(?:admin\/permissions\/|member\/\d+\/profile)/.test(path);
+      const changesSession=path==='/api/client/login'||path==='/api/client/logout'||path==='/api/password'||path==='/api/account/preferences'||path==='/api/account/profile'||path==='/api/account/avatar'||/^\/api\/(?:admin\/permissions\/|member\/\d+\/profile)/.test(path);
       if(changesSession&&!['GET','HEAD','OPTIONS'].includes(method)&&response.ok){
         const info=await response.clone().json().catch(()=>({}));
         if(info.ok!==false){try{await refreshBootstrap(server);}catch(_){}}
@@ -73,12 +92,12 @@
     const attempt=++bootstrapSequence;
     const result=await XTYFNative.invoke('request',{path:'/api/client/bootstrap',method:'GET',headers:{'X-XTYF-Client-Protocol':'1'},requestId:'bootstrap-'+(++sequence)});
     if(server!==serverGeneration||attempt!==bootstrapSequence)throw Object.assign(new DOMException('初始化已被替换','AbortError'),{superseded:true});
-    if(result.status===404){compatible=false;throw Object.assign(new Error('服务器需要更新：请部署支持本地客户端的服务器版本。'),{incompatible:true});}
+    if(result.status===404){compatible=false;compatibilityRejected=true;throw Object.assign(new Error('服务器需要更新：请部署支持本地客户端的服务器版本。'),{incompatible:true});}
     let data;try{data=JSON.parse(result.body);}catch(_){data=null;}
     if(result.status<200||result.status>=300)throw new Error(data?.error||'服务器暂时不可用（'+result.status+'）');
-    if(!data||typeof data!=='object'||Array.isArray(data)||data.protocolVersion!==1){compatible=false;throw Object.assign(new Error('服务器协议不兼容，请更新服务器或客户端后重试。'),{incompatible:true});}
+    if(!data||typeof data!=='object'||Array.isArray(data)||!XTYFUpdates.compatibleServer(data)){compatible=false;compatibilityRejected=true;throw Object.assign(new Error('服务器协议不兼容，请更新服务器或客户端后重试。'),{incompatible:true});}
     if(result.status!==200||!data.ok)throw new Error(data.error||'服务器暂时不可用');
-    bootstrap=data;compatible=true;connection('');return data;
+    bootstrap=data;compatible=true;compatibilityRejected=false;connection('');return data;
   }
   function normalized(value){const u=new URL(value,localBase+route);return u.pathname+u.search+u.hash;}
   function setRoute(value,replace=false,render=true){
@@ -100,12 +119,14 @@
     const retry=document.createElement('button');retry.textContent='重试';retry.onclick=boot;
     const edit=document.createElement('button');edit.textContent='服务器设置';edit.onclick=openSettings;
     section.append(h,p,retry,edit);host.replaceChildren(section);
+    locallyReady=true;markHealthy();
   }
   function renderRoute(){
+    if(compatibilityRejected)return localError('服务器需要更新','服务器协议不兼容，请在客户端设置中检查更新或更换服务器。');
     const url=new URL(route,localBase),key=url.pathname.replace(/\/$/,'')||'/';
     const entry=routes[key];
     if(!entry)return localError('本地页面不存在','此链接没有对应的应用页面。可返回工作台或检查服务器地址。');
-    if(!bootstrap.authenticated&&key!=='/login'&&key!=='/account/email/verify'){
+    if(!bootstrap.authenticated&&key!=='/login'){
       setRoute('/login?next='+encodeURIComponent(route),true,false);return renderRoute();
     }
     if(bootstrap.authenticated&&bootstrap.me?.must_change_password&&key!=='/account'){
@@ -118,7 +139,7 @@
     const taskType=url.searchParams.get('type')==='daily'?'daily':'vehicle',project=url.searchParams.get('project')||'';
     const context={...bootstrap,page:entry[1],task_type:taskType,project_id:taskType==='daily'&&/^[1-9]\d{0,18}$/.test(project)?project:''};
     const html=XTYFTemplates.render(entry[0],context);
-    cancelPage();generation++;
+    cancelPage();generation++;locallyReady=false;
     if(frame)frame.remove();
     frame=document.createElement('iframe');frame.title='巡天御风工作空间';
     frame.setAttribute('referrerpolicy','no-referrer');
@@ -133,6 +154,9 @@
       if(server!==serverGeneration||attempt!==bootSequence)return;
       config=nextConfig;document.getElementById('server-url').value=config.serverUrl;
       document.getElementById('client-version').textContent='客户端 '+config.version;
+      nativeInitialized=true;document.getElementById('client-updates').hidden=!supports('ui_updates');
+      if(updatesServer!==config.serverUrl){updatesServer=config.serverUrl;updates.configure(config);}
+      markHealthy();
       await refreshBootstrap(server);
       if(server!==serverGeneration||attempt!==bootSequence)return;
       renderRoute();
@@ -143,8 +167,12 @@
     }finally{if(attempt===bootSequence)booting=false;}
   }
   function openSettings(){document.getElementById('server-url').value=config.serverUrl;document.getElementById('settings-error').textContent='';settings.showModal();}
-  async function download(value,filename='download'){return XTYFNative.invoke('download',{path:pathFor(value),filename});}
+  async function download(value,filename='download'){
+    if(compatibilityRejected)throw new Error('服务器协议不兼容，请先检查更新。');
+    return XTYFNative.invoke('download',{path:pathFor(value),filename});
+  }
   async function readResource(value){
+    if(compatibilityRejected)throw new Error('服务器协议不兼容，请先检查更新。');
     const server=serverGeneration;
     const result=await XTYFNative.invoke('read_resource',{path:pathFor(value)});
     if(server!==serverGeneration)throw new DOMException('服务器已切换','AbortError');
@@ -180,21 +208,43 @@
     if(route!=='/'&&!route.startsWith('/login')){navigate('/',true);return true;}return false;
   }
   window.XTYF={request,download,readResource,imageURL,preview:previewResource,navigate,notify,openSettings,localBase,isLocal,
+    supports,pageReady:own=>{if(own===generation){locallyReady=true;markHealthy();}},
     invoke:(action,args)=>XTYFNative.invoke(action,args),get route(){return route;},get bootstrap(){return bootstrap;},get config(){return config;},get generation(){return generation;},
     replaceRoute:value=>setRoute(value,true,false),isPage:value=>Object.hasOwn(routes,new URL(value,localBase).pathname.replace(/\/$/,'')||'/'),
     openExternal:url=>XTYFNative.invoke('open_external',{url}),get compatible(){return compatible;}};
   window.XTYFClient={back};
   document.getElementById('client-settings-open').onclick=openSettings;document.getElementById('settings-cancel').onclick=()=>settings.close();
   document.getElementById('connection-retry').onclick=boot;
+  document.getElementById('updates-check').onclick=()=>updates.check(true);
+  document.getElementById('updates-apply').onclick=async()=>{
+    if(updateState.status!=='pending'||!window.confirm('立即重载页面？未保存的表单、头像裁剪及上传状态可能丢失。'))return;
+    const button=document.getElementById('updates-apply');button.disabled=true;
+    try{await XTYFNative.invoke('apply_update',{});}catch(error){notify('无法启用新页面：'+error.message);}finally{button.disabled=false;}
+  };
+  document.getElementById('updates-installer').onclick=async()=>{
+    const path=updateState.installer?.url;
+    if(typeof path!=='string'||!path.startsWith('/')||path.startsWith('//')||/[\\#]/.test(path))return notify('安装包链接无效，请重新检查更新。');
+    const extensions={'windows-x86_64':'exe','ubuntu-aarch64':'deb','fedora-x86_64':'rpm',android:'apk'};
+    const suffix=extensions[config.platform];if(!suffix)return notify('暂无此平台的正式安装包。');
+    const button=document.getElementById('updates-installer');button.disabled=true;
+    try{
+      const result=await XTYFNative.invoke('download',{path,filename:'xtyf-manager.'+suffix,expectedSha256:updateState.installer.sha256});
+      notify(result.cancelled?'已取消保存安装包。':'安装包已保存，请按系统安装步骤完成升级。');
+    }catch(error){notify('安装包保存失败：'+error.message);}finally{button.disabled=false;}
+  };
+  document.addEventListener('visibilitychange',()=>updates.visibility());
+  window.addEventListener('xtyf-foreground',event=>{nativeForeground=event.detail?.active!==false;updates.visibility();});
+  window.addEventListener('focus',()=>updates.visibility());
+  window.addEventListener('pagehide',()=>updates.dispose());
   document.getElementById('preview-close').onclick=closePreview;previewDialog.addEventListener('cancel',closePreview);
   document.getElementById('preview-save').onclick=()=>preview&&download(preview.path,preview.filename).catch(error=>notify(error.message));
   document.getElementById('server-form').onsubmit=async event=>{
     event.preventDefault();const button=event.target.querySelector('[type="submit"]');button.disabled=true;
     // Supersede a pending initial boot before invoking native server replacement.
-    serverGeneration++;bootSequence++;bootstrapSequence++;booting=false;
+    serverGeneration++;bootSequence++;bootstrapSequence++;booting=false;updates.dispose();updatesServer=null;
     try{
       const result=await XTYFNative.invoke('set_server',{serverUrl:document.getElementById('server-url').value.trim()});
-      config={...config,...result};cancelPage();bootstrap=anonymousBootstrap();compatible=false;historyIndex=0;
+      config={...config,...result};cancelPage();bootstrap=anonymousBootstrap();compatible=false;compatibilityRejected=false;historyIndex=0;
       if(previewDialog.open)closePreview();
       settings.close();navigate('/login',true);await boot();
     }catch(error){document.getElementById('settings-error').textContent=error.message;await boot();}finally{button.disabled=false;}
