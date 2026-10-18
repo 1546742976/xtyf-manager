@@ -45,7 +45,7 @@
   <div class="ws-sidebar-bottom">
     <div class="ws-user-row">
     <a class="ws-user-card" href="{{ url_for('account') }}">
-      <span class="ws-avatar">{{ me.name[:1] }}</span>
+      {% set avatar_class = "ws-avatar" %}{% include "_account_avatar.html" %}
       <span class="ws-user-info"><strong>{{ me.name }}</strong><small>{{ role_names[me.role] }}</small></span>
     </a>
     <button type="button" class="ws-theme-toggle" data-theme-toggle aria-label="切换亮色或暗色" {% if me.must_change_password %}disabled{% endif %}>

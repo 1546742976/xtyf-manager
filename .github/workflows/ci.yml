@@ -111,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           failures=0
-          for suite in review_fixes pr22_merge task_center daily_mail action_failures login_mobile palette_workspace local_collaboration account_invoice_ui task_schedule seven_repairs seven_repairs_review; do
+          for suite in review_fixes pr22_merge task_center daily_mail action_failures login_mobile palette_workspace local_collaboration account_invoice_ui account_avatar task_schedule seven_repairs seven_repairs_review; do
             echo "::group::Browser test: ${suite}"
             if ! node "tests/browser/${suite}.cjs"; then
               echo "::error::Browser suite ${suite} failed"
@@ -143,6 +143,8 @@ jobs:
             .build-tools/seven-repairs-20261018/browser/results.json
             .venv/seven-repairs-review-check/*.png
             .venv/seven-repairs-review-check/result.json
+            .build-tools/account-avatar-check/*.png
+            .build-tools/account-avatar-check/result.json
           include-hidden-files: true
           if-no-files-found: warn
 

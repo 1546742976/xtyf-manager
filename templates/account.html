@@ -8,7 +8,17 @@
 {% if me.must_change_password %}<p class="panel error account-password-warning" role="alert">当前使用的是初始或重置密码。请先设置一个与当前密码不同的新密码，之后才能进入工作区。</p>{% endif %}
 <div class="ux-account-grid{% if me.must_change_password %} ux-account-password-required{% endif %}">
   <section class="panel ux-account-profile" aria-label="账户资料">
-    <div class="ux-account-avatar" aria-hidden="true">{{ me.name[:1] }}</div>
+    {% set avatar_class = "ux-account-avatar" %}{% include "_account_avatar.html" %}
+    {% if not me.must_change_password %}<div class="account-avatar-editor" id="avatar-editor" hidden>
+      <div class="account-avatar-actions">
+        <button type="button" class="btn" id="avatar-change">更换头像</button>
+        <button type="button" class="btn" id="avatar-remove" {% if not me.avatar_url %}disabled{% endif %}>恢复默认头像</button>
+        <button type="button" class="btn" id="avatar-resume" hidden>继续调整头像</button>
+      </div>
+      <input type="file" id="avatar-file" accept="image/jpeg,image/png,image/webp" hidden>
+      <p class="ux-note">支持 JPG、PNG、WebP 静态图片，最大 10 MiB。选择后可调整裁剪范围。</p>
+      <p id="avatar-result" class="ux-account-result" role="status" aria-live="polite"></p>
+    </div>{% endif %}
     <h2>个人信息</h2>
     <dl class="ux-account-info">
       <dt>成员 ID</dt><dd id="account-id">{{ me.id }}</dd>
@@ -51,8 +61,28 @@
       </form>
     </section>
 </div>
+{% if not me.must_change_password %}<dialog id="avatar-crop-dialog" class="avatar-crop-dialog" aria-labelledby="avatar-crop-title" aria-describedby="avatar-crop-help">
+  <div class="avatar-crop-heading"><h2 id="avatar-crop-title">调整头像</h2><button type="button" class="btn" id="avatar-cancel">取消</button></div>
+  <p id="avatar-crop-help" class="ux-note">拖动图片或使用方向按钮调整位置；也可聚焦图片后按方向键，按住 Shift 加快移动。</p>
+  <div class="avatar-crop-layout">
+    <div class="avatar-crop-stage"><canvas id="avatar-crop-canvas" width="512" height="512" tabindex="0" role="img" aria-label="头像裁剪区域，可使用方向键移动图片" aria-describedby="avatar-crop-help"></canvas><span class="avatar-crop-mask" aria-hidden="true"></span></div>
+    <div class="avatar-crop-tools"><div class="avatar-preview-wrap"><canvas id="avatar-preview" width="128" height="128" role="img" aria-label="保存后的圆形头像预览"></canvas><span>圆形预览</span></div>
+      <div class="avatar-move-buttons" role="group" aria-label="移动图片">
+        <button type="button" class="btn" data-avatar-move="up" aria-label="向上移动图片">↑</button>
+        <button type="button" class="btn" data-avatar-move="left" aria-label="向左移动图片">←</button>
+        <button type="button" class="btn" data-avatar-move="down" aria-label="向下移动图片">↓</button>
+        <button type="button" class="btn" data-avatar-move="right" aria-label="向右移动图片">→</button>
+      </div>
+    </div>
+  </div>
+  <label class="avatar-zoom-label" for="avatar-zoom">缩放 <output id="avatar-zoom-value" for="avatar-zoom">1.00 倍</output></label>
+  <input id="avatar-zoom" type="range" min="1" max="4" step="0.01" value="1" aria-valuetext="1.00 倍">
+  <p id="avatar-crop-result" class="ux-account-result" role="status" aria-live="polite"></p>
+  <div class="avatar-crop-actions"><button type="button" class="btn" id="avatar-reselect">重新选图</button><button type="button" class="btn primary" id="avatar-save">保存头像</button></div>
+</dialog>{% endif %}
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='account.js') }}"></script>
+<script src="{{ url_for('static', filename='account-avatar.js') }}"></script>
 <script src="{{ url_for('static', filename='email.js') }}"></script>
 {% endblock %}
