@@ -1,6 +1,7 @@
 """Regressions for the defects reproduced during the whole-project review."""
 import io
 import csv
+import json
 import os
 import sqlite3
 import tempfile
@@ -223,15 +224,18 @@ class TestReviewFixes(unittest.TestCase):
         from deploy import seed_data
         from common import DB_PATH, get_db
         name = 'seed_' + uuid4().hex[:8]
-        with patch.multiple(seed_data, DB_PATH=DB_PATH,
-                            MEMBERS=[(name, name, '视觉;电控', 'member')],
-                            TASKS=[(name, name, '哨兵', '视觉', '未开始', 80, '中', '')]), \
+        with tempfile.TemporaryDirectory() as root, patch.object(seed_data, 'DB_PATH', DB_PATH), \
                 contextlib.redirect_stdout(io.StringIO()):
-            seed_data.main()
+            seed_path = os.path.join(root, 'seed-import.json')
+            with open(seed_path, 'w', encoding='utf-8') as stream:
+                json.dump({'members': [(name, name, '视觉;电控', 'member')],
+                           'tasks': [(name, name, '哨兵', '视觉', '未开始', 80, '中', '')]},
+                          stream, ensure_ascii=False)
+            seed_data.main(seed_path)
             with app_module.app.app_context():
                 db = get_db()
                 before = dict(db.execute('SELECT * FROM members WHERE username=?', (name,)).fetchone())
-            seed_data.main()
+            seed_data.main(seed_path)
         with app_module.app.app_context():
             db = get_db()
             after = dict(db.execute('SELECT * FROM members WHERE username=?', (name,)).fetchone())
@@ -245,6 +249,15 @@ class TestReviewFixes(unittest.TestCase):
             self.assertEqual(db.execute('SELECT kind FROM task_revisions WHERE task_id=?', (task['id'],)).fetchone()[0], 'create')
             self.assertTrue(db.execute('SELECT 1 FROM member_projects WHERE member_id=? AND project_id=?',
                                        (after['id'], task['project_id'])).fetchone())
+
+    def test_seed_missing_local_file_does_not_open_database(self):
+        from deploy import seed_data
+        self.assertEqual(seed_data.MEMBERS, [])
+        self.assertEqual(seed_data.TASKS, [])
+        with tempfile.TemporaryDirectory() as root, patch.object(seed_data.sqlite3, 'connect') as connect:
+            with self.assertRaises(FileNotFoundError):
+                seed_data.main(os.path.join(root, 'missing.json'))
+            connect.assert_not_called()
 
     def test_seed_refuses_archived_catalog_and_missing_admin_without_writes(self):
         from deploy import seed_data
