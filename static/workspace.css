@@ -21,6 +21,11 @@ body.ws-app { margin:0 !important; min-width:0 !important; background:#f3f6fb !i
 .ws-avatar,.ws-top-avatar{display:grid;place-items:center;border-radius:12px;background:#dbe9ff;color:#2550a4;font-weight:800;flex:none}
 .ws-avatar{width:35px;height:35px}.ws-user-info{display:grid;gap:2px;min-width:0}.ws-user-info strong{font-size:12px}.ws-user-info small{color:#8fa7c8;font-size:11px}
 .account-avatar{position:relative;overflow:hidden;flex:none}.account-avatar [data-avatar-image]{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}.account-avatar [hidden]{display:none!important}
+.ios-install.ux-note{display:block;text-align:left}
+.ios-install[hidden]{display:none!important}
+.ios-install summary{cursor:pointer;min-height:44px;padding:10px 0;box-sizing:border-box}
+.ios-install ol{padding-left:20px;margin:8px 0}
+.ios-install p{margin:8px 0 0}
 .ws-signout{display:flex;gap:11px;align-items:center;color:#a8bbd6 !important;font-size:12px;padding:10px 9px;border-radius:10px;text-decoration:none}
 .workspace-main{margin-left:242px;min-width:0;min-height:100vh}
 .workspace-topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:70;background:#fff;border-bottom:1px solid #e3eaf3;padding:0 32px;min-height:69px}

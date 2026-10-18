@@ -15,6 +15,10 @@ from jinja2 import DictLoader,Environment
 
 
 class FrontendTests(unittest.TestCase):
+    def test_website_installation_is_not_rendered_in_native_clients(self):
+        for name in ('_web_app_head.html', '_ios_install.html'):
+            self.assertEqual(adapt_template(name, 'website-only markup'), '')
+
     @classmethod
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory()

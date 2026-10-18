@@ -112,6 +112,8 @@ def adapt_script(text):
 
 
 def adapt_template(name, text):
+    if name in {"_web_app_head.html", "_ios_install.html"}:
+        return ""  # Home-screen installation applies only to the hosted website.
     if name == "_security_head.html":
         text = text.replace('<script src="{{ url_for(\'static\', filename=\'security.js\') }}"></script>', '')
     if name == "funds.html":

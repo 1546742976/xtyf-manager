@@ -27,6 +27,27 @@ fs.mkdirSync(output, {recursive:true});
       const page=await context.newPage(), errors=[];
       page.on('pageerror',error=>errors.push(error.message));
       await page.goto(base+'/login');
+      const install=page.locator('[data-ios-install]');
+      const iphone=device.startsWith('iPhone');
+      assert.equal(await install.isVisible(),iphone);
+      assert.equal(await page.locator('meta[name=apple-mobile-web-app-capable]').getAttribute('content'),'yes');
+      const manifestResponse=await context.request.get(new URL(await page.locator('link[rel=manifest]').getAttribute('href'),base).href);
+      assert.equal(manifestResponse.status(),200);
+      assert.equal((await manifestResponse.json()).display,'standalone');
+      if(iphone) {
+        await install.locator('summary').tap();
+        assert.ok((await install.innerText()).includes('添加到主屏幕'));
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+        await page.screenshot({path:path.join(output,`${device.replaceAll(' ','-')}-install.png`),fullPage:true});
+        await install.locator('summary').tap();
+        // Emulate only the installed-mode signal; this is not an iOS installation test.
+        const standalone=await browser.newContext({...devices[device]});
+        await standalone.addInitScript(()=>Object.defineProperty(navigator,'standalone',{value:true}));
+        const installedPage=await standalone.newPage();
+        await installedPage.goto(base+'/login');
+        assert.equal(await installedPage.locator('[data-ios-install]').isVisible(),false);
+        await standalone.close();
+      }
       const password=page.getByLabel('密码',{exact:true});
       const toggle=page.locator('.login-password-toggle');
       await page.locator('[name=username]').fill('admin');
@@ -65,7 +86,7 @@ fs.mkdirSync(output, {recursive:true});
       await page.locator('button[type=submit]').tap();
       await page.waitForURL('**/account');
       assert.deepEqual(errors,[]);
-      results.push({device,engine:engine.name(),version:browser.version(),orientations:3,login:true});
+      results.push({device,engine:engine.name(),version:browser.version(),orientations:3,login:true,homeScreenMetadata:true,installGuidance:iphone,installedSignalEmulated:iphone});
       await browser.close();browser=undefined;
     }
     fs.writeFileSync(path.join(output,'mobile-result.json'),JSON.stringify({ok:true,results},null,2));

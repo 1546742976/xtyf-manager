@@ -160,6 +160,19 @@ async function adjustCrop(page, mobile) {
       browser = await engine.launch({headless:true, ...(executablePath ? {executablePath} : {})});
       const context = await browser.newContext(mobile ? {...devices['iPhone 13'], reducedMotion:'reduce'} :
         {viewport:{width:1280, height:900}, reducedMotion:'reduce'});
+      // Use the same pinned libraries as the native build so CDN availability
+      // cannot prevent the funds-page avatar assertions from running.
+      const cdnAssets = {
+        '/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css': ['bootstrap/bootstrap.min.css', 'text/css'],
+        '/ajax/libs/twitter-bootstrap/5.3.3/js/bootstrap.bundle.min.js': ['bootstrap/bootstrap.bundle.min.js', 'text/javascript'],
+        '/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css': ['bootstrap-icons/bootstrap-icons.min.css', 'text/css'],
+        '/ajax/libs/bootstrap-icons/1.11.3/font/fonts/bootstrap-icons.woff2': ['bootstrap-icons/fonts/bootstrap-icons.woff2', 'font/woff2'],
+        '/ajax/libs/bootstrap-icons/1.11.3/font/fonts/bootstrap-icons.woff': ['bootstrap-icons/fonts/bootstrap-icons.woff', 'font/woff'],
+      };
+      await context.route('https://cdn.bootcdn.net/**', route => {
+        const asset = cdnAssets[new URL(route.request().url()).pathname];
+        return asset ? route.fulfill({path:path.join(root, 'clients/frontend/vendor', asset[0]), contentType:asset[1]}) : route.continue();
+      });
       const page = await context.newPage(); currentPage = page;
       await page.addInitScript(() => {
         const original = window.fetch;
@@ -176,6 +189,7 @@ async function adjustCrop(page, mobile) {
       let posts = 0;
       page.on('request', request => { if (request.url().includes('/api/account/avatar') && request.method() === 'POST') posts++; });
       await login(page, base, !mobile); await account(page, base);
+      assert.equal(await page.locator('[data-ios-install]').isVisible(), mobile);
       assert.ok((await imageState(page)).every(image => image.fallback && !image.url));
       assert.equal(await page.locator('#avatar-remove').isDisabled(), true);
       const draft = page.locator('#account-profile-form [name=username]');
@@ -269,7 +283,7 @@ async function adjustCrop(page, mobile) {
       assert.ok((await imageState(page)).every(image => image.fallback && !image.url));
       await page.reload(); assert.ok((await imageState(page)).every(image => image.fallback && !image.url));
       await page.screenshot({path:path.join(output, `${engine.name()}-restored.png`), fullPage:true});
-      results.push({engine:engine.name(), version:browser.version(), mobile, uploads:posts,
+      results.push({engine:engine.name(), version:browser.version(), mobile, uploads:posts, cdnAssets:'pinned-local-fixtures',
         dragInput:mobile ? 'synthetic-touch-pointer' : 'mouse', fileSelection:'filechooser',
         checks:['cancel-no-upload', 'drag-keyboard-zoom-bounds', 'failure-and-retry', 'profile-draft-preserved',
           'three-avatars', 'refresh', 'invoices-and-funds', 'image-fallback', 'native-hidden', 'restore-default']});

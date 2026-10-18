@@ -6,6 +6,18 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 
 ## 安装和升级
 
+### iPhone：Safari 主屏幕网页版
+
+用 Safari 打开 **https://manager.skywalker-rm.online/**，在分享菜单选择“添加到主屏幕”，如有“作为网页 App 打开”选项则保持开启，然后点“添加”。也可在登录页或账户页展开 iPhone 安装指引。主屏幕名称为“巡天御风”，进入后使用网站自身的导航，不增加客户端工具栏。安装操作由 Safari 提供，网站不能代替用户点击系统安装。
+
+此入口复用网站的登录、任务、头像、发票和资金功能，不生成 IPA、不需要 Mac 或开发者签名，也不改变现有四平台安装包版本。首次从主屏幕打开可能需要重新登录。需要联网；不注册 Service Worker、不离线缓存业务页面，继续使用服务端既有的页面 `no-store` 和静态文件重新验证规则。重新打开或主动重载页面获取云端内容，使用期间不强制刷新草稿。
+
+网站保留默认 viewport 安全区域行为和非透明系统状态栏，不使用覆盖刘海的全屏布局。iPhone 主屏幕入口、刘海／底部手势区域和系统文件操作仍需真机验收，桌面 WebKit 手机模拟不能代替真机。
+
+这些声明、图标及安装说明需要随网站源码部署才会在线生效；构建 EXE／APK／DEB／RPM 不会部署网站。普通网页使用不依赖 `/api/client/bootstrap`。参考：[Apple 安装说明](https://support.apple.com/en-lamr/guide/iphone/iphea86e5236/ios)、[WebKit 主屏幕应用说明](https://webkit.org/blog/13878/)。
+
+### 原生客户端
+
 - Windows 10/11 x64：`dist/clients/windows/XTYF-Manager-Setup-<版本>-x64.exe`。NSIS 安装器提供快捷方式和卸载入口；缺少 WebView2 时联网补齐运行时。EXE 未使用发布者证书签名。
 - Android 8.0+：`dist/clients/android/XTYF-Manager-<版本>.apk`。保留包名 `online.skywalker.manager` 和既有发布密钥，递增 versionCode 后覆盖安装。返回使用系统返回键或手势。
 - Ubuntu 22.04 ARM64：`sudo apt install ./XTYF-Manager-<版本>-arm64.deb`。
