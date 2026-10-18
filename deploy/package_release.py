@@ -23,7 +23,7 @@ def archive_head(commit):
 def build_ui_from_head(files, commit, private_key, installers=None):
     """Execute the archived builder so website and UI always represent one commit."""
     with tempfile.TemporaryDirectory(prefix='xtyf-release-head-') as temporary:
-        source = Path(temporary)
+        source = Path(temporary).resolve()
         for name, content in files.items():
             target = source / name
             if not target.resolve().is_relative_to(source) or '\\' in name:

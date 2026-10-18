@@ -1,5 +1,6 @@
 """Server package composition is tested without building or publishing installers."""
 from pathlib import Path
+from contextlib import nullcontext
 import io
 import subprocess
 import tarfile
@@ -61,3 +62,36 @@ class TestClientUIPublisher(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Unsafe source archive path"):
                 build_ui_from_head({"../unsafe": b""}, "c" * 40, Path("key"))
             run.assert_not_called()
+
+    def test_unnormalized_staging_root_accepts_selected_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            staging = Path(temporary) / 'staging'
+            (staging / 'child').mkdir(parents=True)
+            # Reproduce the same canonical/noncanonical mismatch as Windows
+            # short temporary paths without depending on 8.3 names being enabled.
+            alias = staging / 'child' / '..'
+
+            def build(command, cwd, check):
+                self.assertEqual(cwd, staging.resolve())
+                self.assertEqual((cwd / 'clients/ui_release.py').read_bytes(), b'HEAD builder')
+                output = cwd / 'client-ui-release'
+                output.mkdir()
+                (output / 'update.json').write_bytes(b'public manifest')
+
+            with patch.object(package_release.tempfile, 'TemporaryDirectory', return_value=nullcontext(str(alias))), \
+                    patch.object(package_release.subprocess, 'run', side_effect=build):
+                generated = build_ui_from_head({'clients/ui_release.py': b'HEAD builder'}, 'd' * 40, Path(temporary) / 'key')
+            self.assertEqual(generated, {'client-ui-release/update.json': b'public manifest'})
+
+    def test_unnormalized_staging_root_still_rejects_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            staging = Path(temporary) / 'staging'
+            (staging / 'child').mkdir(parents=True)
+            for name in ('../unsafe', 'clients/../../unsafe', 'clients\\unsafe'):
+                with self.subTest(name=name), \
+                        patch.object(package_release.tempfile, 'TemporaryDirectory', return_value=nullcontext(str(staging / 'child' / '..'))), \
+                        patch.object(package_release.subprocess, 'run') as run:
+                    with self.assertRaisesRegex(RuntimeError, 'Unsafe source archive path'):
+                        build_ui_from_head({name: b'not written'}, 'e' * 40, Path(temporary) / 'key')
+                    run.assert_not_called()
+                    self.assertFalse((Path(temporary) / 'unsafe').exists())
