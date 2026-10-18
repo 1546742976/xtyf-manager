@@ -102,7 +102,7 @@ jobs:
           node-version: '22'
       - name: Install pinned Playwright and browser engines
         run: |
-          npm install --no-save --package-lock=false playwright@1.56.1
+          npm install --no-save --package-lock=false playwright@1.57.0
           npx playwright install --with-deps chromium webkit
       - name: Run browser integration and mobile checks
         shell: bash

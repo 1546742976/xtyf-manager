@@ -6,6 +6,7 @@ const path = require('node:path');
 const http = require('node:http');
 const {spawn, execFileSync} = require('node:child_process');
 const {chromium, webkit, devices, request} = require('playwright');
+const {recordFailure, cleanupResources} = require('./diagnostics.cjs');
 const root = path.resolve(__dirname, '../..');
 const output = path.join(root, '.build-tools/client-updates-avatar-check');
 const dist = path.join(output, 'ui');
@@ -28,7 +29,7 @@ const server = http.createServer((req,res) => {
 });
 const backend = spawn(python, ['-B', path.join(__dirname,'server.py')], {cwd:root,env:{...process.env,MAIL_MODE:'preview'},stdio:['ignore','pipe','pipe']});
 const passed = [], errors = [];
-let browser,activePage,activeState;
+let browser,activePage,activeState,api,activeEngine,activePhase='fixture startup';
 async function main() {
   const base = await new Promise((resolve,reject) => {
     let log=''; const timer=setTimeout(()=>reject(Error(log)),30000);
@@ -38,7 +39,7 @@ async function main() {
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const local='http://127.0.0.1:'+server.address().port;
-  const api=await request.newContext({baseURL:base});
+  api=await request.newContext({baseURL:base});
   let csrf='';
   async function transport(args) {
     const options={method:args.method||'GET',headers:{...args.headers,'X-XTYF-Client-Protocol':'1',...(csrf?{'X-CSRF-Token':csrf}:{})}};
@@ -55,6 +56,7 @@ async function main() {
   assert.equal((await transport({path:'/api/client/login',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'admin',password:'123456'})})).status,200);
   assert.equal((await transport({path:'/api/password',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old:'123456',new:'client-avatar-test-password',confirm:'client-avatar-test-password'})})).status,200);
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]) {
+    activeEngine=label;activePhase='browser startup';
     browser=await engine.launch({headless:true});
     const context=await browser.newContext(options),page=await context.newPage();activePage=page;
     const state={current:'A',pending:'B',calls:[],failAvatar:false,offline:false,incompatible:false,capable:true,applies:0};activeState=state;
@@ -86,6 +88,7 @@ async function main() {
       await page.waitForFunction(count=>{const doc=document.querySelector('#page-host iframe').contentDocument,images=[...doc.querySelectorAll('[data-avatar-image]')];return images.length===count&&images.every(img=>img.naturalWidth===512&&!img.hidden&&img.parentElement.querySelector('[data-avatar-initial]').hidden);},count);
     };
     await page.goto(local+'/index.html#/account');
+    activePhase='avatar and update operations';
     console.log(label+' packaged account startup');
     await account().locator('#avatar-change').waitFor({state:'visible'});
     await page.waitForFunction(()=>XTYF.compatible);
@@ -127,20 +130,30 @@ async function main() {
     await account().locator('#avatar-remove').click();await account().locator('#avatar-result').filter({hasText:'已恢复'}).waitFor();
     assert.equal(await account().locator('[data-avatar-image]').count(),0);assert.equal(await page.evaluate(()=>XTYF.bootstrap.me.avatar_url),null);
     await page.screenshot({path:path.join(output,label+'-account.png'),fullPage:true});
-    state.capable=false;await page.reload();await account().locator('h1').waitFor();await page.waitForFunction(()=>XTYF.compatible);
+    activePhase='capability reload';state.capable=false;await page.reload();await account().locator('h1').waitFor();await page.waitForFunction(()=>XTYF.compatible);
     assert.equal(await account().locator('#avatar-editor').isVisible(),false);
-    state.incompatible=true;await page.reload();await page.getByRole('heading',{name:'服务器需要更新'}).waitFor();
+    activePhase='incompatible bootstrap reload';state.incompatible=true;await page.reload();await page.getByRole('heading',{name:'服务器需要更新'}).waitFor();
     assert.match(await page.evaluate(()=>XTYF.request('/api/tasks').then(()=>'',error=>error.message)),/协议不兼容/);
     await page.locator('#client-settings-open').click();await page.locator('#updates-check').waitFor({state:'visible'});await page.locator('#settings-cancel').click();
-    state.incompatible=false;state.offline=true;const before=state.calls.filter(call=>call.action==='ui_ready').length;
+    activePhase='offline reload';state.incompatible=false;state.offline=true;const before=state.calls.filter(call=>call.action==='ui_ready').length;
     await page.reload();await account().locator('#login-form').waitFor();await page.locator('#connection-status').waitFor({state:'visible'});
     assert.ok(state.calls.filter(call=>call.action==='ui_ready').length>before,'local render marks ready even offline');
     await page.locator('#client-settings-open').click();await page.locator('#server-url').waitFor({state:'visible'});
     passed.push({engine:label,version:browser.version(),checks:['pending without runtime reload','installer save with signed SHA256','reload confirmation preserves drafts','emulated A/B restart','native generic MIME identified from bytes','native handle crop and failed retry','three avatars and refresh','invoices/funds','restore default','capability gate','incompatible business gate','offline ui_ready/settings']});
-    await context.close();await browser.close();browser=null;
+    await context.close();await browser.close();browser=null;activePage=null;
   }
   assert.deepEqual(errors,[]);
   fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:true,passed,errors,nativeRuntime:false},null,2));
-  console.log(JSON.stringify({ok:true,passed,errors},null,2));await api.dispose();
+  console.log(JSON.stringify({ok:true,passed,errors},null,2));
 }
-main().catch(async error=>{console.error(error);console.error('PAGE_ERRORS',errors);console.error('BRIDGE_CALLS',activeState?.calls.map(call=>[call.action,call.args.path]));if(activePage){await activePage.screenshot({path:path.join(output,'failure.png')});console.error('SHELL',await activePage.evaluate(()=>({route:window.XTYF?.route,bootstrap:window.XTYF?.bootstrap,body:document.body.innerText})));}process.exitCode=1;}).finally(async()=>{if(browser)await browser.close();backend.kill();server.close();});
+main().catch(async error=>{
+  process.exitCode=1;
+  console.error(error);
+  await recordFailure(error,{output,page:activePage,engine:activeEngine,phase:activePhase,passed,pageErrors:errors,calls:activeState?.calls});
+}).finally(async()=>{
+  const failures=await cleanupResources({
+    browser:()=>browser?.close(),api:()=>api?.dispose(),backend:()=>backend.kill(),
+    server:()=>new Promise((resolve,reject)=>server.listening?server.close(error=>error?reject(error):resolve()):resolve()),
+  });
+  if(failures.length)process.exitCode=1;
+});
