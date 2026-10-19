@@ -37,7 +37,7 @@
   function draft(){return {title:'',body:'',files:[],attempt:null,busy:false,status:'',progress:null};}
   function topicState(id){if(!cache.has(id))cache.set(id,{id,topic:null,messages:new Map(),withdrawn:new Map(),seen:new Set(),before:null,hasMore:false,cursor:0,readId:0,readBusy:false,loaded:false,loading:false,newCount:0,draft:draft()});return cache.get(id);}
   function current(){return state.selected?topicState(state.selected):null;}
-  const safe=value=>String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const safe=value=>BusinessUI.escape(value);
   const size=value=>value>=MiB?`${(value/MiB).toFixed(1)} MiB`:`${Math.max(1,Math.ceil(value/1024))} KiB`;
   const date=value=>{const result=new Date(value);return Number.isFinite(result.getTime())?result.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'';};
   function attachmentURL(value){try{const url=new URL(value,location.origin);return url.origin===location.origin&&url.pathname.startsWith('/discussions/')?url.href:'';}catch(_){return '';}}
@@ -109,6 +109,7 @@
   }
   function updateHeader(item) {
     const topic=item.topic;if(!topic)return;
+    document.dispatchEvent(new CustomEvent('discussion:rendered',{detail:{topic}}));
     $('collab-title').textContent=topic.withdrawn?'话题已撤回':topic.title;
     $('collab-topic-meta').textContent=`${topic.author_name} · ${date(topic.created_at)}`;
     $('collab-withdraw-topic').hidden=!topic.can_withdraw||topic.withdrawn;

@@ -1,6 +1,6 @@
 "use strict";
 (() => {
-  const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const esc=value=>BusinessUI.escape(value);
   async function api(url,data){
     const r=await BusinessUI.fetch(url,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}),body=await r.json();
     if(!r.ok||!body.ok)throw new Error(body.error||'请求失败');return body;

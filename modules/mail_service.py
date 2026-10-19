@@ -2,10 +2,8 @@
 import hashlib
 import hmac
 import os
-import secrets
 import smtplib
 import ssl
-import time
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.policy import SMTP
@@ -13,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from flask import current_app
-from modules.daily_projects import TZ, describe
+from modules.daily_projects import TZ, describe_many
 from modules.mail_templates import render_digest_html, render_verification_html, render_test_html
 
 
@@ -93,18 +91,22 @@ def deadline(due, at):
 def digest_items(db, mid, at, kind='daily'):
     at = beijing_time(at)
     morning = kind == 'morning'
-    beginning = at.replace(hour=0, minute=0, second=0, microsecond=0)
-    bounds = (beginning.strftime('%Y-%m-%d %H:%M:%S'),
-              (beginning + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S'))
+    today = at.date().isoformat()
+    helper_names = {row['id']: row['name'] for row in db.execute('SELECT id,name FROM members')}
+    def blocker(row):
+        item = dict(row)
+        return {key: item.get(key) for key in ('blocker_reason', 'blocker_next_action', 'blocker_follow_up')} | {
+            'blocker_helper_name': helper_names.get(item.get('blocker_helper_id'), '')}
     tasks = []
-    task_filter = ("t.status<>'已完成' AND (t.owner_id=? OR EXISTS(SELECT 1 FROM task_participants tp "
-                   "WHERE tp.task_id=t.id AND tp.member_id=?))" if morning else
-                   "(t.status<>'已完成' OR (t.completed_at>=? AND t.completed_at<?))")
+    task_scope = (" AND (t.owner_id=? OR EXISTS(SELECT 1 FROM task_participants tp "
+                  "WHERE tp.task_id=t.id AND tp.member_id=?))" if morning else "")
     for row in db.execute("SELECT t.*, (SELECT max(created_at) FROM task_progress_updates WHERE task_id=t.id) AS last_progress "
-                          "FROM tasks t WHERE t.deleted_at IS NULL AND t.status<>'已取消' "
-                          "AND " + task_filter + " "
-                          "ORDER BY (t.status='已完成'),CASE WHEN t.due_date IS NULL OR t.due_date='' THEN 1 ELSE 0 END,t.due_date,t.id",
-                          (mid, mid) if morning else bounds):
+                          "FROM tasks t WHERE t.deleted_at IS NULL "
+                          "AND (t.status IN ('进行中','阻塞') OR "
+                          "(t.status='未开始' AND t.due_date<>'' AND t.due_date<?))"
+                          + task_scope + " "
+                          "ORDER BY CASE WHEN t.due_date IS NULL OR t.due_date='' THEN 1 ELSE 0 END,t.due_date,t.id",
+                          (today, mid, mid) if morning else (today,)):
         owner = row['owner_id'] == mid
         last = row['last_progress'] or row['created_at']
         task = {'id': row['id'], 'title': row['title'], 'status': row['status'],
@@ -114,17 +116,20 @@ def digest_items(db, mid, at, kind='daily'):
         if morning:
             task.update(role='负责人' if owner else '参与者', last_progress=row['last_progress'],
                         reminder_baseline=last)
+        task.update(blocker(row))
         tasks.append(task)
     projects = []
-    project_filter = ("p.status<>'已完成' AND EXISTS(SELECT 1 FROM daily_owners o JOIN daily_groups g "
-                      "USING(project_id,stage) WHERE o.project_id=p.id AND o.member_id=? AND g.enabled=1)"
-                      if morning else "(p.status<>'已完成' OR (p.completed_at>=? AND p.completed_at<?))")
-    rows = db.execute("SELECT p.* FROM daily_projects p WHERE p.deleted_at IS NULL AND p.status<>'已取消' "
-                      "AND " + project_filter + " "
-                      "ORDER BY (p.status='已完成'),CASE WHEN p.due_date IS NULL OR p.due_date='' THEN 1 ELSE 0 END,p.due_date,p.id",
-                      (mid,) if morning else bounds)
-    for row in rows:
-        project = describe(db, row)
+    project_scope = (" AND EXISTS(SELECT 1 FROM daily_owners o JOIN daily_groups g "
+                     "USING(project_id,stage) WHERE o.project_id=p.id AND o.member_id=? AND g.enabled=1)"
+                     if morning else "")
+    rows = db.execute("SELECT p.* FROM daily_projects p WHERE p.deleted_at IS NULL "
+                      "AND (p.status IN ('进行中','阻塞') OR "
+                      "(p.status='未开始' AND p.due_date<>'' AND p.due_date<?))"
+                      + project_scope + " "
+                      "ORDER BY CASE WHEN p.due_date IS NULL OR p.due_date='' THEN 1 ELSE 0 END,p.due_date,p.id",
+                      (today, mid) if morning else (today,))
+    for project in describe_many(db, rows):
+        row = project
         groups = []
         for group in project['groups']:
             if not group['enabled']:
@@ -147,7 +152,7 @@ def digest_items(db, mid, at, kind='daily'):
         projects.append({'id': row['id'], 'title': row['title'], 'status': row['status'],
                          'progress': project['progress'], 'groups': groups,
                          'due': row['due_date'], 'remaining': deadline(row['due_date'], at),
-                         'url': settings()['base_url'] + f'/tasks?type=daily&project={row["id"]}'})
+                         'url': settings()['base_url'] + f'/tasks?type=daily&project={row["id"]}', **blocker(row)})
     return tasks, projects
 
 
@@ -158,15 +163,28 @@ def digest_content(db, mid, at, kind='daily'):
     morning = kind == 'morning'
     title = '个人任务早报' if morning else '团队项目晚报'
     local_time = beijing_time(at)
-    lines = [title, local_time.strftime('%Y-%m-%d'), '', '造车任务']
+    nudges = sum(bool(item['nudge']) for item in tasks) + sum(
+        bool(group['nudge']) for project in projects for group in project['groups'])
+    overdue = sum(item['remaining'].startswith('已逾期') for item in tasks + projects)
+    summary = f'需更新进度 {nudges} 处' if morning else f'已逾期 {overdue} 项'
+    lines = [title, local_time.strftime('%Y-%m-%d'),
+             f'造车任务 {len(tasks)} 项｜日常项目 {len(projects)} 项｜{summary}', '', '造车任务']
 
     def progress_time(item, baseline_label):
         if item['last_progress']:
             return '最近进度更新：' + parsed_time(item['last_progress']).strftime('%Y-%m-%d %H:%M:%S')
         return '暂无进度更新（' + baseline_label + parsed_time(item['reminder_baseline']).strftime('%Y-%m-%d %H:%M:%S') + '）'
 
+    def blocker_text(item):
+        if item['status'] != '阻塞': return ''
+        text = '\n阻塞原因：' + (item.get('blocker_reason') or '待补充')
+        text += '\n下一步行动：' + (item.get('blocker_next_action') or '待补充')
+        if item.get('blocker_helper_name'): text += '\n协助成员：' + item['blocker_helper_name']
+        if item.get('blocker_follow_up'): text += '\n下次跟进：' + item['blocker_follow_up']
+        return text
+
     if not tasks:
-        lines.append('暂无您负责或参与的未完成造车任务' if morning else '暂无团队未完成或今日完成的造车任务')
+        lines.append('暂无您负责或参与且符合提醒条件的造车任务' if morning else '暂无团队符合提醒条件的造车任务')
     for task in tasks:
         text = f'{task["title"]}｜{task["status"]}｜{task["progress"]}%｜{task["remaining"]}'
         if task['due']:
@@ -175,10 +193,10 @@ def digest_content(db, mid, at, kind='daily'):
             text += f'\n您的角色：{task["role"]}\n' + progress_time(task, '创建于 ')
         if task['nudge']:
             text += '\n请更新进度：您负责的任务已超过 48 小时未更新。'
-        lines.extend([text, task['url'], ''])
+        lines.extend([text + blocker_text(task), task['url'], ''])
     lines.extend(['', '日常项目'])
     if not projects:
-        lines.append('暂无您负责的未完成日常项目' if morning else '暂无团队未完成或今日完成的日常项目')
+        lines.append('暂无您负责且符合提醒条件的日常项目' if morning else '暂无团队符合提醒条件的日常项目')
     for project in projects:
         text = f'{project["title"]}｜{project["status"]}｜{project["progress"]:g}%｜{project["remaining"]}'
         if project['due']:
@@ -190,9 +208,11 @@ def digest_content(db, mid, at, kind='daily'):
                 text += f'\n{group["label"]}组' + progress_time(group, '启用于 ')
             if group['nudge']:
                 text += f'\n请更新进度：您负责的{group["label"]}组已超过 48 小时未更新。'
-        lines.extend([text, project['url'], ''])
-    footer = ('截至发送时您负责或参与的未完成事项；每日北京时间 08:00 汇总，包含周末。时间均为北京时间。'
-              if morning else '截至发送时的全团队未完成事项与北京时间当天完成事项；每日 22:00 汇总。')
+        lines.extend([text + blocker_text(project), project['url'], ''])
+    footer = ('截至发送时您负责或参与且符合提醒条件的事项；每日北京时间 08:00 汇总，包含周末。'
+              if morning else '截至发送时全团队符合提醒条件的事项；每日北京时间 22:00 汇总，包含周末。')
+    footer += ('仅包含进行中、阻塞，以及未开始但已逾期的事项。逾期指截止日期早于发送当天（北京时间），'
+               '今天截止不算逾期。已完成（包括当天完成）、已取消和已删除事项始终排除。时间均为北京时间。')
     footer += '仅对您负责且超过 48 小时未更新的事项提示催更。如需暂停，请联系管理员。'
     lines.append(footer)
     markup = render_digest_html(title, local_time, tasks, projects, morning, footer, progress_time)
@@ -298,15 +318,15 @@ def process_job(db, job, at, transport=None):
                 raise DeliveryError('验证已完成或过期', 'skipped')
             code = verification_code(member['generation'])
             message['Subject'] = '巡天御风｜邮箱验证码'
-            text = f'您的邮箱验证码是：{code}\n请在网站的个人账户页面输入验证码，30 分钟内有效。请勿转发给他人。\n验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；无个人待办时跳过早报。如非本人操作请忽略。'
+            text = f'您的邮箱验证码是：{code}\n请在网站的个人账户页面输入验证码，30 分钟内有效。请勿转发给他人。\n验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；仅收录进行中、阻塞或未开始但已逾期的事项，无符合提醒条件的事项时跳过对应日报。如非本人操作请忽略。'
             markup = render_verification_html(code)
         else:
             if not member['verified'] or member['paused']:
                 raise DeliveryError('邮箱未验证或提醒已暂停', 'skipped')
             content = digest_content(db, job['member_id'], at, kind=job['kind'])
             if not content and job['kind'] in ('morning', 'daily'):
-                raise DeliveryError('没有个人未完成事项' if job['kind'] == 'morning' else '没有团队未完成或今日完成事项', 'skipped')
-            text, markup = content or ('测试邮件：当前没有团队未完成或今日完成事项。', render_test_html())
+                raise DeliveryError('个人范围没有符合提醒条件的事项' if job['kind'] == 'morning' else '全团队没有符合提醒条件的事项', 'skipped')
+            text, markup = content or ('测试邮件：当前没有团队符合提醒条件的事项。', render_test_html())
             subjects = {'morning': '巡天御风｜个人任务早报｜', 'daily': '巡天御风｜团队项目晚报｜'}
             message['Subject'] = subjects.get(job['kind'], '巡天御风｜测试邮件｜') + job['day']
         message.set_content(text)

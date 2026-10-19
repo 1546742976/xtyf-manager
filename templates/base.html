@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='collaboration.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='apple.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='task-center.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='item-topics.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='themes.css') }}">
 </head>
 <body class="{% if me %}ws-app{% endif %}">
@@ -30,6 +31,7 @@
     <div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="任务操作窗口"></div>
   </div>
   {% if me %}<script src="{{ url_for('static', filename='workspace.js') }}"></script>{% endif %}
+  {% if me %}<script src="{{ url_for('static', filename='item-topics.js') }}"></script>{% endif %}
   {% block scripts %}{% endblock %}
 </body>
 </html>

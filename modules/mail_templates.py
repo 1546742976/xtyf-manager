@@ -76,6 +76,16 @@ def _meta(label, value):
             f'{_e(label)}：<strong style="color:#263b56">{_e(value)}</strong></span>')
 
 
+def _blocker(item):
+    if item['status'] != '阻塞':
+        return ''
+    fields = [('阻塞原因', item.get('blocker_reason') or '待补充'),
+              ('下一步行动', item.get('blocker_next_action') or '待补充')]
+    if item.get('blocker_helper_name'): fields.append(('协助成员', item['blocker_helper_name']))
+    if item.get('blocker_follow_up'): fields.append(('下次跟进', item['blocker_follow_up']))
+    return ''.join(f'<p style="margin:8px 0;white-space:pre-wrap">{_e(label)}：{_e(value)}</p>' for label, value in fields)
+
+
 def _task_card(task, morning, progress_time):
     overdue = task['remaining'].startswith('已逾期')
     parts = [_card_start(), _title(task['title']),
@@ -86,6 +96,7 @@ def _task_card(task, morning, progress_time):
     if task['due']:
         parts.append(_meta('截止日期', task['due']))
     parts.append(_progress(task['progress']))
+    parts.append(_blocker(task))
     if morning:
         parts.append(f'<p style="margin:12px 0 0;font-size:12px;line-height:1.6;'
                      f'color:#64748b">{_e(progress_time(task, "创建于 "))}</p>')
@@ -103,6 +114,7 @@ def _project_card(project, morning, progress_time):
              _tag(project['remaining'], urgent=overdue)]
     if project['due']:
         parts.append(_meta('截止日期', project['due']))
+    parts.append(_blocker(project))
     parts.extend([_progress(project['progress']),
                   f'<p style="margin:13px 0 8px;font-size:13px;font-weight:700;'
                   f'color:#334761">{"您负责的小组" if morning else "各小组进度"}</p>'])
@@ -195,8 +207,8 @@ def _stat(label, number):
 def render_digest_html(title, at, tasks, projects, morning, footer, progress_time):
     nudges = sum(bool(item['nudge']) for item in tasks) + sum(
         bool(group['nudge']) for project in projects for group in project['groups'])
-    completed = sum(item['status'] == '已完成' for item in tasks + projects)
-    third_label, third = ('需更新进度', nudges) if morning else ('今日完成', completed)
+    overdue = sum(item['remaining'].startswith('已逾期') for item in tasks + projects)
+    third_label, third = ('需更新进度', nudges) if morning else ('已逾期', overdue)
     stats = ('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
              'style="width:100%;border-collapse:collapse;border:1px solid #e2e9f3;'
              'border-radius:7px;background:#ffffff"><tr>'
@@ -205,11 +217,11 @@ def render_digest_html(title, at, tasks, projects, morning, footer, progress_tim
     task_html = ''.join(_task_card(task, morning, progress_time) for task in tasks)
     project_html = ''.join(_project_card(project, morning, progress_time) for project in projects)
     if not tasks:
-        task_html = _empty('暂无您负责或参与的未完成造车任务' if morning else
-                           '暂无团队未完成或今日完成的造车任务')
+        task_html = _empty('暂无您负责或参与且符合提醒条件的造车任务' if morning else
+                           '暂无团队符合提醒条件的造车任务')
     if not projects:
-        project_html = _empty('暂无您负责的未完成日常项目' if morning else
-                              '暂无团队未完成或今日完成的日常项目')
+        project_html = _empty('暂无您负责且符合提醒条件的日常项目' if morning else
+                              '暂无团队符合提醒条件的日常项目')
     details = (stats
                + (_notice(f'有 {nudges} 处您负责的事项超过 48 小时未更新，请及时检查进度。')
                   if nudges else '')
@@ -217,7 +229,7 @@ def render_digest_html(title, at, tasks, projects, morning, footer, progress_tim
                + _section('日常项目', len(projects), project_html)
                + f'<p style="margin:25px 0 0;font-size:12px;'
                f'color:#73829b;line-height:1.8">{_e(footer)}</p>')
-    subtitle = ('您的待办与进度概览' if morning else '全团队未完成事项与当天完成进展')
+    subtitle = ('您的待办与进度概览' if morning else '全团队进行中、阻塞与逾期未开始事项')
     date = at.strftime('%Y-%m-%d')
     return _document(title, '每日项目进度 / 北京时间', f'{date} · {subtitle}', details,
                      f'{title}｜造车任务 {len(tasks)} 项，日常项目 {len(projects)} 项')
@@ -237,7 +249,8 @@ def render_verification_html(code):
                '验证码 30 分钟内有效，请勿转发给他人。</p>'
                '<p style="margin:0 0 12px;font-size:13px;line-height:1.8;'
                'color:#52647c">验证后每天北京时间 08:00 接收个人任务早报、'
-               '22:00 接收团队项目晚报（包含周末）；无个人待办时跳过早报。</p>'
+               '22:00 接收团队项目晚报（包含周末）；仅收录进行中、阻塞或未开始但已逾期的事项，'
+               '无符合提醒条件的事项时跳过对应日报。</p>'
                '<p style="margin:0;font-size:12px;color:#718098">'
                '如非本人操作，请忽略此邮件。系统不会通过邮件向您索取密码。</p>')
     return _document('邮箱验证码', '账户安全 / 邮箱绑定',
@@ -249,7 +262,7 @@ def render_test_html():
     details = ('<p style="margin:0 0 13px;font-size:16px;font-weight:700;'
                'color:#1b654a">邮件模板预览成功</p>'
                '<p style="margin:0;font-size:14px;color:#52647c;line-height:1.8">'
-               '这是一封测试邮件：当前没有团队未完成或今日完成事项。'
+               '这是一封测试邮件：当前没有团队符合提醒条件的事项。'
                '如果您能够正常看到这封邮件，说明邮件 HTML 样式已生成。'
                '请留意 SMTP 接受并不等于最终送达。</p>')
     return _document('邮件服务测试', '邮件通知 / 测试',

@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS daily_attachments (
  id INTEGER PRIMARY KEY, update_id INTEGER NOT NULL REFERENCES daily_updates(id),
  original_name TEXT NOT NULL, stored_name TEXT UNIQUE NOT NULL, mime_type TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS daily_blocker_events (
+ id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES daily_projects(id),
+ actor_id INTEGER NOT NULL REFERENCES members(id), actor_name TEXT NOT NULL,
+ action TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', next_action TEXT NOT NULL DEFAULT '',
+ helper_id INTEGER REFERENCES members(id), follow_up TEXT,
+ resolution TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS daily_blocker_events_project ON daily_blocker_events(project_id,id);
 CREATE TABLE IF NOT EXISTS member_email (
  member_id INTEGER PRIMARY KEY REFERENCES members(id), address TEXT NOT NULL,
  verified INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0,
@@ -55,6 +63,23 @@ def migrate(db):
         if 'completed_at' not in columns:
             # Historical updated_at is not evidence of completion.
             db.execute('ALTER TABLE daily_projects ADD COLUMN completed_at TEXT')
+        for name, definition in (
+            ('blocker_reason', "TEXT NOT NULL DEFAULT ''"),
+            ('blocker_next_action', "TEXT NOT NULL DEFAULT ''"),
+            ('blocker_helper_id', 'INTEGER REFERENCES members(id)'),
+            ('blocker_follow_up', 'TEXT'),
+        ):
+            if name not in columns:
+                db.execute(f'ALTER TABLE daily_projects ADD COLUMN {name} {definition}')
+        group_columns = {row[1] for row in db.execute('PRAGMA table_info(daily_groups)')}
+        if 'group_id' not in group_columns:
+            db.execute('ALTER TABLE daily_groups ADD COLUMN group_id INTEGER REFERENCES groups(id)')
+        if 'label_snapshot' not in group_columns:
+            db.execute("ALTER TABLE daily_groups ADD COLUMN label_snapshot TEXT NOT NULL DEFAULT ''")
+            # Historical stages have no trustworthy link to a possibly renamed catalog.
+            for stage, label in (('mechanical', '机械'), ('electrical', '电控'), ('vision', '视觉')):
+                db.execute('UPDATE daily_groups SET label_snapshot=? WHERE stage=?', (label, stage))
+        db.execute('CREATE UNIQUE INDEX IF NOT EXISTS daily_groups_catalog ON daily_groups(project_id,group_id) WHERE group_id IS NOT NULL')
         email_columns = {row[1] for row in db.execute('PRAGMA table_info(member_email)')}
         if 'verify_attempts' not in email_columns:
             db.execute('ALTER TABLE member_email ADD COLUMN verify_attempts INTEGER NOT NULL DEFAULT 0')

@@ -43,6 +43,7 @@
         {% if me.role in ('admin', 'manager') %}
         <a href="{{ url_for('tasks') }}#create" class="ws-quick-link"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>创建任务</a>
         <a href="{{ url_for('members') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-users"/></svg>成员管理</a>
+        <a href="/task-alerts" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-tasks"/></svg>团队异常</a>
         <a href="/funds/" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-money"/></svg>资金台账</a>
         {% endif %}
         <a href="/invoices/" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-invoice"/></svg>提交发票</a>

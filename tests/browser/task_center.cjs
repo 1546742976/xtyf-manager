@@ -32,6 +32,11 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await page.locator('#account-password-form [name=old]').fill('browser-test-initial');await page.locator('#account-password-form [name=new]').fill('task-center-password');await page.locator('#account-password-form [name=confirm]').fill('task-center-password');await page.locator('#account-password-form [type=submit]').click();await page.waitForURL(base+'/');
     const owner=(await api(page,'/api/member',{name:'机械负责人',username:'task_center_owner',password:'owner-password'})).body;
     await api(page,'/api/member',{name:'视觉负责人',username:'task_center_vision',password:'owner-password'});
+    const groups=(await api(page,'/api/data')).body.groups;
+    const mechanicalGroup=groups.find(g=>g.name==='机械'&&g.is_active!==0);
+    const visionGroup=groups.find(g=>g.name==='视觉'&&g.is_active!==0);
+    assert.ok(mechanicalGroup&&visionGroup,'specialty groups must be present');
+    const mechanical='group-'+mechanicalGroup.id,vision='group-'+visionGroup.id;
     await page.goto(base+'/tasks#create');await ready(page);
     assert.equal(await page.locator('#create-form [name=title]').evaluate(node=>node===document.activeElement),true);
     await page.locator('#create-form [name=title]').fill('保持草稿');await page.keyboard.press('Escape');
@@ -40,14 +45,14 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await page.locator('#task-create-type').selectOption('daily');await ready(page);
     await page.locator('#daily-form [name=title]').fill('保留日常草稿');
     await page.locator('#daily-form [name=detail]').fill('保留分组与说明');
-    await page.locator('[name=enabled][value=mechanical]').check();await page.locator(`[name=owners-mechanical][value="${owner.id}"]`).check();
-    assert.equal(await page.locator('[name=owners-mechanical][value="1"]').count(),1);
-    const row=page.locator(`[name=owners-mechanical][value="${owner.id}"]`).locator('..');assert.ok((await row.boundingBox()).height>=44);
+    await page.locator(`[name=enabled][value=${mechanical}]`).check();await page.locator(`[name=owners-${mechanical}][value="${owner.id}"]`).check();
+    assert.equal(await page.locator(`[name=owners-${mechanical}][value="1"]`).count(),1);
+    const row=page.locator(`[name=owners-${mechanical}][value="${owner.id}"]`).locator('..');assert.ok((await row.boundingBox()).height>=44);
     assert.equal(await row.getAttribute('class'),'daily-owner-choice is-selected');
-    await page.locator('[data-owner-search=mechanical]').fill('不存在');assert.equal(await row.isVisible(),false);
-    await page.locator('[data-owner-search=mechanical]').fill('机械');assert.equal(await row.isVisible(),true);
+    await page.locator(`[data-owner-search=${mechanical}]`).fill('不存在');assert.equal(await row.isVisible(),false);
+    await page.locator(`[data-owner-search=${mechanical}]`).fill('机械');assert.equal(await row.isVisible(),true);
     await page.locator('#task-create-type').selectOption('vehicle');await ready(page);assert.equal(await page.locator('#create-form [name=title]').inputValue(),'保持草稿');
-    await page.locator('#task-create-type').selectOption('daily');await ready(page);assert.equal(await page.locator('#daily-form [name=title]').inputValue(),'保留日常草稿');assert.equal(await page.locator(`[name=owners-mechanical][value="${owner.id}"]`).isChecked(),true);
+    await page.locator('#task-create-type').selectOption('daily');await ready(page);assert.equal(await page.locator('#daily-form [name=title]').inputValue(),'保留日常草稿');assert.equal(await page.locator(`[name=owners-${mechanical}][value="${owner.id}"]`).isChecked(),true);
     await page.locator('#task-create-type').selectOption('vehicle');await ready(page);
     assert.equal(await page.locator('#create-owner option[value="1"]').count(),1);
     assert.equal(await page.locator('#create-participants input[value="1"]').count(),1);
@@ -100,8 +105,10 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     }
     checks.push('375/390/767/768/850/1280 create dialog: no overflow and submit reachable');
     await page.goto(base+'/tasks?type=daily');assert.equal(await page.locator('#board').count(),0);await page.locator('#new-task-toggle').click();await ready(page);assert.equal(await page.locator('#task-create-type').inputValue(),'daily');await page.locator('#daily-form [name=title]').fill('统一入口日常目标');
-    for(const stage of ['mechanical','vision']){await page.locator(`[name=enabled][value=${stage}]`).check();await page.locator(`[name=owners-${stage}][value="${owner.id}"]`).check();}
+    for(const stage of [mechanical,vision]){await page.locator(`[name=enabled][value=${stage}]`).check();await page.locator(`[name=owners-${stage}][value="${owner.id}"]`).check();}
     await page.locator('#daily-form [name=status]').selectOption('阻塞');
+    await page.locator('#daily-form [name=blocker_reason]').fill('联调设备未到位');
+    await page.locator('#daily-form [name=blocker_next_action]').fill('联系成员领取设备');
     let pending,posts=0;await page.route('**/api/daily-projects',route=>{posts++;pending=route;});
     await page.locator('#daily-form [type=submit]').click();await page.waitForFunction(()=>document.querySelector('#daily-form [type=submit]').disabled);
     await page.keyboard.press('Escape');assert.equal(await page.locator('#task-create-panel').evaluate(node=>node.open),true);assert.equal(await page.locator('#task-create-type').isDisabled(),true);
@@ -109,7 +116,7 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await pending.fulfill({status:500,json:{ok:false,error:'模拟项目保存失败'}});await page.locator('#daily-form .form-message').filter({hasText:'当前输入已保留'}).waitFor();
     assert.equal(await page.locator('#daily-form [name=title]').inputValue(),'统一入口日常目标');assert.equal(await page.locator('#daily-form [type=submit]').isEnabled(),true);await page.unroute('**/api/daily-projects');
     await page.locator('#daily-form [type=submit]').click();await page.waitForURL(/\/tasks\?type=daily&project=\d+$/);const id=new URL(page.url()).searchParams.get('project');
-    await page.locator('[data-progress-form=mechanical]').waitFor();assert.equal(await page.locator('[data-progress-form]').count(),2);
+    await page.locator(`[data-progress-form=${mechanical}]`).waitFor();assert.equal(await page.locator('[data-progress-form]').count(),2);
     await page.route('**/api/data',route=>route.fulfill({status:503,json:{ok:false,error:'模拟候选加载失败'}}));
     await page.locator('#daily-edit').click();await ready(page);await page.locator('#task-create-load').filter({hasText:'模拟候选加载失败'}).waitFor();assert.equal(await page.locator('#task-create-type').isDisabled(),true);
     await page.unroute('**/api/data');await page.locator('#task-create-load button').click();await ready(page);
