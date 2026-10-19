@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from modules.task_types import JsonObject
 from modules.task_schedule import resolve_stage
-from modules.task_dates import dependency_start_date
+from modules.task_dates import dependency_boundary, parse_calendar_date
 
 
 def _relation_map(
@@ -68,7 +68,10 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
     latest_progress: dict[int, JsonObject] = {}
     latest_notes = {int(row['task_id']): (row['note'], row['actor_name']) for row in db.execute(
         "SELECT task_id,note,actor_name FROM task_progress_updates WHERE id IN "
-        "(SELECT MAX(id) FROM task_progress_updates WHERE TRIM(note) <> '' GROUP BY task_id)"
+        "(SELECT MAX(id) FROM task_progress_updates WHERE TRIM(note) <> '' "
+        + ("AND task_id IN (" + ",".join("?" for _ in task_ids) + ") " if task_ids else "")
+        + "GROUP BY task_id)",
+        task_ids,
     )}
     if task_ids:
         placeholders = ",".join("?" for _ in task_ids)
@@ -84,19 +87,21 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
         if updates:
             update_ids = [int(update["id"]) for update in updates]
             image_placeholders = ",".join("?" for _ in update_ids)
+            events_by_id = {int(event["id"]): event for event in latest_progress.values()}
             for image in db.execute(
                 "SELECT progress_update_id,id FROM task_attachments "
                 "WHERE progress_update_id IN (" + image_placeholders + ") AND deleted_at IS NULL "
                 "ORDER BY id", update_ids,
             ).fetchall():
-                for event in latest_progress.values():
-                    if int(event["id"]) == int(image["progress_update_id"]):
-                        event["image_ids"].append(int(image["id"]))
+                event = events_by_id.get(int(image["progress_update_id"]))
+                if event is not None:
+                    event["image_ids"].append(int(image["id"]))
     by_id = {int(row["id"]): dict(row) for row in rows}
-    today = datetime.now().date()
+    today = datetime.now(timezone(timedelta(hours=8))).date()
     tasks: list[JsonObject] = []
     for row in rows:
         task = dict(row)
+        task["schedule_locked"] = bool(task["schedule_locked"])
         task_id = int(task["id"])
         task["stage_options"], task["owner_stage"] = resolve_stage(owner_groups.get(task["owner_id"], []), task.get("schedule_stage"))
         due = str(task.get("due_date") or "").strip()
@@ -128,10 +133,14 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
                 warnings.append(f"前置任务“{predecessor['title']}”已阻塞")
             elif task["status"] == "已完成" and predecessor["status"] != "已完成":
                 warnings.append(f"前置任务“{predecessor['title']}”尚未完成")
-            if not predecessor.get("due_date"):
-                warnings.append(f"前置任务“{predecessor['title']}”未设置截止日期")
+            boundary = dependency_boundary(predecessor)
+            if boundary:
+                if parse_calendar_date(task.get("start_date")) and task["start_date"] < boundary:
+                    warnings.append(f"开始日期早于前置任务“{predecessor['title']}”的默认衔接建议 {boundary}；人工预留允许更早重叠")
+            else:
+                warnings.append(f"前置任务“{predecessor['title']}”缺少有效完成日期或截止日期")
         parent = by_id.get(parent_id)
-        task["suggested_start_date"] = dependency_start_date(parent.get("due_date")) if parent else None
+        task["suggested_start_date"] = dependency_boundary(parent) if parent else None
         task["dependency_warnings"] = warnings
         tasks.append(task)
     return members, all_members, groups, projects, tasks

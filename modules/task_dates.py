@@ -2,25 +2,69 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+
+
+def parse_calendar_date(value: object) -> date | None:
+    """Accept an exact ISO calendar date rather than a loosely parsed label."""
+    if not isinstance(value, str):
+        return None
+    try:
+        day = date.fromisoformat(value)
+        return day if day.isoformat() == value else None
+    except ValueError:
+        return None
+
+
+def completion_date(value: object) -> date | None:
+    """Read the saved local completion day, validating the entire timestamp."""
+    if not isinstance(value, str):
+        return None
+    day = parse_calendar_date(value[:10])
+    if day is None:
+        return None
+    if len(value) == 10:
+        return day
+    if value[10:11] not in (" ", "T"):
+        return None
+    try:
+        datetime.fromisoformat(value)
+        return day
+    except ValueError:
+        return None
+
+
+def dependency_boundary(task: dict) -> str | None:
+    """Earliest successor start: two days before the end, but never before start.
+
+    Completed tasks use their actual completion day when known. Older completed
+    tasks fall back to the planned due date without fabricating an actual date.
+    """
+    end = completion_date(task.get("completed_at")) if task.get("status") == "已完成" else None
+    end = end or parse_calendar_date(task.get("due_date"))
+    if end is None:
+        return None
+    try:
+        boundary = end - timedelta(days=2)
+    except OverflowError:
+        return None
+    start = parse_calendar_date(task.get("start_date"))
+    return max(start, boundary).isoformat() if start else boundary.isoformat()
 
 
 def dependency_start_date(due_date: str | None) -> str | None:
     """Use calendar arithmetic, without a timezone or millisecond offset."""
-    try:
-        day = date.fromisoformat(due_date or "")
-        if day.isoformat() != due_date:
-            return None
-        return (day - timedelta(days=2)).isoformat()
-    except (ValueError, TypeError, OverflowError):
-        return None
+    return dependency_boundary({"due_date": due_date})
 
 
 def parent_start_date(db: sqlite3.Connection, parent_id: int | None) -> str | None:
     if parent_id is None:
         return None
-    row = db.execute("SELECT due_date FROM tasks WHERE id=? AND deleted_at IS NULL", (parent_id,)).fetchone()
-    return dependency_start_date(row[0]) if row else None
+    row = db.execute(
+        "SELECT start_date,due_date,status,completed_at FROM tasks WHERE id=? AND deleted_at IS NULL",
+        (parent_id,),
+    ).fetchone()
+    return dependency_boundary(dict(zip(("start_date", "due_date", "status", "completed_at"), row))) if row else None
 
 
 def apply_start_date_request(db, data: dict, values: dict, prior: dict | None = None) -> str | None:
@@ -36,7 +80,7 @@ def apply_start_date_request(db, data: dict, values: dict, prior: dict | None = 
     if data.get("reset_start_date"):
         suggested = parent_start_date(db, values.get("parent_id"))
         if suggested is None:
-            return "主前置任务未设置有效截止日期，无法重置开始日期"
+            return "主前置任务缺少有效完成日期或截止日期，无法重置开始日期"
         values["start_date"] = suggested
         values["start_date_origin"] = "dependency"
     elif data.get("start_date_origin") == "manual":

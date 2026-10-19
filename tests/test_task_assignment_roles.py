@@ -2,8 +2,9 @@
 import unittest
 from uuid import uuid4
 
-from common import get_db
+# 先导入测试夹具（设置临时库/目录），再导入项目模块。
 from test_tasks import app_module
+from common import get_db
 
 
 class TaskAssignmentRoles(unittest.TestCase):
@@ -34,6 +35,7 @@ class TaskAssignmentRoles(unittest.TestCase):
         body = {key: project[key] for key in ('title', 'detail', 'status', 'priority', 'start_date', 'due_date', 'version')}
         body['groups'] = {group['stage']: [owner['id'] for owner in group['owners']]
                           for group in project['groups'] if group['enabled']}
+        body['group_versions'] = {group['stage']: group['version'] for group in project['groups']}
         return body
 
     def test_daily_create_accepts_admin_as_owner_across_groups(self):
@@ -53,7 +55,8 @@ class TaskAssignmentRoles(unittest.TestCase):
         original = self.daily(pid)
         response = self.admin.post(f'/api/daily-projects/{pid}', json={
             **self.daily_body(original), 'title': '管理员直接负责',
-            'status': '阻塞', 'groups': {'mechanical': [self.member_ids[0]],
+            'status': '阻塞', 'blocker_reason': '等待联调设备', 'blocker_next_action': '协调设备',
+            'groups': {'mechanical': [self.member_ids[0]],
                                           'vision': [self.admin_id]}})
         self.assertEqual(response.status_code, 200, response.get_json())
         updated = self.daily(pid)

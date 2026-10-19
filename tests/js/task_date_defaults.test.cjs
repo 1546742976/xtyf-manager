@@ -56,7 +56,7 @@ test('saved tasks preserve dates across parent changes and data refresh; explici
   const {helper, form, parent, start, reset, tasks, note} = fixture(true);
   parent.value = '1'; parent.emit('change');
   assert.equal(start.value, '2026-06-01');
-  assert.match(note.textContent, /日期已锁定/);
+  assert.match(note.textContent, /日期已保存，不随前置变更自动更新/);
   reset.emit('click');
   assert.equal(start.value, '2024-02-29');
   assert.equal(helper.payload(form, {}).reset_start_date, true);

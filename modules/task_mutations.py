@@ -7,11 +7,12 @@ from datetime import datetime, timedelta, timezone
 from common import now_str
 from modules.task_dates import apply_start_date_request
 from modules.task_types import Actor, JsonObject
+from modules.task_state import BLOCKER_FIELDS, COMPLETION_FIELDS, blocker_values, completion_values, record_blocker_event
 from modules.task_validation import active_ids, creates_combined_task_cycle, normalize_ids, parse_id, valid_tasks, validate_dates
 
 STATUSES = ("未开始", "进行中", "已完成", "阻塞", "已取消")
 PRIORITIES = ("高", "中", "低")
-SCALAR_FIELDS = ("title", "detail", "owner_id", "project_id", "parent_id", "priority", "status", "start_date", "due_date", "start_date_origin", "completed_at")
+SCALAR_FIELDS = ("title", "detail", "owner_id", "project_id", "parent_id", "priority", "status", "progress", "start_date", "due_date", "start_date_origin", "completed_at", "schedule_locked") + BLOCKER_FIELDS
 REVISION_FIELDS = SCALAR_FIELDS + ("schedule_stage",)
 RELATION_FIELDS = ("participant_ids", "group_ids", "predecessor_ids")
 
@@ -90,9 +91,9 @@ def _validate(
         refs = refs + [int(parent_id)]
     refs = list(dict.fromkeys(refs))
     if not valid_tasks(db, refs, task_id):
-        return "父任务或前置任务不存在、已删除或引用自身"
+        return "主前置或其他前置任务不存在、已删除或引用自身"
     if task_id is not None and creates_combined_task_cycle(db, task_id, refs):
-        return "前置任务与父任务形成循环"
+        return "主前置与其他前置任务形成循环"
     if values.get("priority") not in PRIORITIES or values.get("status") not in STATUSES:
         return "状态或优先级不合法"
     return validate_dates(values.get("start_date"), values.get("due_date"))
@@ -128,6 +129,8 @@ def create_task(
     db: sqlite3.Connection, actor: Actor, data: JsonObject
 ) -> tuple[int | None, int | None, str | None, int]:
     db.execute("BEGIN IMMEDIATE")
+    if "schedule_locked" in data and type(data["schedule_locked"]) is not bool:
+        db.rollback(); return None, None, "自动排期固定日期必须为布尔值", 400
     owner_id = parse_id(data.get("owner_id"), "owner_id")
     project_id = parse_id(data.get("project_id"), "project_id")
     if "project" in data:
@@ -139,7 +142,8 @@ def create_task(
               "owner_id": owner_id, "project_id": project_id,
               "parent_id": parse_id(data.get("parent_id"), "parent_id"),
               "priority": data.get("priority", "中"), "status": data.get("status", "未开始"),
-              "start_date": str(data.get("start_date") or "").strip(), "due_date": str(data.get("due_date") or "").strip()}
+              "start_date": str(data.get("start_date") or "").strip(), "due_date": str(data.get("due_date") or "").strip(),
+              "schedule_locked": data.get("schedule_locked", False)}
     relations, error = _resolve_relations(db, data, str(actor["role"]), owner_id)
     error = error or apply_start_date_request(db, data, values)
     member_ids = relations.get("participant_ids", []) + ([owner_id] if owner_id is not None else [])
@@ -147,18 +151,25 @@ def create_task(
     if error:
         db.rollback(); return None, None, error, 400
     stamp = now_str()
-    values["completed_at"] = completion_stamp() if values["status"] == "已完成" else None
+    initial = {'status': '未开始', 'progress': 0, 'completed_at': None}
+    try:
+        values.update(completion_values(initial, data, completion_stamp()))
+        blockers, blocker_event = blocker_values(db, initial, values, data)
+        values.update(blockers)
+    except ValueError as exc:
+        db.rollback(); return None, None, str(exc), 400
     try:
         columns = ",".join(values)
         placeholders = ",".join("?" for _ in values)
         cur = db.execute(
-            f"INSERT INTO tasks({columns},progress,created_by,created_at,updated_at,version) VALUES ({placeholders},0,?,?,?,1)",
+            f"INSERT INTO tasks({columns},created_by,created_at,updated_at,version) VALUES ({placeholders},?,?,?,1)",
             (*values.values(), actor["id"], stamp, stamp),
         )
         task_id = int(cur.lastrowid)
         _replace_relations(db, task_id, relations)
         after = dict(values) | dict(relations)
         _revision(db, task_id, actor, {}, after, 1, "create")
+        record_blocker_event(db, task_id, actor, blocker_event, stamp)
         db.commit()
         return task_id, 1, None, 200
     except (sqlite3.Error, TypeError, ValueError):
@@ -178,6 +189,11 @@ def update_task(
     management = actor["role"] in ("admin", "manager")
     if not management and actor["id"] != prior["owner_id"] and actor["id"] not in participant_ids:
         db.rollback(); return None, "无权限", 403
+    if "schedule_locked" in data and type(data["schedule_locked"]) is not bool:
+        db.rollback(); return None, "自动排期固定日期必须为布尔值", 400
+    state_requested = 'progress' in data or data.get('status', prior['status']) != prior['status']
+    if (state_requested or any(key in data for key in BLOCKER_FIELDS)) and 'version' not in data:
+        db.rollback(); return None, "状态或进度修改必须提供版本号", 400
     expected = parse_id(data.get("version", prior["version"]), "version", False)
     values = {key: prior[key] for key in SCALAR_FIELDS}
     touched: set[str] = set()
@@ -214,6 +230,19 @@ def update_task(
             relations[key] = supplied_relations[key]
             touched.add(key)
     old_relations = _relations(db, task_id)
+    if not management:
+        # 归属类字段只允许管理员/项管调整；负责人和参与者仍可更新状态与内容。
+        ownership = []
+        if values["owner_id"] != prior["owner_id"]:
+            ownership.append("负责人")
+        if values["project_id"] != prior["project_id"]:
+            ownership.append("造车组别")
+        for key, label in (("participant_ids", "参与成员"), ("group_ids", "专业组")):
+            if sorted(relations[key]) != sorted(old_relations[key]):
+                ownership.append(label)
+        if ownership:
+            db.rollback()
+            return None, "只有管理员或项管可以调整" + "、".join(ownership), 403
     active_members = [item for item in relations["participant_ids"] if item not in old_relations["participant_ids"]]
     if values["owner_id"] != prior["owner_id"] and values["owner_id"] is not None:
         active_members.append(values["owner_id"])
@@ -222,9 +251,17 @@ def update_task(
     error = _validate(db, task_id, values, relations, active_members, active_groups, active_project)
     if error:
         db.rollback(); return None, error, 400
-    if values["status"] != prior["status"]:
-        values["completed_at"] = completion_stamp() if values["status"] == "已完成" else None
-        touched.add("completed_at")
+    try:
+        # Merely resaving a legacy record does not silently repair its history.
+        if state_requested:
+            values.update(completion_values(prior, data, completion_stamp()))
+            touched.update(COMPLETION_FIELDS)
+        blockers, blocker_event = blocker_values(db, prior, values, data)
+        values.update(blockers)
+        if blocker_event:
+            touched.update(BLOCKER_FIELDS)
+    except ValueError as exc:
+        db.rollback(); return None, str(exc), 400
     before = {key: (prior[key] if key in SCALAR_FIELDS else _relations(db, task_id)[key]) for key in touched}
     after = {key: (values[key] if key in SCALAR_FIELDS else relations[key]) for key in touched}
     changed = {key for key in touched if before[key] != after[key]}
@@ -242,7 +279,17 @@ def update_task(
             db.execute(f"UPDATE tasks SET {assignments},updated_at=?,version=? WHERE id=? AND version=?",
                        (*values.values(), now_str(), version, task_id, expected))
             _replace_relations(db, task_id, relations)
-            _revision(db, task_id, actor, {k: before[k] for k in changed}, {k: after[k] for k in changed}, version)
+            revision_keys = set(changed)
+            if revision_keys.intersection(COMPLETION_FIELDS):
+                revision_keys.update(COMPLETION_FIELDS)
+            if blocker_event:
+                revision_keys.update(BLOCKER_FIELDS)
+            _revision(db, task_id, actor, {k: prior[k] if k in SCALAR_FIELDS else before[k] for k in revision_keys},
+                      {k: values[k] if k in SCALAR_FIELDS else after[k] for k in revision_keys}, version)
+            if values['progress'] != prior['progress']:
+                db.execute('INSERT INTO task_progress_updates(task_id,actor_id,actor_name,progress,note,created_at) VALUES(?,?,?,?,?,?)',
+                           (task_id, actor['id'], actor['name'], values['progress'], note or '任务状态与进度同步', now_str()))
+            record_blocker_event(db, task_id, actor, blocker_event, now_str())
         if changed or note:
             db.execute("INSERT INTO logs(task_id,member_id,member_name,note,changes,created_at) VALUES(?,?,?,?,?,?)",
                        (task_id, actor["id"], actor["name"], note, "；".join(sorted(changed)), now_str()))

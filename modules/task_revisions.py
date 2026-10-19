@@ -6,6 +6,7 @@ import sqlite3
 from common import now_str
 from modules.task_mutations import RELATION_FIELDS, REVISION_FIELDS as SCALAR_FIELDS, _relations, _replace_relations, _revision, _validate
 from modules.task_types import Actor, JsonObject
+from modules.task_state import BLOCKER_FIELDS, COMPLETION_FIELDS, record_blocker_event
 
 
 def list_revisions(db: sqlite3.Connection, task_id: int) -> list[JsonObject] | None:
@@ -37,10 +38,8 @@ def revert_revision(
     if target["kind"] not in ("update", "revert"):
         db.rollback(); return None, "该修订不能撤销", 400
     before_target = json.loads(target["before_json"])
-    if "status" in before_target and "completed_at" not in before_target:
-        # Pre-migration revisions do not prove when their completed state
-        # began. Restoring one must not borrow a later completion timestamp.
-        before_target["completed_at"] = None
+    if set(before_target).intersection(COMPLETION_FIELDS) and not set(COMPLETION_FIELDS).issubset(before_target):
+        db.rollback(); return None, "旧修订缺少完整状态与进度记录，请人工核对后修改", 409
     touched = set(before_target)
     for row in db.execute(
         "SELECT before_json,after_json FROM task_revisions WHERE task_id=? AND id>? ORDER BY id",
@@ -57,6 +56,11 @@ def revert_revision(
             values[key] = before_target[key]
         elif key in RELATION_FIELDS:
             relations[key] = before_target[key]
+    if touched.intersection(COMPLETION_FIELDS):
+        if (values['status'] == '已完成') != (values['progress'] == 100):
+            db.rollback(); return None, "该历史修订的状态与进度矛盾，请人工核对", 409
+        if values['status'] == '阻塞' and not all(values.get(key) for key in ('blocker_reason', 'blocker_next_action')):
+            db.rollback(); return None, "该历史修订缺少阻塞处理信息，请人工核对", 409
     active_members = relations["participant_ids"] if "participant_ids" in touched else []
     if "owner_id" in touched and values["owner_id"] is not None:
         active_members = active_members + [int(values["owner_id"])]
@@ -77,6 +81,15 @@ def revert_revision(
                    (*values.values(), now_str(), version, task_id, expected))
         _replace_relations(db, task_id, relations)
         new_id = _revision(db, task_id, actor, current, before_target, version, "revert", revision_id)
+        if task_row['progress'] != values['progress']:
+            db.execute('INSERT INTO task_progress_updates(task_id,actor_id,actor_name,progress,note,created_at) VALUES(?,?,?,?,?,?)',
+                       (task_id, actor['id'], actor['name'], values['progress'], f'撤销修订 #{revision_id}', now_str()))
+        if touched.intersection(BLOCKER_FIELDS) or (task_row['status'] == '阻塞') != (values['status'] == '阻塞'):
+            snapshot = values if values['status'] == '阻塞' else dict(task_row)
+            event = {key: snapshot[key] for key in BLOCKER_FIELDS}
+            event.update(action='open' if values['status'] == '阻塞' and task_row['status'] != '阻塞' else
+                         'update' if values['status'] == '阻塞' else 'resolve', resolution=f'管理员撤销修订 #{revision_id}')
+            record_blocker_event(db, task_id, actor, event, now_str())
         db.execute("UPDATE task_revisions SET reverted_by=? WHERE id=?", (new_id, revision_id))
         db.execute("INSERT INTO logs(task_id,member_id,member_name,note,changes,created_at) VALUES(?,?,?,?,?,?)",
                    (task_id, actor["id"], actor["name"], "", f"撤销修订 #{revision_id}", now_str()))

@@ -13,6 +13,8 @@ from modules.image_storage import (
 )
 from modules.task_attachments import _can_upload
 from modules.task_validation import MAX_SQLITE_INTEGER, InvalidIdError, parse_id
+from modules.task_mutations import _revision, completion_stamp
+from modules.task_state import BLOCKER_FIELDS, COMPLETION_FIELDS, blocker_values, completion_values, record_blocker_event
 
 bp = Blueprint("task_progress", __name__)
 MAX_NOTE_LENGTH = 2000
@@ -20,7 +22,7 @@ MAX_NOTE_LENGTH = 2000
 
 def _active_task(db, task_id: int):
     return db.execute(
-        "SELECT id,owner_id,progress,version FROM tasks WHERE id=? AND deleted_at IS NULL",
+        "SELECT * FROM tasks WHERE id=? AND deleted_at IS NULL",
         (task_id,),
     ).fetchone()
 
@@ -28,6 +30,7 @@ def _active_task(db, task_id: int):
 @bp.get("/api/task/<int:task_id>/progress")
 @login_required
 def history(task_id: int):
+    """进度历史（含备注）对全体登录成员可读，与任务本身的可见范围一致。"""
     if task_id > MAX_SQLITE_INTEGER:
         return jsonify(ok=False, error="任务 ID 不合法"), 400
     db = get_db()
@@ -110,6 +113,15 @@ def update_progress(task_id: int):
             db.rollback()
             cleanup_staged(staged)
             return jsonify(ok=False, error="任务已更新，请刷新后重试"), 409
+        prior = dict(task)
+        try:
+            values = completion_values(prior, {'progress': progress}, completion_stamp())
+            blockers, blocker_event = blocker_values(db, prior, values, {
+                'blocker_result': request.form.get('blocker_result', '')})
+            values.update(blockers)
+        except ValueError as exc:
+            db.rollback(); cleanup_staged(staged)
+            return jsonify(ok=False, error=str(exc)), 400
         if int(task["progress"] or 0) == progress and not note and not images:
             db.rollback()
             cleanup_staged(staged)
@@ -121,9 +133,11 @@ def update_progress(task_id: int):
             (task_id, user["id"], user["name"], progress, note, stamp),
         ).lastrowid
         updated = db.execute(
-            "UPDATE tasks SET progress=?,version=?,updated_at=? "
+            "UPDATE tasks SET progress=?,status=?,completed_at=?,blocker_reason=?,blocker_next_action=?,"
+            "blocker_helper_id=?,blocker_follow_up=?,version=?,updated_at=? "
             "WHERE id=? AND version=? AND deleted_at IS NULL",
-            (progress, version + 1, stamp, task_id, version),
+            (progress, values['status'], values['completed_at'], *(values[key] for key in BLOCKER_FIELDS),
+             version + 1, stamp, task_id, version),
         )
         if updated.rowcount != 1:
             db.rollback()
@@ -141,6 +155,13 @@ def update_progress(task_id: int):
             )
         if staged:
             finalize_staged(staged)
+        revision_keys = set(COMPLETION_FIELDS)
+        if blocker_event:
+            revision_keys.update(BLOCKER_FIELDS)
+        if any(prior[key] != values[key] for key in revision_keys):
+            _revision(db, task_id, user, {key: prior[key] for key in revision_keys},
+                      {key: values[key] for key in revision_keys}, version + 1)
+        record_blocker_event(db, task_id, user, blocker_event, stamp)
         db.execute(
             "INSERT INTO logs(task_id,member_id,member_name,note,changes,created_at) "
             "VALUES (?,?,?,?,?,?)",
@@ -149,6 +170,7 @@ def update_progress(task_id: int):
         )
         db.commit()
         return jsonify(ok=True, id=task_id, version=version + 1, progress=progress,
+                       status=values['status'], completed_at=values['completed_at'],
                        update_id=update_id)
     except (sqlite3.Error, StorageWriteError, OSError):
         db.rollback()

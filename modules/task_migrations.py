@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS task_progress_updates (
     FOREIGN KEY (task_id) REFERENCES tasks(id)
 );
 CREATE INDEX IF NOT EXISTS idx_task_progress_updates_task ON task_progress_updates(task_id,id);
+CREATE TABLE IF NOT EXISTS task_blocker_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
+    actor_id INTEGER NOT NULL, actor_name TEXT NOT NULL, action TEXT NOT NULL,
+    reason TEXT NOT NULL, next_action TEXT NOT NULL, helper_id INTEGER,
+    follow_up TEXT NOT NULL DEFAULT '', resolution TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_blocker_events_task ON task_blocker_events(task_id,id);
 CREATE TABLE IF NOT EXISTS task_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL,
     member_id INTEGER NOT NULL, original_name TEXT NOT NULL,
@@ -189,6 +197,15 @@ def migrate(db: sqlite3.Connection) -> None:
             # dates are unknown until a real future completion transition.
             _add_column(db, "tasks", "completed_at TEXT")
             db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (7, ?)", (now_str(),))
+        if db.execute("SELECT 1 FROM schema_migrations WHERE version=8").fetchone() is None:
+            # A saved/manual date is not a request to freeze automatic scheduling.
+            _add_column(db, "tasks", "schedule_locked INTEGER NOT NULL DEFAULT 0 CHECK (schedule_locked IN (0,1))")
+            db.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (8, ?)", (now_str(),))
+        if db.execute("SELECT 1 FROM schema_migrations WHERE version=9").fetchone() is None:
+            for definition in ("blocker_reason TEXT NOT NULL DEFAULT ''", "blocker_next_action TEXT NOT NULL DEFAULT ''",
+                               "blocker_helper_id INTEGER", "blocker_follow_up TEXT NOT NULL DEFAULT ''"):
+                _add_column(db, "tasks", definition)
+            db.execute("INSERT INTO schema_migrations(version, applied_at) VALUES (9, ?)", (now_str(),))
         db.commit()
     except sqlite3.Error:
         db.rollback()

@@ -121,22 +121,78 @@ function participantLanes(tasks) {
     });
   return active;
 }
-const expandedPersonLanes = new Set();
-const expandedFinishedLanes = new Set();
+let memberTaskListContext = null;
 function renderPersonLane(lane) {
   const closedFilter = state.filters.status === "已完成" || state.filters.status === "已取消";
   const active = closedFilter ? lane.tasks : lane.tasks.filter((task) => !isFinishedTask(task));
-  const finished = closedFilter ? [] : lane.tasks.filter(isFinishedTask);
-  const expanded = expandedPersonLanes.has(lane.key);
-  const finishedExpanded = expandedFinishedLanes.has(lane.key);
-  const shown = expanded ? active : active.slice(0, 1);
+  const shown = active.slice(0, 1);
   const primaryCards = shown.map((task) => taskCard(task, "", lane.memberId)).join("") ||
     `<p class="empty">${lane.tasks.length ? "暂无未完成任务" : "暂无任务"}</p>`;
-  const additional = active.length > 1 ?
-    `<button class="btn ghost sm" type="button" data-lane-toggle="${esc(lane.key)}" aria-expanded="${expanded}" aria-controls="lane-${esc(lane.key)}">${expanded ? "收起其他任务" : `展开其余 ${active.length - 1} 项`}</button>` : "";
-  const finishedButton = finished.length ?
-    `<button class="btn ghost sm" type="button" data-lane-finished-toggle="${esc(lane.key)}" aria-expanded="${finishedExpanded}" aria-controls="lane-finished-${esc(lane.key)}">${finishedExpanded ? "收起已完成/取消任务" : `查看已完成/取消 ${finished.length} 项`}</button>` : "";
-  return `<section class="lane person-lane ${lane.key === "unassigned" ? "unassigned-lane" : ""}"><header class="lane-head"><h2>${esc(lane.title)}</h2>${lane.sub ? `<span class="lane-sub">${esc(lane.sub)}</span>` : ""}<span class="lane-count">${new Set(lane.tasks.map((task) => task.id)).size}</span></header><div class="lane-body" id="lane-${esc(lane.key)}">${primaryCards}</div>${finished.length ? `<div class="lane-body person-finished" id="lane-finished-${esc(lane.key)}" ${finishedExpanded ? "" : "hidden"}>${finishedExpanded ? finished.map((task) => taskCard(task, "", lane.memberId)).join("") : ""}</div>` : ""}<footer class="lane-actions">${additional}${finishedButton}${!additional && !finishedButton ? "<span>已显示全部任务</span>" : ""}</footer></section>`;
+  const count = new Set(lane.tasks.map((task) => task.id)).size;
+  const additional = count > shown.length ?
+    `<button class="btn ghost sm" type="button" data-lane-tasks="${esc(lane.key)}" aria-haspopup="dialog" aria-controls="modal">查看全部 ${count} 项</button>` : "<span>已显示全部任务</span>";
+  return `<section class="lane person-lane ${lane.key === "unassigned" ? "unassigned-lane" : ""}"><header class="lane-head"><h2>${esc(lane.title)}</h2>${lane.sub ? `<span class="lane-sub">${esc(lane.sub)}</span>` : ""}<span class="lane-count">${count}</span></header><div class="lane-body" id="lane-${esc(lane.key)}">${primaryCards}</div><footer class="lane-actions">${additional}</footer></section>`;
+}
+
+function memberTaskListShell(lane) {
+  const groups = [["active", "未完成", lane.tasks.filter((task) => !isFinishedTask(task))],
+    ["finished", "已完成 / 已取消", lane.tasks.filter(isFinishedTask)]];
+  return `<div class="member-task-list-shell" data-member-task-list><header class="modal-head"><div><p class="ux-eyebrow">TEAM / TASKS</p><h2>${esc(lane.title)}的任务</h2><p class="muted">当前筛选下共 ${lane.tasks.length} 项${lane.sub ? ` · ${esc(lane.sub)}` : ""}</p></div><button class="btn ghost sm" type="button" data-close>关闭</button></header>
+    <div class="member-task-list-scroll" data-member-task-scroll>${groups.map(([key, title, tasks]) => `<section class="member-task-group" data-task-group="${key}" aria-labelledby="member-task-${key}"><h3 id="member-task-${key}">${title}<span class="badge gray">${tasks.length}</span></h3><div class="member-task-list-cards">${tasks.map((task) => taskCard(task, "", lane.memberId)).join("") || '<p class="empty">当前筛选下暂无任务</p>'}</div></section>`).join("")}</div></div>`;
+}
+
+function memberTaskReturnTarget(key) {
+  return document.querySelector(`#board [data-lane-tasks="${CSS.escape(key)}"]`) ||
+    document.querySelector(`#lane-${CSS.escape(key)} [data-task-id]`) ||
+    document.querySelector('#view-seg [data-view="person"]');
+}
+
+function rememberMemberTaskList(context) {
+  const modal = document.getElementById("modal");
+  context.scrollTop = modal.querySelector("[data-member-task-scroll]")?.scrollTop || 0;
+  context.focusTaskId = modal.contains(document.activeElement) ? document.activeElement.closest("[data-task-id]")?.dataset.taskId || null : null;
+}
+
+function fillMemberTaskList(context) {
+  const lane = participantLanes(filteredTasks()).find((item) => item.key === context.key) || {...context.lane, tasks: []};
+  context.lane = lane;
+  const modal = document.getElementById("modal");
+  modal.innerHTML = memberTaskListShell(lane);
+  modal.setAttribute("aria-label", `${lane.title}的全部任务`);
+  const root = modal.querySelector("[data-member-task-list]");
+  root.querySelector("[data-close]").addEventListener("click", hideModal);
+  function openCard(card) {
+    if (!card) return;
+    rememberMemberTaskList(context);
+    context.focusTaskId = card.dataset.taskId;
+    openTaskModal(Number(card.dataset.taskId), {returnToList: () => openMemberTaskList(context.key, context)});
+  }
+  root.addEventListener("click", (event) => openCard(event.target.closest("[data-task-id]")));
+  root.addEventListener("keydown", (event) => {
+    const card = event.target.closest("[data-task-id]");
+    if (card && ["Enter", " "].includes(event.key)) { event.preventDefault(); openCard(card); }
+  });
+  const focus = context.focusTaskId && root.querySelector(`[data-task-id="${Number(context.focusTaskId)}"]`);
+  (focus || root.querySelector("[data-close]")).focus({preventScroll: true});
+  root.querySelector("[data-member-task-scroll]").scrollTop = context.scrollTop;
+}
+
+function openMemberTaskList(key, previous = null) {
+  const lane = participantLanes(filteredTasks()).find((item) => item.key === key) || previous?.lane;
+  if (!lane) return;
+  const context = previous || {key, lane, scrollTop: 0, focusTaskId: null};
+  if (showModal("", `${lane.title}的全部任务`, {
+    className: "member-task-list-dialog", returnFocus: () => memberTaskReturnTarget(key),
+    onClose: () => { if (memberTaskListContext === context) memberTaskListContext = null; },
+  }) === false) return;
+  memberTaskListContext = context;
+  fillMemberTaskList(context);
+}
+
+function refreshMemberTaskList() {
+  if (!memberTaskListContext) return;
+  rememberMemberTaskList(memberTaskListContext);
+  fillMemberTaskList(memberTaskListContext);
 }
 function renderLanes(tasks) {
   const lanes = state.view === "specialty" ? specialtyLanes(tasks) : state.view === "person"
@@ -170,6 +226,7 @@ function fillBoardFilters() {
 function renderBoard() {
   const target = document.getElementById("board");
   if (!target) return;
+  if (typeof captureTreeView === "function") captureTreeView(target);
   document.querySelectorAll("#view-seg button").forEach((button) => {
     const selected = button.dataset.view === state.view;
     button.classList.toggle("active", selected);
@@ -180,14 +237,19 @@ function renderBoard() {
   target.classList.toggle("tree-board", state.view === "tree");
   target.classList.toggle("timeline-board", state.view === "specialty");
   const focused = target.contains(document.activeElement) ? document.activeElement : null;
-  const focusLane = focused?.dataset.laneToggle;
-  const focusFinished = focused?.dataset.laneFinishedToggle;
+  const focusLane = focused?.dataset.laneTasks;
   const focusTask = focused?.dataset.taskId;
-  target.innerHTML = state.view === "tree" ? renderTree(tasks)
+  const focusMemberLane = focused?.closest(".person-lane")?.querySelector(".lane-body")?.id.slice(5);
+  target.innerHTML = state.view === "tree" ? renderTree(tasks, target.clientWidth)
     : state.view === "specialty" ? renderSpecialtyTimeline(tasks) : renderLanes(tasks);
-  if (focusLane) target.querySelector(`[data-lane-toggle="${CSS.escape(focusLane)}"]`)?.focus({preventScroll: true});
-  else if (focusFinished) target.querySelector(`[data-lane-finished-toggle="${CSS.escape(focusFinished)}"]`)?.focus({preventScroll: true});
-  else if (focusTask) target.querySelector(`[data-task-id="${Number(focusTask)}"]`)?.focus({preventScroll: true});
+  if (state.view === "tree" && typeof mountTreeView === "function") mountTreeView(target);
+  if (focusLane) memberTaskReturnTarget(focusLane)?.focus({preventScroll: true});
+  else if (focusTask) {
+    const taskTarget = focusMemberLane
+      ? document.getElementById(`lane-${focusMemberLane}`)?.querySelector(`[data-task-id="${Number(focusTask)}"]`) || memberTaskReturnTarget(focusMemberLane)
+      : target.querySelector(`[data-task-id="${Number(focusTask)}"]`);
+    taskTarget?.focus({preventScroll: true});
+  }
   document.getElementById("match-count").textContent = `${new Set(tasks.map((task) => task.id)).size} 个匹配任务`;
 }
 function bindBoard() {
@@ -200,7 +262,7 @@ function bindBoard() {
   ].forEach(([id, key, event]) =>
     document.getElementById(id)?.addEventListener(event, (e) => {
       state.filters[key] = e.target.value.trim();
-      if (key === "project") state.view = state.filters.project ? "specialty" : state.view === "specialty" ? "person" : state.view;
+      if (key === "project" && state.view !== "tree") state.view = state.filters.project ? "specialty" : state.view === "specialty" ? "person" : state.view;
       renderBoard();
     }),
   );
@@ -219,18 +281,9 @@ function bindBoard() {
     renderBoard();
   });
   target.addEventListener("click", (event) => {
-    const laneToggle = event.target.closest('[data-lane-toggle]');
+    const laneToggle = event.target.closest('[data-lane-tasks]');
     if (laneToggle) {
-      const key = laneToggle.dataset.laneToggle;
-      expandedPersonLanes.has(key) ? expandedPersonLanes.delete(key) : expandedPersonLanes.add(key);
-      renderBoard();
-      return;
-    }
-    const finishedToggle = event.target.closest("[data-lane-finished-toggle]");
-    if (finishedToggle) {
-      const key = finishedToggle.dataset.laneFinishedToggle;
-      expandedFinishedLanes.has(key) ? expandedFinishedLanes.delete(key) : expandedFinishedLanes.add(key);
-      renderBoard();
+      openMemberTaskList(laneToggle.dataset.laneTasks);
       return;
     }
     const toggle = event.target.closest("[data-tree-toggle]");
@@ -241,19 +294,28 @@ function bindBoard() {
       return;
     }
     const card = event.target.closest("[data-task-id]");
-    if (card) openTaskModal(Number(card.dataset.taskId));
+    if (card) openBoardTask(Number(card.dataset.taskId));
   });
   target.addEventListener("keydown", (event) => {
     const card = event.target.closest("[data-task-id]");
     if (card && ["Enter", " "].includes(event.key)) {
       event.preventDefault();
-      openTaskModal(Number(card.dataset.taskId));
+      openBoardTask(Number(card.dataset.taskId));
     }
   });
   addDataListener(() => {
     renderStats();
     fillBoardFilters();
     renderBoard();
+    refreshMemberTaskList();
   });
+}
+function openBoardTask(id) {
+  const navigation = state.view === "tree" ? {returnFocus: () => {
+    const card = document.querySelector(`#board [data-task-id="${id}"]`);
+    const list = card?.closest("details");
+    return list && !list.open ? list.querySelector("summary") : card || document.querySelector('#board .dependency-scroll, #board [data-tree-isolated-toggle]');
+  }} : {};
+  openTaskModal(id, navigation);
 }
 document.addEventListener("DOMContentLoaded", bindBoard);

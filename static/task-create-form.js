@@ -1,10 +1,16 @@
 "use strict";
 (() => {
   const form=document.getElementById('create-form');if(!form)return;
-  const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const escape=value=>BusinessUI.escape(value);
   const selected=name=>[...form.querySelectorAll(`[name="${name}"]:checked`)].map(input=>Number(input.value));
   let data={members:[],projects:[],tasks:[]},loaded=false,saving=false;
   const validateOwner=()=>form.elements.owner_id.setCustomValidity(!form.elements.owner_id.value&&selected('participant_ids').length?'选择参与成员后必须指定负责人':'');
+  const syncBlocker=()=>{
+    const host=form.querySelector('[data-create-blocker]');if(!host)return;
+    host.hidden=form.elements.status.value!=='阻塞';
+    host.querySelectorAll('input,select,textarea').forEach(control=>{control.disabled=host.hidden;control.required=!host.hidden&&['blocker_reason','blocker_next_action'].includes(control.name);});
+  };
+  form.elements.status.addEventListener('change',syncBlocker);form.addEventListener('reset',()=>queueMicrotask(syncBlocker));
   function selectOptions(id,items,empty) {
     const control=document.getElementById(id),value=control.value;
     control.innerHTML=`<option value="">${empty}</option>`+items.map(item=>`<option value="${item.id}">${escape(item.name)}</option>`).join('');
@@ -24,8 +30,10 @@
     data=catalog;
     const members=data.members.filter(member=>member.is_active!==0),tasks=data.tasks.map(task=>({...task,name:`#${task.id} ${task.title}`}));
     selectOptions('create-owner',members,'未指定');selectOptions('create-project',data.projects.filter(project=>project.is_active!==0),'未选择');
+    if(document.getElementById('create-blocker-helper'))selectOptions('create-blocker-helper',members,'未指定');
     selectOptions('create-parent',tasks,'无主前置任务');choices('create-participants','participant_ids',members);choices('create-dependencies','predecessor_ids',tasks);
     form._taskDates?.refresh();
+    syncBlocker();
   }
   window.TaskDateDefaults.bind(form,{saved:false,getTasks:()=>data.tasks});
   window.VehicleTaskCreator={async prepare(){render(await window.TaskCreateDialog.catalog());loaded=true;}};
@@ -33,6 +41,8 @@
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(saving||!loaded||!form.reportValidity())return;
     const payload=Object.fromEntries(new FormData(form));payload.participant_ids=selected('participant_ids');payload.predecessor_ids=selected('predecessor_ids');
+    if('blocker_helper_id' in payload)payload.blocker_helper_id=payload.blocker_helper_id?Number(payload.blocker_helper_id):null;
+    payload.schedule_locked=!!form.querySelector('[name="schedule_locked"]')?.checked;
     if(!payload.owner_id&&payload.participant_ids.length){form.elements.owner_id.setCustomValidity('选择参与成员后必须指定负责人');form.elements.owner_id.reportValidity();return;}
     window.TaskDateDefaults.payload(form,payload);
     saving=true;window.TaskCreateDialog.setBusy(true);

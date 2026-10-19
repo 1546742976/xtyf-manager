@@ -92,19 +92,23 @@ test("specialty schedule: owner phases, stable dates and management order agree"
   assert.equal(page.value("specialtyTaskStage")({owner_id:1,owner_stage:null}), null);
 });
 
-test("schedule preview: escaped content, manual stage controls and unchanged rows", () => {
+test("schedule preview: escaped content, selection controls and protected rows", () => {
   const page = browser(["app.js", "task-schedule.js"]);
   const row = {id:1,title:'<img src=x>',owner_name:'<script>',status:'未开始',eligible:true,
-    stage_options:["机械","视觉"],stage:"视觉",note:'<svg>',
+    selected:true,stage:"视觉",note:'<svg>',needs_duration:true,
     before:{start_date:"2026-10-14",due_date:"2026-10-16"},after:{start_date:"2026-10-22",due_date:"2026-10-24"}};
   const html = page.value("schedulePreviewRows")([row]);
   assert.match(html,/&lt;img src=x&gt;/);
   assert.match(html,/&lt;script&gt;/);
-  assert.match(html,/data-phase-choice="1"/);
-  assert.match(html,/option selected>视觉/);
+  assert.match(html,/&lt;svg&gt;/);
+  assert.match(html,/data-schedule-task="1" checked/);
+  assert.match(html,/data-schedule-duration="1"/);
+  assert.match(html,/视觉<\/small>/);
   assert.match(html,/原：2026-10-14/);
   assert.match(html,/新：2026-10-22/);
-  assert.doesNotMatch(page.value("schedulePreviewRows")([{...row,eligible:false}]), /<select/);
+  const inactive = page.value("schedulePreviewRows")([{...row,eligible:false,selected:false}]);
+  assert.match(inactive,/data-schedule-task="1"\s+disabled/);
+  assert.doesNotMatch(inactive, /data-phase-choice|<select/);
 });
 
 test("frontend money: integer cents, comparisons and large values remain exact", () => {
@@ -298,24 +302,19 @@ test("person lanes prioritize scored active tasks and fold completed work", () =
   const lane = page.value("participantLanes")(state.tasks).find((item) => item.key === "m-7");
   assert.deepEqual(Array.from(lane.tasks, (task) => task.id), [2,4,5,1,6,3,7,8,9]);
   assert.deepEqual(state.tasks.map((task) => task.id), originalIds);
-  let html = page.value("renderPersonLane")(lane);
+  const html = page.value("renderPersonLane")(lane);
   assert.match(html, /主责明天/);
   assert.doesNotMatch(html, /主责逾期|主责今天|协助逾期|已完成<\/h3>|已取消<\/h3>/);
-  assert.match(html, /展开其余 6 项/);
-  assert.match(html, /查看已完成\/取消 2 项/);
-  assert.match(html, /id="lane-finished-m-7" hidden/);
-  page.value("expandedPersonLanes").add("m-7");
-  html = page.value("renderPersonLane")(lane);
-  assert.match(html, /主责今天|协助逾期/);
-  assert.doesNotMatch(html, /已完成<\/h3>|已取消<\/h3>/);
-  page.value("expandedFinishedLanes").add("m-7");
-  html = page.value("renderPersonLane")(lane);
-  assert.match(html, /已完成<\/h3>/);
-  assert.match(html, /已取消<\/h3>/);
-  assert.doesNotMatch(html, /id="lane-finished-m-7" hidden/);
+  assert.match(html, /查看全部 9 项/);
+  assert.match(html, /data-lane-tasks="m-7"/);
+  const full = page.value("memberTaskListShell")(lane);
+  assert.match(full, /data-task-group="active"/);
+  assert.match(full, /data-task-group="finished"/);
+  assert.match(full, /主责今天|协助逾期/);
+  assert.match(full, /已完成<\/h3>/);
+  assert.match(full, /已取消<\/h3>/);
   state.filters.status = "已完成";
   const filtered = page.value("participantLanes")(page.value("filteredTasks")()).find((item) => item.key === "m-7");
-  page.value("expandedFinishedLanes").delete("m-7");
   assert.match(page.value("renderPersonLane")(filtered), /已完成<\/h3>/);
 });
 

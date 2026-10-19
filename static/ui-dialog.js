@@ -1,29 +1,64 @@
 "use strict";
 
 let modalReturnFocus = null;
+let modalLifecycle = null;
+let modalBaseClass = null;
 
-function showModal(html, label = "任务操作窗口") {
+/** One shared lifecycle for buttons, Escape, backdrop clicks and replacement. */
+function showModal(html, label = "任务操作窗口", options = {}) {
   const modal = document.getElementById("modal");
+  const mask = document.getElementById("modal-mask");
+  if (!modal || !mask) return false;
+  if (!mask.classList.contains("hidden")) {
+    // Replacing a pending save is as dangerous as closing it.
+    if (modalLifecycle?.beforeClose?.() === false) return false;
+    const previous = modalLifecycle;
+    modalLifecycle = null;
+    previous?.onClose?.();
+  }
+  if (modalBaseClass === null) modalBaseClass = modal.className;
+  modal.className = modalBaseClass;
+  if (options.className) {
+    for (const name of String(options.className).split(/\s+/).filter(Boolean)) modal.classList.add(name);
+  }
   modalReturnFocus = document.activeElement;
+  modalLifecycle = options;
   modal.innerHTML = html;
   modal.setAttribute("aria-label", label);
-  document.getElementById("modal-mask").classList.remove("hidden");
+  mask.classList.remove("hidden");
   document.body.classList.add("modal-open");
   modal.querySelector("button, input, select, textarea, a[href]")?.focus();
+  return true;
 }
 
 function hideModal() {
-  document.getElementById("modal-mask")?.classList.add("hidden");
-  document.getElementById("modal")?.replaceChildren();
+  const mask = document.getElementById("modal-mask");
+  const modal = document.getElementById("modal");
+  if (!mask || !modal || mask.classList.contains("hidden")) return false;
+  if (modalLifecycle?.beforeClose?.() === false) return false;
+  const lifecycle = modalLifecycle || {};
+  const returnFocus = lifecycle.returnFocus ?? modalReturnFocus;
+  modalLifecycle = null;
+  mask.classList.add("hidden");
+  modal.replaceChildren();
+  if (modalBaseClass !== null) modal.className = modalBaseClass;
   document.body.classList.remove("modal-open");
-  modalReturnFocus?.focus?.();
+  lifecycle.onClose?.();
+  if (typeof lifecycle.afterClose === "function") {
+    // A nested task dialog can recreate its parent list and manage focus itself.
+    lifecycle.afterClose();
+  } else {
+    const target = typeof returnFocus === "function" ? returnFocus() : returnFocus;
+    target?.focus?.();
+  }
+  return true;
 }
 
 function modalKeydown(event) {
   const mask = document.getElementById("modal-mask");
   if (!mask || mask.classList.contains("hidden")) return;
   if (event.key === "Escape") {
-    hideModal();
+    if (hideModal()) event.preventDefault();
     return;
   }
   if (event.key !== "Tab") return;

@@ -41,10 +41,14 @@ class TestCollaborationBackend(unittest.TestCase):
         })
         self.assertEqual(created.status_code, 200)
         payload = created.get_json()
-        updated = member_client.post(f"/api/task/{payload['id']}", json={
-            "version": payload["version"], "title": "参与者已修改",
+        denied = member_client.post(f"/api/task/{payload['id']}", json={
+            "version": payload["version"], "title": "参与者不能移除自己的归属",
             "owner_id": member_id, "participant_ids": [],
             "group_ids": [group_id], "project_id": project_id,
+        })
+        self.assertEqual(denied.status_code, 403)
+        updated = member_client.post(f"/api/task/{payload['id']}", json={
+            "version": payload["version"], "title": "参与者已修改",
         })
 
         # Then: the version advances and the expanded task is returned by the aggregate API.

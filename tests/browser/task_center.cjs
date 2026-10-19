@@ -143,23 +143,22 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
       renderBoard();
       const lane=document.querySelector('#lane-m-'+memberId).closest('.person-lane');
       const initial=Array.from(lane.querySelectorAll('#lane-m-'+memberId+' .task-head h3'),n=>n.textContent);
-      const archiveInitiallyHidden=lane.querySelector('.person-finished').hidden;
       const firstScore=taskUrgencyScore(state.tasks[1],memberId);
-      lane.querySelector('[data-lane-toggle]').click();
-      const expanded=Array.from(document.querySelectorAll('#lane-m-'+memberId+' .task-head h3'),n=>n.textContent);
-      document.querySelector('#lane-m-'+memberId).closest('.person-lane')
-        .querySelector('[data-lane-finished-toggle]').click();
-      const archived=Array.from(document.querySelector('#lane-m-'+memberId).closest('.person-lane')
-        .querySelectorAll('.person-finished .task-head h3'),n=>n.textContent);
-      return {initial,expanded,archived,archiveInitiallyHidden,firstScore};
+      lane.querySelector('[data-lane-tasks]').click();
+      const list=document.querySelector('#modal [data-member-task-list]');
+      const expanded=Array.from(list.querySelectorAll('[data-task-group="active"] .task-head h3'),n=>n.textContent);
+      const archived=Array.from(list.querySelectorAll('[data-task-group="finished"] .task-head h3'),n=>n.textContent);
+      const hasSeparateGroups=list.querySelectorAll('[data-task-group]').length===2;
+      return {initial,expanded,archived,hasSeparateGroups,firstScore};
     });
     assert.deepEqual(urgencyUI.initial,['明天紧急参与']);
     assert.deepEqual(urgencyUI.expanded,['明天紧急参与','无截止主责','一般总负责']);
     assert.deepEqual(urgencyUI.archived,['历史已完成']);
-    assert.equal(urgencyUI.archiveInitiallyHidden,true);
+    assert.equal(urgencyUI.hasSeparateGroups,true);
     assert.equal(urgencyUI.firstScore,68);
-    checks.push('mixed member default top, expanded urgency order, and completion archive in DOM');
+    checks.push('mixed member default top, full-list modal urgency order, and separate finished section in DOM');
 
+    await page.locator('#modal [data-close]').click();
     for(const width of [375,390,767,768,850,1280,1606]) {
       await page.setViewportSize({width,height:900});await page.goto(base+'/');await page.locator('#daily-dashboard .daily-card').waitFor();
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'dashboard overflow '+width);

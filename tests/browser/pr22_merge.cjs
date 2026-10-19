@@ -52,7 +52,7 @@ async function login(page, base, username, password, firstLogin=true) {
       return [day.getFullYear(),String(day.getMonth()+1).padStart(2,'0'),String(day.getDate()).padStart(2,'0')].join('-');
     };
     const project=projects.find(p=>p.is_active).id;
-    const blocked=(await api(page,'/api/task',{title:'阻塞且今天截止',owner_id:member.id,project_id:project,status:'阻塞',start_date:date(-2),due_date:date(0)})).body;
+    const blocked=(await api(page,'/api/task',{title:'阻塞且今天截止',owner_id:member.id,project_id:project,status:'阻塞',blocker_reason:'联调待解决',blocker_next_action:'负责人确认资源',start_date:date(-2),due_date:date(0)})).body;
     const overdue=(await api(page,'/api/task',{title:'已逾期任务',owner_id:member.id,status:'进行中',due_date:date(-1)})).body;
     assert.equal(blocked.ok,true);assert.equal(overdue.ok,true);
     // The sidebar shortcut works away from account settings and rolls back failed saves.

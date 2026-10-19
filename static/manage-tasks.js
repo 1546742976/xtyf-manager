@@ -77,6 +77,7 @@ function taskPayload(form) {
   const payload = Object.fromEntries(new FormData(form));
   payload.participant_ids = checkedValues(form, "participant_ids");
   payload.predecessor_ids = checkedValues(form, "predecessor_ids");
+  payload.schedule_locked = !!form.querySelector('[name="schedule_locked"]')?.checked;
   return window.TaskDateDefaults?.payload(form, payload) || payload;
 }
 

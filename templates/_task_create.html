@@ -12,14 +12,25 @@
       </div>
       <p class="field-help">负责人可暂不指定；选择参与成员后须指定负责人。专业组用于成员技能分类。</p>
     </section>
+    <section class="task-create-section" data-create-blocker hidden>
+      <h3>阻塞处理</h3>
+      <div class="task-create-grid">
+        <label class="task-create-wide">阻塞原因<textarea name="blocker_reason" maxlength="2000" disabled></textarea></label>
+        <label class="task-create-wide">下一步<textarea name="blocker_next_action" maxlength="2000" disabled></textarea></label>
+        <label>协助人<select name="blocker_helper_id" id="create-blocker-helper" disabled><option value="">未指定</option></select></label>
+        <label>下次跟进日期<input name="blocker_follow_up" type="date" disabled></label>
+      </div>
+      <p class="field-help">原负责人继续跟进；协助人不会因此获得任务编辑权限。</p>
+    </section>
     <section class="task-create-section" aria-labelledby="create-schedule-heading">
       <h3 id="create-schedule-heading">前置依赖与时间</h3>
       <div class="task-create-grid">
         <label class="task-create-wide">主前置任务<select name="parent_id" id="create-parent"><option value="">无主前置任务</option></select></label>
         <label>开始日期<input name="start_date" type="date"></label>
         <label>截止日期<input name="due_date" type="date"></label>
+        <label class="task-create-wide choice-item schedule-lock-choice"><input name="schedule_locked" type="checkbox"><span>自动排期时固定日期</span></label>
         <div class="task-create-wide task-date-controls"><p class="field-help" data-task-date-note aria-live="polite"></p><button type="button" class="btn ghost sm" data-task-date-reset>重置为依赖时间</button></div>
-        <fieldset class="task-create-wide task-create-dependencies"><legend>其他前置任务（可多选）</legend><p class="field-help">保留依赖连线，不用于计算默认开始日期。</p><div id="create-dependencies" class="choice-host"></div></fieldset>
+        <fieldset class="task-create-wide task-create-dependencies"><legend>其他前置任务（可多选）</legend><p class="field-help">一键排期会合并所有前置依赖；新建日期建议仅参考主前置任务。</p><div id="create-dependencies" class="choice-host"></div></fieldset>
       </div>
     </section>
     <section class="task-create-section" aria-labelledby="create-detail-heading">

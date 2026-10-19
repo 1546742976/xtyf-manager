@@ -95,6 +95,11 @@ def _attachment_rows(db: sqlite3.Connection, task_id: int, ids: list[int] | None
 @login_required
 @_validate_path_ids
 def list_attachments(task_id: int):
+    """读取全员可见是有意设计（任务本身对所有登录成员可见）。
+
+    写入与删除仍按角色/上传者校验；改成"仅参与者可读"会与任务可见范围冲突，
+    如需收紧请同时调整任务列表的可见范围与前端入口。
+    """
     db = get_db()
     if _active_task(db, task_id) is None:
         return jsonify(ok=False, error="任务不存在或已删除"), 404
@@ -182,6 +187,7 @@ def _persist_upload(db, command: UploadCommand, images: list[PreparedImage]):
 @login_required
 @_validate_path_ids
 def download_attachment(task_id: int, attachment_id: int):
+    """截图读取全员可见（与任务列表一致）；删除权限在对应接口单独校验。"""
     db = get_db()
     if _active_task(db, task_id) is None:
         return jsonify(ok=False, error="任务不存在或已删除"), 404
