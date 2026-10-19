@@ -57,7 +57,7 @@ async function login(page, base, username, password, firstLogin=true) {
     assert.equal(blocked.ok,true);assert.equal(overdue.ok,true);
     // The sidebar shortcut works away from account settings and rolls back failed saves.
     await page.goto(base+'/manage');
-    const shortcut=page.locator('[data-theme-toggle]');
+    const shortcut=page.locator('#workspace-sidebar [data-theme-toggle]');
     await page.route('**/api/account/preferences',route=>route.fulfill({status:503,json:{ok:false,error:'模拟保存失败'}}));
     await shortcut.click();
     await page.locator('#sidebar-theme-result').filter({hasText:'已恢复原主题'}).waitFor();
@@ -83,7 +83,7 @@ async function login(page, base, username, password, firstLogin=true) {
         page.locator(`input[name=account-mode][value=${theme}]`).check(),
       ]);
       assert.equal(saved.status(),200);
-      assert.equal(await shortcut.getAttribute('aria-label'),theme==='dark'?'切换为银白蓝':'切换为深空蓝');
+      assert.equal(await shortcut.getAttribute('aria-label'),theme==='dark'?'切换为Mistral 暖橙':'切换为GitHub 暗黑');
       await page.reload();assert.equal(await page.locator('html').getAttribute('data-theme'),theme);
       await page.goto(base+'/tasks');await page.locator('[data-view="status"]').click();await page.locator(`.task[data-task-id="${blocked.id}"]`).waitFor();
       assert.match(await page.locator(`.task[data-task-id="${blocked.id}"]`).getAttribute('class'),/is-blocked.*is-due-soon/);

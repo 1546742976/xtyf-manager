@@ -31,27 +31,36 @@ def now_str():
 def get_db():
     db = getattr(g, "_db", None)
     if db is None:
-        db = g._db = sqlite3.connect(DB_PATH)
+        # 15s matches the audit connection: longer than any normal write, short
+        # enough that a stuck writer surfaces as a retryable error.
+        db = g._db = sqlite3.connect(DB_PATH, timeout=15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA foreign_keys=ON")
+        db.execute("PRAGMA busy_timeout=15000")
     return db
 
 
 # ---- 当前登录用户：读取会话 uid 并查库（is_active=1 才有效；返回 dict）----
+def avatar_url(key):
+    return "/api/account/avatar?v=" + key if key else None
+
+
 def current_user():
     uid = session.get("uid")
     if not uid:
         return None
     row = get_db().execute(
         "SELECT id, name, username, role, group_name, session_version, must_change_password, ui_theme, "
-        "theme_mode, light_theme, dark_theme "
+        "theme_mode, light_theme, dark_theme, avatar_key "
         "FROM members WHERE id = ? AND is_active = 1 AND deleted_at IS NULL",
         (uid,),
     ).fetchone()
     if row is None or session.get("session_version") != row["session_version"]:
         return None
-    return dict(row)
+    user = dict(row)
+    user["avatar_url"] = avatar_url(user.pop("avatar_key"))
+    return user
 
 
 # ---- 装饰器：要求已登录。API 路径（含 /api/）返回 401 JSON，普通页面重定向到登录页 ----

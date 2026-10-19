@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, "split/pr31-04-account-ui", "split/pr31-05-client-final"]
 
 permissions:
   contents: read
@@ -102,7 +102,7 @@ jobs:
           node-version: '22'
       - name: Install pinned Playwright and browser engines
         run: |
-          npm install --no-save --package-lock=false playwright@1.56.1
+          npm install --no-save --package-lock=false playwright@1.56.1 bootstrap@5.3.3 bootstrap-icons@1.11.3
           npx playwright install --with-deps chromium webkit
       - name: Run browser integration and mobile checks
         shell: bash
@@ -111,7 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           failures=0
-          for suite in review_fixes pr22_merge task_center task_schedule daily_mail action_failures login_mobile palette_workspace local_collaboration; do
+          for suite in review_fixes pr22_merge task_center task_schedule daily_mail action_failures login_mobile palette_workspace local_collaboration account_avatar account_invoice_ui; do
             echo "::group::Browser test: ${suite}"
             if ! node "tests/browser/${suite}.cjs"; then
               echo "::error::Browser suite ${suite} failed"
@@ -125,6 +125,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: browser-e2e-diagnostics
-          path: .venv/*-check/
+          path: |
+            .venv/*-check/*.png
+            .venv/*-check/*.json
+            .build-tools/*-check/*.png
+            .build-tools/*-check/*.json
+          include-hidden-files: true
           if-no-files-found: ignore
 

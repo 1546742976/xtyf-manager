@@ -20,6 +20,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const badge = document.getElementById('fundsPendingBadge');
   if (badge && typeof window.refreshFundsBadge !== 'function') {
     const updateBadge = async () => {
+      if (document.hidden) return;
       try {
         const response = await BusinessUI.fetch('/funds/api/pending_review', {credentials: 'same-origin'});
         if (!response.ok) throw new Error('pending review unavailable');

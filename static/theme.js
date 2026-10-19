@@ -1,8 +1,8 @@
 "use strict";
 const WORKSPACE_PALETTES = {
-  silver:{mode:'light',name:'银白蓝',bg:'#f5f5f7'}, 'rm-light':{mode:'light',name:'RM 机甲红蓝',bg:'#f6f7fb'},
+  silver:{mode:'light',name:'Mistral 暖橙',bg:'#f6f4f1'}, 'rm-light':{mode:'light',name:'RM 机甲红蓝',bg:'#f6f7fb'},
   mist:{mode:'light',name:'云雾绿',bg:'#f2f7f4'}, paw:{mode:'light',name:'奶霜猫爪粉',bg:'#fff3f2'},
-  space:{mode:'dark',name:'深空蓝',bg:'#111726'}, 'rm-dark':{mode:'dark',name:'RM 机甲红蓝',bg:'#101b2b'},
+  space:{mode:'dark',name:'GitHub 暗黑',bg:'#000000'}, 'rm-dark':{mode:'dark',name:'黑白极简',bg:'#090909'},
   graphite:{mode:'dark',name:'石墨灰金',bg:'#191a1d'}, xueli:{mode:'dark',name:'雪梨星语',bg:'#231b20'},
 };
 function resolvedTheme(p, systemDark) {return p.mode === 'system' ? (systemDark ? 'dark' : 'light') : p.mode;}
@@ -10,7 +10,7 @@ function applyWorkspaceTheme(p, systemDark) {
   const theme = resolvedTheme(p, systemDark), palette = p[`${theme}_theme`];
   Object.assign(document.documentElement.dataset,{theme,palette,themeMode:p.mode,lightTheme:p.light_theme,darkTheme:p.dark_theme});
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.content = WORKSPACE_PALETTES[palette].bg;
+  if (meta) meta.content = document.documentElement.dataset.page === 'login' ? '#f5f5f5' : WORKSPACE_PALETTES[palette].bg;
   document.querySelectorAll('[data-theme-mode-choice]').forEach(el => {el.checked=el.value===p.mode;});
   document.querySelectorAll('[data-palette-choice]').forEach(el => el.setAttribute('aria-pressed',String(el.dataset.paletteChoice===p[`${el.dataset.paletteMode}_theme`])));
   document.querySelectorAll('[data-theme-toggle]').forEach(el => {
@@ -32,6 +32,21 @@ document.addEventListener('DOMContentLoaded',()=>{
   let preferences={mode:root.dataset.themeMode||root.dataset.theme||'light',light_theme:root.dataset.lightTheme||'silver',dark_theme:root.dataset.darkTheme||'space'};
   const modes=[...document.querySelectorAll('[data-theme-mode-choice]')], palettes=[...document.querySelectorAll('[data-palette-choice]')], toggles=[...document.querySelectorAll('[data-theme-toggle]')];
   const controls=[...modes,...palettes,...toggles],results=[...document.querySelectorAll('[data-theme-result]')],retries=[...document.querySelectorAll('[data-theme-retry]')];
+  const notice=document.querySelector('[data-theme-notice]'),noticeText=document.querySelector('[data-theme-notice-text]');
+  let noticeTimer,noticeTrigger;
+  const hideNotice=()=>{clearTimeout(noticeTimer);if(notice)notice.hidden=true;};
+  const dismissLater=()=>{clearTimeout(noticeTimer);noticeTimer=setTimeout(hideNotice,5000);};
+  function showNotice(trigger) {
+    if(!notice||!noticeText)return;
+    noticeTrigger=trigger;notice.hidden=false;
+    noticeText.textContent='更多主题颜色请切换至账户设置页面更改';
+    dismissLater();
+  }
+  notice?.addEventListener('mouseenter',()=>clearTimeout(noticeTimer));
+  notice?.addEventListener('mouseleave',()=>{if(!notice.contains(document.activeElement))dismissLater();});
+  notice?.addEventListener('focusin',()=>clearTimeout(noticeTimer));
+  notice?.addEventListener('focusout',dismissLater);
+  document.querySelector('[data-theme-notice-close]')?.addEventListener('click',()=>{hideNotice();noticeTrigger?.focus({preventScroll:true});});
   let saving=false,pending=null;
   const apply=()=>applyWorkspaceTheme(preferences,Boolean(media?.matches));
   apply();
@@ -58,10 +73,14 @@ document.addEventListener('DOMContentLoaded',()=>{
   }
   modes.forEach(el=>el.addEventListener('change',()=>save({...preferences,mode:el.value})));
   palettes.forEach(el=>el.addEventListener('click',()=>save({...preferences,mode:el.dataset.paletteMode,[`${el.dataset.paletteMode}_theme`]:el.dataset.paletteChoice})));
-  toggles.forEach(el=>el.addEventListener('click',()=>save({...preferences,mode:root.dataset.theme==='dark'?'light':'dark'})));
+  toggles.forEach(el=>el.addEventListener('click',()=>{
+    if(saving)return;
+    showNotice(el);
+    return save({...preferences,mode:root.dataset.theme==='dark'?'light':'dark'});
+  }));
   retries.forEach(el=>el.addEventListener('click',()=>pending&&save(pending)));
-  document.querySelectorAll('[data-theme-menu]').forEach(menu=>{
-    document.addEventListener('keydown',event=>{if(menu.open&&event.key==='Escape'){menu.open=false;menu.querySelector('summary').focus();}});
-    document.addEventListener('click',event=>{if(menu.open&&!menu.contains(event.target))menu.open=false;});
-  });
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&notice&&!notice.hidden){
+    const focused=notice.contains(document.activeElement);hideNotice();
+    if(focused)noticeTrigger?.focus({preventScroll:true});
+  }});
 });

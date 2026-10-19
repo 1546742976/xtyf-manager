@@ -1,10 +1,10 @@
 <!-- Shared authenticated workspace shell; login keeps its standalone layout. -->
 <!DOCTYPE html>
-<html lang="zh-CN" {% include "_theme_attributes.html" %}>
+<html lang="zh-CN" {% include "_theme_attributes.html" %} {% if page == 'login' %}data-page="login"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="{{ '#0b0b0c' if me and me.ui_theme == 'dark' else '#f5f5f7' }}">
+  <meta name="theme-color" content="{{ '#f5f5f5' if page == 'login' else ('#0b0b0c' if me and me.ui_theme == 'dark' else '#f5f5f7') }}">
   {% include "_security_head.html" %}
   <title>{% block title %}工作台{% endblock %} | 巡天御风管理系统</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='task-center.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='item-topics.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='themes.css') }}">
+  {% if page == 'account' %}<link rel="stylesheet" href="{{ url_for('static', filename='account-avatar.css') }}">{% endif %}
 </head>
 <body class="{% if me %}ws-app{% endif %}">
   <a href="#main-content" class="ux-skip-link">跳至主内容</a>

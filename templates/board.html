@@ -3,7 +3,7 @@
 {% block title %}任务中心{% endblock %}
 {% block content %}
 <div class="page-intro ux-page-head">
-  <div><p class="ux-eyebrow">TEAM / TASKS</p><h1>任务中心</h1><p>造车任务按计划推进，日常项目按机械、电控、视觉协作记录。</p></div>
+  <div><p class="ux-eyebrow">TEAM / TASKS</p><h1>任务中心</h1><p>造车任务按计划推进，日常项目由所选专业组协作记录。</p></div>
   <div class="ux-page-actions">{% if task_type != 'daily' %}<span id="sync-status" class="sync-status" role="status" aria-live="polite">正在同步…</span>
     <button id="refresh-now" class="btn" type="button">刷新</button>
     {% endif %}
@@ -33,7 +33,7 @@
     <button type="button" data-view="person" class="active" aria-pressed="true">按人</button>
     <button type="button" data-view="status" aria-pressed="false">按状态</button>
     <button type="button" data-view="specialty" aria-pressed="false" disabled title="先选择一个造车组别">按专业组</button>
-    <button type="button" data-view="tree" aria-pressed="false">任务树</button>
+    <button type="button" data-view="tree" aria-pressed="false">依赖图</button>
   </div>
   <label class="toolbar-field"><span>造车组别</span><select id="f-project"><option value="">全部组别</option></select></label>
   <label class="toolbar-field"><span>状态</span><select id="f-status"><option value="">全部状态</option></select></label>
@@ -51,6 +51,7 @@
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 <script src="{{ url_for('static', filename='ui-dialog.js') }}"></script>
 <script src="{{ url_for('static', filename='task-tree.js') }}"></script>
+<script src="{{ url_for('static', filename='task-tree-interactions.js') }}"></script>
 <script src="{{ url_for('static', filename='task-board.js') }}"></script>
 <script src="{{ url_for('static', filename='task-timeline.js') }}"></script>
 <script src="{{ url_for('static', filename='task-history.js') }}"></script>

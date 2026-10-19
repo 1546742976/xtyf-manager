@@ -48,7 +48,7 @@ class AlertsAndTopicLinksTest(unittest.TestCase):
                 markup = response.get_data(as_text=True)
                 self.assertIn('item-topics.js', markup)
                 self.assertIn('item-topics.css', markup)
-        self.assertIn('href="/task-alerts"', self.admin.get('/').get_data(as_text=True))
+        self.assertEqual(self.admin.get('/').get_data(as_text=True).count('href="/task-alerts"'), 1)
 
     def test_alerts_permission(self):
         self.assertEqual(self.owner.get('/api/task-alerts').status_code, 403)

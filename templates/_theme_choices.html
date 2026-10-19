@@ -4,7 +4,7 @@
   <label><input type="radio" name="{{ theme_control_id }}-mode" data-theme-mode-choice value="{{ mode }}">{{ label }}</label>
   {% endfor %}
 </fieldset>
-{% for mode, label, palettes in [('light','亮色配色',[('silver','银白蓝'),('rm-light','RM 机甲红蓝'),('mist','云雾绿'),('paw','奶霜猫爪粉')]),('dark','暗色配色',[('space','深空蓝'),('rm-dark','RM 机甲红蓝'),('graphite','石墨灰金'),('xueli','雪梨星语')])] %}
+{% for mode, label, palettes in [('light','亮色配色',[('silver','Mistral 暖橙'),('rm-light','RM 机甲红蓝'),('mist','云雾绿'),('paw','奶霜猫爪粉')]),('dark','暗色配色',[('space','GitHub 暗黑'),('rm-dark','黑白极简'),('graphite','石墨灰金'),('xueli','雪梨星语')])] %}
 <fieldset class="palette-options" {% if me.must_change_password %}disabled{% endif %}>
   <legend>{{ label }}</legend>
   {% for palette, name in palettes %}

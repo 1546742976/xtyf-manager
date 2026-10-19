@@ -17,9 +17,7 @@ async function accountApi(path, data) {
 }
 
 function accountEscape(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (char) => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]
-  ));
+  return BusinessUI.escape(value);
 }
 
 function accountChoices(host, name, choices, selected) {

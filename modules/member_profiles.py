@@ -10,7 +10,7 @@ import sqlite3
 from flask import Blueprint, jsonify, request, session
 from werkzeug.security import generate_password_hash
 
-from common import current_user, get_db, login_required
+from common import avatar_url, current_user, get_db, login_required
 from modules.task_catalogs import _set_member_groups, _set_member_projects
 from modules.task_validation import MAX_SQLITE_INTEGER, active_ids, normalize_ids
 from modules.workspace_settings import DARK_THEMES, LIGHT_THEMES, THEME_MODES, preferences
@@ -23,11 +23,12 @@ ROLES = frozenset({"member", "manager", "admin"})
 
 def _profile(db: sqlite3.Connection, member_id: int) -> dict | None:
     row = db.execute(
-        "SELECT id,name,username,role,is_active,deleted_at FROM members WHERE id=?", (member_id,)
+        "SELECT id,name,username,role,is_active,deleted_at,avatar_key FROM members WHERE id=?", (member_id,)
     ).fetchone()
     if row is None:
         return None
     profile = dict(row)
+    profile["avatar_url"] = avatar_url(profile.pop("avatar_key"))
     for key, table, column in (
         ("group_ids", "member_groups", "group_id"),
         ("project_ids", "member_projects", "project_id"),

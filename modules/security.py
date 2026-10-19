@@ -184,10 +184,18 @@ def init_security(app):
                 return _error("页面凭据已过期，请刷新页面后重试", "csrf_failed")
             if request.is_json and not isinstance(request.get_json(silent=True), dict):
                 return _error("请求必须是 JSON 对象", "invalid_payload", 400)
-        if user and user["must_change_password"] and request.endpoint not in {
-            "static", "account", "api_password", "logout", "security.get_csrf"
+        native_client = request.headers.get("X-XTYF-Client-Protocol") == "1"
+        if native_client and user is None and request.endpoint not in {
+            "client_api.bootstrap", "client_api.login", "client_api.logout", "security.get_csrf",
+            "client_updates.updates", "client_updates.bundle_download",
         }:
-            if "/api/" in request.path:
+            return _error("未登录", "authentication_required", 401)
+        if user and user["must_change_password"] and request.endpoint not in {
+            "static", "account", "api_password", "logout", "security.get_csrf",
+            "client_api.bootstrap", "client_api.logout",
+            "client_updates.updates", "client_updates.bundle_download",
+        }:
+            if native_client or "/api/" in request.path:
                 return _error("请先在账户设置中修改初始密码", "password_change_required")
             return redirect(url_for("account"))
 
@@ -196,6 +204,15 @@ def init_security(app):
         if request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-CSRF-Token"] = csrf_token()
+            # Inline handlers are still used by the finance pages, so this policy
+            # deliberately only locks down framing, plugins and <base> injection.
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+            response.headers.setdefault("Referrer-Policy", "same-origin")
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "frame-ancestors 'self'; object-src 'none'; base-uri 'self'",
+            )
         audit_id = getattr(g, "audit_id", None)
         if audit_id:
             payload = response.get_json(silent=True) if response.is_json else None

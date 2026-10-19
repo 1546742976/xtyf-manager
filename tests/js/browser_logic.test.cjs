@@ -55,7 +55,7 @@ function browser(scripts) {
   };
   context.window = context;
   vm.createContext(context);
-  for (const script of scripts) {
+  for (const script of ["business-ui.js", ...scripts]) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, "static", script), "utf8"),
       context, { filename: script });
   }
@@ -416,7 +416,7 @@ test("composite urgency gives deterministic, transitive ranking for varied task 
 });
 
 
-test("dashboard ranks everyone by composite urgency with owner 28, participant 8, team 4", () => {
+test("dashboard puts owned and participating tasks before urgent team work", () => {
   const page=browser(["app.js","dashboard.js"]);
   const score=page.value("taskUrgencyScore");
   const rank=page.value("rankDashboardTasks");
@@ -439,12 +439,18 @@ test("dashboard ranks everyone by composite urgency with owner 28, participant 8
     "unassigned active work remains eligible for team-wide ranking");
   const ordered=Array.from(rank([unrelated,participant,owner],7),task=>task.id);
   assert.deepEqual(ordered,[91,92,93]);
+  const urgentTeam={...unrelated,id:94,status:"阻塞",priority:"高",days_left:-6};
+  const quietOwner={...owner,status:"未开始",priority:"低",days_left:null};
+  const quietParticipant={...participant,participant_ids:["7"],status:"未开始",priority:"低",days_left:null};
+  assert.ok(score(urgentTeam,7,teamWeight)>score(quietOwner,7,teamWeight));
+  assert.deepEqual(Array.from(rank([urgentTeam,quietParticipant,quietOwner],"7"),task=>task.id),[91,92,94],
+    "both personal roles precede more urgent team work, including string member IDs");
   // The dashboard-specific four points must never leak into person-lane scoring.
   assert.equal(score(unrelated,7),score(unrelated,7,0));
   assert.equal(role(unrelated,7),0);
 });
 
-test("dashboard mixed urgency ranks unrelated urgent work without displacing every personal task", () => {
+test("dashboard preserves urgency within personal and team groups before the eight-task limit", () => {
   const page=browser(["app.js","dashboard.js"]);
   const rank=page.value("rankDashboardTasks");
   const tasks=[
@@ -463,12 +469,18 @@ test("dashboard mixed urgency ranks unrelated urgent work without displacing eve
   ];
   const original=tasks.map(task=>task.id);
   const order=Array.from(rank(tasks,7),task=>task.id);
-  assert.deepEqual(order,[7,5,6,2,4,3,1,12],
-    "homepage top eight should be ranked across the whole team");
+  assert.deepEqual(order,[5,6,2,1,12,7,4,3],
+    "all personal work comes first, with urgency ordering preserved within each group");
   assert.deepEqual(Array.from(rank([...tasks].reverse(),7),task=>task.id),order);
   assert.deepEqual(tasks.map(task=>task.id),original,"sorting must not change API data");
-  assert.deepEqual(Array.from(rank(tasks,7,100),task=>task.id),[7,5,6,2,4,3,1,12,10,11],
+  assert.deepEqual(Array.from(rank(tasks,7,100),task=>task.id),[5,6,2,1,12,7,4,3,10,11],
     "finished and cancelled tasks never occupy dashboard slots");
+  const crowded=[...Array.from({length:8},(_,index)=>({...tasks[6],id:20+index})),tasks[0],tasks[11]];
+  assert.deepEqual(Array.from(rank(crowded,7),task=>task.id),[1,12,20,21,22,23,24,25],
+    "personal priority applies before truncation even when eight urgent team tasks are available");
+  const teamOnly=[tasks[2],tasks[3],tasks[6],tasks[9],tasks[10]];
+  assert.deepEqual(Array.from(rank(teamOnly,7),task=>task.id),[7,4,3,10,11],
+    "members with no personal work still see team tasks in urgency order");
   assert.deepEqual(Array.from(rank([tasks[7],tasks[8]],7),task=>task.id),[]);
   assert.deepEqual(Array.from(rank(tasks,7,0),task=>task.id),[]);
 });

@@ -30,17 +30,19 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---- 本项目的公共模块与子模块（子模块的蓝图注册见下方 app.register_blueprint）----
 from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
-                    manager_required, now_str)
+                    manager_required, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
 from modules.funds import funds_bp, can_review
 from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
 from modules.invoice_jobs import migrate as migrate_invoice_jobs
 from modules.discussions import discussions_bp
 from modules.collaboration_schema import migrate as migrate_collaboration
 from modules.task_api import bp as task_api_bp
+from modules.task_mutations import PRIORITIES as TASK_PRIORITIES, STATUSES as TASK_STATUSES
 from modules.task_attachments import bp as task_attachments_bp
 from modules.task_progress import bp as task_progress_bp
 from modules.task_catalogs import bp as task_catalogs_bp
 from modules.member_profiles import bp as member_profiles_bp
+from modules.member_avatars import bp as member_avatars_bp, migrate as migrate_avatars
 from modules.task_migrations import migrate as migrate_tasks
 from modules.daily_schema import migrate as migrate_daily
 from modules.daily_projects import bp as daily_projects_bp
@@ -56,11 +58,11 @@ SECRET_PATH = os.environ.get("PROGRESS_SECRET_PATH", os.path.join(BASE_DIR, "sec
 PORT = int(os.environ.get("PORT", "8520"))
 
 # ---- 全局常量：任务状态枚举（看板/表单/校验共用）----
-STATUSES = ["未开始", "进行中", "已完成", "阻塞", "已取消"]
+STATUSES = list(TASK_STATUSES)
 # ---- 任务优先级（看板上以彩色圆点显示）----
-PRIORITIES = ["高", "中", "低"]
+PRIORITIES = list(TASK_PRIORITIES)
 # ---- 系统角色：admin=管理员 / manager=项管 / member=成员 ----
-ROLE_NAMES = {"admin": "管理员", "manager": "项管", "member": "成员"}
+ROLE_NAMES = COMMON_ROLE_NAMES.copy()
 # ---- 会话密钥：读取 secret.key，不存在则生成 64 位随机串并持久化 ----
 def _load_secret():
     """Create the session-signing key privately; never overwrite an existing key.
@@ -125,6 +127,7 @@ app.register_blueprint(invoices_bp, url_prefix="/invoices")
 app.register_blueprint(task_api_bp)
 app.register_blueprint(task_catalogs_bp)
 app.register_blueprint(member_profiles_bp)
+app.register_blueprint(member_avatars_bp)
 app.register_blueprint(task_attachments_bp)
 app.register_blueprint(task_progress_bp)
 app.register_blueprint(discussions_bp, url_prefix="/discussions")
@@ -230,12 +233,22 @@ def init_db():
             db.commit()
         migrate_tasks(db)
         migrate_workspace(db)
+        migrate_avatars(db)
         migrate_daily(db)
         migrate_collaboration(db)
         migrate_item_topics(db)
         migrate_security(db)
         migrate_invoice_owners(db)
         migrate_invoice_jobs(db)
+        # Add indexes needed for high-frequency task dashboards and attachment lookups.
+        db.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_id, id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, id);
+            CREATE INDEX IF NOT EXISTS idx_tasks_deleted ON tasks(deleted_at, id);
+            CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments(task_id, id);
+            CREATE INDEX IF NOT EXISTS idx_logs_task ON logs(task_id, id);
+        """)
+        db.commit()
     finally:
         db.close()
 

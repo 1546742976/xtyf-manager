@@ -2,7 +2,7 @@
 const test=require('node:test'), assert=require('node:assert/strict');
 const fs=require('node:fs'), path=require('node:path'), vm=require('node:vm');
 function setup(fetch) {
-  const ctx={fetch, FormData, AbortController, TypeError, Error, setTimeout, clearTimeout,
+  const ctx={BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, fetch, FormData, AbortController, TypeError, Error, setTimeout, clearTimeout,
     location:{pathname:'/login'}, document:{addEventListener(){},querySelectorAll(){return [];}}, URL};
   ctx.window=ctx;vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../../static/business-ui.js'),'utf8'),ctx);
