@@ -46,9 +46,9 @@ class TestReviewFixes(unittest.TestCase):
     def test_stale_review_rejected_and_unchanged_edit_keeps_version(self):
         record = self.record()
         rid = record['id']
-        same = self.admin.put(f'/funds/api/records/{rid}', json={'amount': '5.000'}).get_json()
+        same = self.admin.put(f'/funds/api/records/{rid}', json={'amount': '5.000', 'version': record['version']}).get_json()
         self.assertEqual(same['version'], record['version'])
-        updated = self.admin.put(f'/funds/api/records/{rid}', json={'amount': '999.00'}).get_json()
+        updated = self.admin.put(f'/funds/api/records/{rid}', json={'amount': '999.00', 'version': record['version']}).get_json()
         self.assertEqual(updated['version'], record['version'] + 1)
         stale = self.member.post(f'/funds/api/records/{rid}/review', json={'version': record['version']})
         self.assertEqual(stale.status_code, 409)

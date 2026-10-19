@@ -85,8 +85,10 @@ class TestFeatureContracts(unittest.TestCase):
                     query_string={"amount_min": value}).status_code, 400)
         finally:
             for rid in ids:
+                current = self.client.get("/funds/api/records/" + str(rid)).get_json()["data"]
                 self.assertEqual(self.client.delete(
-                    "/funds/api/records/" + str(rid)).status_code, 200)
+                    "/funds/api/records/" + str(rid),
+                    query_string={"version": current["version"]}).status_code, 200)
 
     def test_invoice_validation_and_audit_contracts(self):
         for query in ("page=0", "per_page=101", "min_amount=-1",

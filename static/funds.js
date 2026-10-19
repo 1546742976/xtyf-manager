@@ -1,8 +1,6 @@
 
 function escText(value) {
-  return String(value == null ? '' : value).replace(/[&<>"']/g, function(c) {
-    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-  });
+  return BusinessUI.escape(value);
 }
 function fundsToast(message, kind) {
   var box = document.getElementById('funds-feedback');
@@ -97,7 +95,7 @@ function reload(){
         '<td>'+r.record_date+'</td>'+
         '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">待审核</span> '+(CAN_REVIEW?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>')+'</td>'+
         '<td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+(r.notes||'').replace(/"/g,'&quot;')+'">'+escText(r.notes||'-')+'</td>'+
-        '<td><button class="btn btn-outline-secondary btn-sm" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" onclick="delR('+r.id+')"><i class="bi bi-trash"></i></button></td>'+
+        '<td><button class="btn btn-outline-secondary btn-sm" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button></td>'+
         '</tr>';
     }).join('') : '';
   }).catch(function(e){ fundsToast('记录加载失败：'+e.message,'error'); });
@@ -128,10 +126,10 @@ async function handleAdd(e){
 
 async function edR(id){
   try {
-    var r = await BusinessUI.fetch(API+'?sort_by=id&sort_order=DESC'), j = await r.json();
-    var d = j.data.find(function(x){return x.id===id});
-    if(!d) return fundsToast('记录不存在','error');
-    document.getElementById('eId').value=d.id; document.getElementById('eT').value=d.record_type;
+    var r = await BusinessUI.fetch(API+'/'+id), j = await r.json();
+    var d = j.code===0 ? j.data : null;
+    if(!d) return fundsToast(j.msg||'记录不存在','error');
+    document.getElementById('eId').value=d.id; document.getElementById('eId').dataset.version=d.version; document.getElementById('eT').value=d.record_type;
     document.getElementById('eAmt').value=d.amount; document.getElementById('eCat').value=d.category||'';
     document.getElementById('eSD').value=d.source_dest||''; document.getElementById('eDt').value=d.record_date;
     document.getElementById('eInv').value=d.invoice_count||0; document.getElementById('eApl').value=d.applicant||'';
@@ -142,6 +140,7 @@ async function edR(id){
 
 async function saveE(){
   var d = {
+    version: Number(document.getElementById('eId').dataset.version||0),
     record_type: document.getElementById('eT').value,
     amount: document.getElementById('eAmt').value,
     category: document.getElementById('eCat').value,
@@ -155,16 +154,18 @@ async function saveE(){
   try {
     var r = await BusinessUI.fetch(API+'/'+document.getElementById('eId').value,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
     var j = await r.json();
+    if(r.status===409){ fundsToast(j.msg||'记录已变更，请刷新后重试','error'); reload(); return; }
     if(j.code===0){ edM.hide(); fundsToast('记录已更新，审核状态可能需要重新确认','success'); reload(); loadStats(); }
     else fundsToast(j.msg || '操作失败','error');
   } catch(e){ fundsToast('保存失败：'+e.message,'error'); }
 }
 
-async function delR(id){
+async function delR(id,version){
   if(!confirm('确定永久删除此资金记录？此操作不可撤销。')) return;
   try {
-    var response = await BusinessUI.fetch(API+'/'+id,{method:'DELETE'});
+    var response = await BusinessUI.fetch(API+'/'+id+'?version='+encodeURIComponent(version),{method:'DELETE'});
     var result = await response.json();
+    if (response.status===409){ fundsToast(result.msg||'记录已变更，请刷新后重试','error'); reload(); return; }
     if (!response.ok || result.code !== 0) throw new Error(result.msg || '服务端拒绝删除');
     fundsToast('记录已删除','success');
     reload(); loadStats();
@@ -183,6 +184,7 @@ async function reviewRecord(id,version){
 }
 
 async function loadPending(){
+  if (document.hidden) return;
   try{
     var r = await BusinessUI.fetch('/funds/api/pending_review');
     var j = await r.json();
@@ -191,6 +193,8 @@ async function loadPending(){
     else if(badge){ badge.style.display='none'; }
   }catch(e){}
 }
+// 让工作台壳复用同一个刷新函数：否则 funds 页会同时跑两个 30s 轮询。
+window.refreshFundsBadge = loadPending;
 
 function loadStats(){
   BusinessUI.fetch('/funds/api/stats').then(function(response){return response.json()}).then(function(result){
@@ -200,7 +204,7 @@ function loadStats(){
     document.getElementById('sOut').textContent = '¥'+Money.format(d.total_out);
     var bal = d.balance;
     document.getElementById('sBal').textContent = '¥'+Money.format(bal);
-    document.getElementById('sBal').style.color = Money.compare(bal,'0.00')>=0?'#1890ff':'#ff4d4f';
+    document.getElementById('sBal').style.color = Money.compare(bal,'0.00')>=0?'var(--funds-balance-positive, #1890ff)':'#ff4d4f';
     document.getElementById('sCnt').textContent = cnt;
 
     var h = '<table class="table table-sm small mb-0">';
@@ -260,6 +264,6 @@ function doExport(){
 // One in-flight operation per record; restore controls even when transport fails.
 handleAdd = BusinessUI.guard(handleAdd, 'funds-add', '#addF button', text=>fundsToast(text,'error'));
 saveE = BusinessUI.guard(saveE, 'funds-save', '#editMd button', text=>fundsToast(text,'error'));
-delR = BusinessUI.guard(delR, id=>'funds-delete:'+id, id=>document.querySelectorAll(`#tbody button[onclick="delR(${id})"]`), text=>fundsToast(text,'error'));
+delR = BusinessUI.guard(delR, id=>'funds-delete:'+id, id=>document.querySelectorAll(`#tbody button[onclick^="delR(${id},"]`), text=>fundsToast(text,'error'));
 reviewRecord = BusinessUI.guard(reviewRecord, id=>'funds-review:'+id, id=>document.querySelectorAll(`#tbody button[onclick^="reviewRecord(${id},"]`), text=>fundsToast(text,'error'));
 edR = BusinessUI.guard(edR, id=>'funds-edit:'+id, id=>document.querySelectorAll(`#tbody button[onclick="edR(${id})"]`), text=>fundsToast(text,'error'));

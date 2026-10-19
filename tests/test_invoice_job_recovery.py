@@ -11,6 +11,8 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
+# 先经过测试夹具，确保项目模块导入时已经指向临时目录。
+import test_tasks  # noqa: F401
 from modules import invoice_jobs
 from modules.invoice_storage import InvoiceFileLock
 

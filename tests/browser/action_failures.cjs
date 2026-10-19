@@ -88,9 +88,15 @@ async function api(page,url,data,method='POST') {
     await page.locator('#editMd [onclick="saveE()"] ').click();await page.locator('#funds-feedback').filter({hasText:'模拟操作失败'}).waitFor();
     assert.equal(await page.locator('#eAmt').inputValue(),'88.88');assert.ok(await page.locator('#editMd').isVisible());
     await page.locator('#editMd [data-bs-dismiss=modal]').first().click();
-    await page.locator(`#tbody button[onclick="delR(${record.id})"]`).click();await idle(`#tbody button[onclick="delR(${record.id})"]`);
-    assert.ok((await api(page,'/funds/api/records')).body.data.some(r=>r.id===record.id));await page.unroute(`**/funds/api/records/${record.id}`);
-    await api(page,`/funds/api/records/${record.id}`,{amount:'5.01'},'PUT');await page.reload();
+    // DELETE now carries ?version=..., unlike PUT. Mock the query-bearing URL
+    // explicitly or this test would perform a real irreversible deletion.
+    const deletePattern = `**/funds/api/records/${record.id}?version=*`;
+    await reject(deletePattern, 500);
+    await page.locator(`#tbody button[onclick^="delR(${record.id},"]`).click();await idle(`#tbody button[onclick^="delR(${record.id},"]`);
+    assert.ok((await api(page,'/funds/api/records')).body.data.some(r=>r.id===record.id));
+    await page.unroute(deletePattern);
+    await page.unroute(`**/funds/api/records/${record.id}`);
+    await api(page,`/funds/api/records/${record.id}`,{amount:'5.01',version:record.version},'PUT');await page.reload();
     const reviewButton=page.locator(`#tbody button[onclick^="reviewRecord(${record.id},"]`);
     await reject(`**/funds/api/records/${record.id}/review`,403);await reviewButton.click();
     await page.locator('#funds-feedback').filter({hasText:'模拟操作失败'}).waitFor();

@@ -139,7 +139,7 @@ async function checkPasswordVisibility(page, base) {
     await admin.goto(base+'/funds/');
     await admin.waitForFunction(()=>typeof bootstrap!=='undefined');
     await admin.locator(`#tbody button[onclick^="reviewRecord(${record.id},"]`).waitFor();
-    await api(memberPage,`/funds/api/records/${record.id}`,{amount:'999.00'},'PUT');
+    await api(memberPage,`/funds/api/records/${record.id}`,{amount:'999.00',version:record.version},'PUT');
     const conflict=admin.waitForResponse(response=>response.url().endsWith(`/records/${record.id}/review`));
     await admin.locator(`#tbody button[onclick^="reviewRecord(${record.id},"]`).click();
     assert.equal((await conflict).status(),409);

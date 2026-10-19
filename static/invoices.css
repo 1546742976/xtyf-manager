@@ -3,17 +3,6 @@
 body{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:#f2f4f8;color:#1f2430;min-width:1024px}
 body.member .finance-only{display:none!important}
 body.member .col-check{display:none!important}
-.topbar{display:flex;align-items:center;gap:16px;padding:10px 18px;background:#0f172a;color:#e2e8f0;position:sticky;top:0;z-index:50;flex-wrap:wrap}
-.topbar .brand{font-weight:700;font-size:16px;letter-spacing:.5px}
-.topbar .brand span{color:#7dd3fc;font-weight:400}
-.topbar .nav{display:flex;gap:4px;flex:1}
-.topbar .nav a{color:#cbd5e1;padding:6px 12px;border-radius:8px;text-decoration:none;font-size:14px;transition:background .15s}
-.topbar .nav a:hover{background:rgba(255,255,255,.08)}
-.topbar .nav a.active{background:rgba(125,211,252,.18);color:#7dd3fc}
-.topbar .userbox{display:flex;align-items:center;gap:10px}
-.topbar .userbox .who{color:#94a3b8;font-size:13px}
-.topbar .userbox a.toplink{color:#fff;border:1px solid rgba(255,255,255,.45);border-radius:8px;padding:4px 10px;font-size:13px;text-decoration:none}
-.topbar .userbox a.toplink:hover{background:rgba(255,255,255,.12)}
 .page-head{background:#fff;border-bottom:1px solid #e3e7ee;padding:12px 26px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .page-head h1{font-size:18px;font-weight:700}
 .page-head .actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -53,8 +42,7 @@ body.member .col-check{display:none!important}
 /* 发票字段排序，与表头排序保持同步 */
 .toolbar .sort-controls{display:flex;align-items:center;gap:6px;white-space:nowrap}
 .toolbar .sort-label{font-size:12px;color:#667085}
-.toolbar .sort-direction{padding:6px 9px;background:#fff;border:1px solid #ddd;border-radius:5px;font-size:12px;color:#1f2430;cursor:pointer}
-.toolbar .sort-direction:hover{color:#1a73e8;border-color:#1a73e8}
+.toolbar .sort-direction{padding:6px 9px;background:var(--card);border:1px solid var(--border);border-radius:5px;font-size:12px;color:var(--text);cursor:pointer}
 th.sortable-header{padding:0}
 th.sortable-header .sort-head{width:100%;border:0;background:transparent;color:inherit;text-align:left;padding:9px 10px;font:inherit;font-weight:600;white-space:nowrap;cursor:pointer}
 th.sortable-header .sort-head:hover,th.sortable-header .sort-head:focus-visible{background:#e8f0fe;color:#1a73e8}
@@ -154,6 +142,9 @@ tr.row-dup{background:#fff3e0}
 .inline-select:focus{border-color:#1a73e8}
 .btn-sm{padding:3px 8px;border:1px solid #ddd;border-radius:4px;background:#fff;cursor:pointer;font-size:10px;white-space:nowrap}
 .btn-sm:hover{background:#f0f0f0}
+#invoiceJobsList .btn-sm{background:var(--card);color:var(--text);border-color:var(--border)}
+.toolbar .sort-direction:hover:not(:disabled),#invoiceJobsList .btn-sm:hover:not(:disabled){background:var(--surface-hover);color:var(--text);border-color:var(--border)}
+.toolbar .sort-direction:disabled,#invoiceJobsList .btn-sm:disabled{background:var(--card);color:var(--text);border-color:var(--border);opacity:.5;cursor:default}
 /* 统计图表 */
 .chart-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
 .chart-box{background:#fafbfd;border:1px solid #f0f0f0;border-radius:8px;padding:12px 14px}
@@ -161,10 +152,11 @@ tr.row-dup{background:#fff3e0}
 .chart-bar{display:grid;grid-template-columns:100px 1fr 170px;gap:8px;align-items:center;margin-bottom:8px;font-size:11px}
 .chart-bar .name{color:#555;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chart-bar .bar-wrap{background:#f0f0f0;border-radius:3px;height:16px;overflow:hidden}
-.chart-bar .bar-fill{height:100%;background:linear-gradient(90deg,#1a73e8,#4fc3f7);border-radius:3px;min-width:2px}
-.chart-bar.accent-green .bar-fill{background:#0d904f}
-.chart-bar.accent-orange .bar-fill{background:#f9ab00}
-.chart-bar.accent-red .bar-fill{background:#d93025}
+.chart-bar .bar-fill{height:100%;background-color:#1a73e8;background-image:var(--progress-gradient);border-radius:3px;min-width:2px}
+.chart-bar.accent-green .bar-fill{background-color:#0d904f}
+.chart-bar.accent-orange .bar-fill{background-color:#f9ab00}
+.chart-bar.accent-red .bar-fill{background-color:#d93025}
+#progressFill{height:100%;width:0;background-color:var(--primary);background-image:var(--progress-gradient);border-radius:4px;transition:width .3s}
 .chart-bar .bar-value{color:#666;white-space:nowrap;font-size:10px}
 @media(max-width:1024px){
 .chart-row,.chart-row.three{grid-template-columns:1fr}
@@ -172,9 +164,7 @@ tr.row-dup{background:#fff3e0}
 .container{padding:10px}
 }
 @media(max-width:800px){
-body{min-width:0}.topbar{padding:12px;gap:8px}
-.topbar .nav{order:3;width:100%;overflow-x:auto;white-space:nowrap}
-.topbar .nav a{flex:0 0 auto}.topbar .userbox{margin-left:auto}
+body{min-width:0}
 .page-head{padding:16px}.page-head .actions{width:100%;gap:6px}
 .toolbar{padding:12px}.toolbar .search{min-width:100%}
 .stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}

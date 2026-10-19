@@ -2,6 +2,7 @@
 import io
 import os
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from test_tasks import app_module
@@ -129,6 +130,28 @@ class TestInvoiceSecurity(unittest.TestCase):
             'updates': {'rel_path': '../another.pdf'}
         })
         self.assertEqual(bad.status_code, 400)
+
+    def test_duplicate_guard_batch_response_contract(self):
+        duplicate = [{'type': '文件内容完全相同', 'path': 'other-member/private.pdf'}]
+        with app_module.app.app_context(), \
+                patch.object(invoices, 'check_duplicates', return_value=duplicate), \
+                patch.object(invoices, '_is_finance', return_value=False):
+            # Batch confirmation expects (JSON response, HTTP status) on every
+            # duplicate/error path, not a bare Flask Response that cannot unpack.
+            blocked = invoices.duplicate_guard({}, 'temp/test.pdf', index={}, hashes={})
+            self.assertIsInstance(blocked, tuple)
+            response, status = blocked
+            self.assertEqual(status, 200)
+            self.assertEqual(response.get_json()['code'], 'DUPLICATE')
+            self.assertEqual(response.get_json()['duplicates'][0]['path'], '')
+            forbidden = invoices.duplicate_guard(
+                {'allow_duplicate': True}, 'temp/test.pdf', index={}, hashes={})
+            self.assertEqual(forbidden[1], 403)
+        with app_module.app.app_context(), \
+                patch.object(invoices, 'check_duplicates', return_value=duplicate), \
+                patch.object(invoices, '_is_finance', return_value=True):
+            self.assertIsNone(invoices.duplicate_guard(
+                {'allow_duplicate': True}, 'temp/test.pdf', index={}, hashes={}))
 
 
 if __name__ == '__main__':

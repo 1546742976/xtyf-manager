@@ -18,7 +18,7 @@ import sqlite3
 import tempfile
 from datetime import datetime
 
-from flask import Blueprint, jsonify, redirect, render_template, request, send_file
+from flask import Blueprint, g, jsonify, redirect, render_template, request, send_file
 
 from common import current_user
 from modules.security import has_permission
@@ -47,12 +47,12 @@ import matplotlib.pyplot as plt
 # These are the corresponding text/surface/control/primary tokens in themes.css.
 # The query chooses a known palette, never arbitrary matplotlib color input.
 CHART_PALETTES = {
-    'silver': ('#ffffff', '#1d1d1f', '#62626a', '#b9b9c1', '#0064cc', 'light'),
+    'silver': ('#fffefd', '#26231f', '#625c55', '#958678', '#9b5733', 'light'),
     'rm-light': ('#ffffff', '#182947', '#52627a', '#879cb9', '#0752cf', 'light'),
     'mist': ('#ffffff', '#1d3028', '#52685e', '#9aafa3', '#176b51', 'light'),
     'paw': ('#fffaf9', '#4b2034', '#785165', '#b8889d', '#edb0c7', 'light'),
-    'space': ('#1d2736', '#ecf1ff', '#afbdd2', '#6a819e', '#90b6ff', 'dark'),
-    'rm-dark': ('#172a3e', '#eff5ff', '#b1c3d8', '#698aaf', '#82bdff', 'dark'),
+    'space': ('#0d1117', '#e6edf3', '#9da7b3', '#6e7681', '#3fb950', 'dark'),
+    'rm-dark': ('#181818', '#f5f5f5', '#b0b0b0', '#737373', '#f5f5f5', 'dark'),
     'graphite': ('#27282c', '#f5f0e7', '#c2bbb0', '#8f877b', '#e7c483', 'dark'),
     'xueli': ('#352730', '#fff0f6', '#d4b4c4', '#ac8297', '#edb0cf', 'dark'),
 }
@@ -218,6 +218,13 @@ def init_funds_db():
     try:
         migrate_funds_money(conn)
         migrate_funds_revisions(conn)
+        # The review badge and the ledger list scan these columns on every page
+        # load; without indexes both degrade to full table scans.
+        conn.executescript("""
+            CREATE INDEX IF NOT EXISTS idx_records_review_status ON records(review_status);
+            CREATE INDEX IF NOT EXISTS idx_records_record_date ON records(record_date DESC, id DESC);
+        """)
+        conn.commit()
     finally:
         conn.close()
     sync_txt()
@@ -318,6 +325,17 @@ def get_records():
     return jsonify({"code": 0, "data": records})
 
 
+@funds_bp.route("/api/records/<int:rid>", methods=["GET"])
+# ---- 单条记录：编辑时按 ID 取一条，不再整表下载 ----
+def get_record(rid):
+    conn = get_funds_db()
+    row = conn.execute("SELECT * FROM records WHERE id=?", (rid,)).fetchone()
+    conn.close()
+    if row is None:
+        return jsonify({"code": 1, "msg": "记录不存在"}), 404
+    return jsonify({"code": 0, "data": record_payload(row)})
+
+
 @funds_bp.route("/api/records", methods=["POST"])
 # ---- 新增记录：申请人自动填当前登录人；未获审核授权的人添加 → 待审核（审核人自动已审核）----
 def add_record():
@@ -385,6 +403,14 @@ def update_record(rid):
         conn.close()
         return jsonify({"code": 1, "msg": "记录不存在"}), 404
     original = dict(existing)
+    try:
+        expected = parse_id(data.get('version'), 'version', False)
+    except (InvalidIdError, ValueError):
+        conn.close()
+        return jsonify({"code": 1, "msg": "编辑必须携带记录版本号，请刷新后重试"}), 400
+    if original["version"] != expected:
+        conn.close()
+        return jsonify({"code": 1, "msg": "记录已变更，请刷新后重试"}), 409
     allowed = ("record_type", "category", "source_dest", "applicant",
                "handler", "record_date", "notes", "amount", "invoice_count")
     candidate = {k: original[k] for k in allowed}
@@ -434,10 +460,32 @@ def update_record(rid):
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["DELETE"])
-# ---- 删除记录 ----
+# ---- 删除记录：必须携带版本号；已审核记录只有审核人可以删除 ----
 def delete_record(rid):
+    try:
+        expected = parse_id(request.args.get('version'), 'version', False)
+    except (InvalidIdError, ValueError):
+        return jsonify({"code": 1, "msg": "删除必须携带记录版本号，请刷新后重试"}), 400
     conn = get_funds_db()
-    conn.execute("DELETE FROM records WHERE id=?", (rid,))
+    # Serialize with edits/reviews so a stale tab cannot delete a changed record.
+    conn.execute("BEGIN IMMEDIATE")
+    row = conn.execute("SELECT * FROM records WHERE id=?", (rid,)).fetchone()
+    if row is None:
+        conn.close()
+        return jsonify({"code": 1, "msg": "记录不存在"}), 404
+    if row["version"] != expected:
+        conn.close()
+        return jsonify({"code": 1, "msg": "记录已变更，请刷新后重试"}), 409
+    if row["review_status"] == "已审核" and not can_review(current_user()):
+        conn.close()
+        return jsonify({"code": 403, "msg": "已审核记录只能由资金审核人删除"}), 403
+    audit = getattr(g, "audit_details", None)
+    if isinstance(audit, dict):
+        audit["deleted"] = {
+            "id": rid, "amount": row["amount"], "record_type": row["record_type"],
+            "review_status": row["review_status"],
+        }
+    conn.execute("DELETE FROM records WHERE id=? AND version=?", (rid, expected))
     conn.commit()
     conn.close()
     sync_txt()
