@@ -27,6 +27,9 @@ sudo rsync -a --delete \
   --exclude venv --exclude data.db --exclude 'data.db-*' \
   --exclude secret.key --exclude backups --exclude __pycache__ \
   --exclude data --exclude mail.env --exclude index.html \
+  --exclude /clients/signing --exclude .build-tools --exclude .git \
+  --exclude .venv --exclude node_modules --exclude dist \
+  --exclude /clients/desktop/target --exclude /clients/android/build \
   "$SRC_DIR"/ "$APP_DIR"/
 sudo chmod +x "$APP_DIR"/deploy/*.sh
 

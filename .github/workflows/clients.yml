@@ -1,0 +1,236 @@
+name: Client validation
+
+on:
+  pull_request:
+    branches: [main, "split/pr31-04-account-ui", "split/pr31-05-client-final"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clients-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -m unittest discover -s clients/frontend -p test_frontend.py -v
+      - run: node --test clients/frontend/test_bridge.cjs
+      - run: python -m unittest discover -s clients -p 'test_*.py' -v
+      - name: Install packaged-UI browser validation dependencies
+        run: |
+          python -m pip install playwright==1.56.0
+          python -m playwright install --with-deps chromium
+      - run: python clients/build_frontend.py
+      - name: Exercise packaged pages and PDF preview with isolated native IPC
+        run: python clients/frontend/test_browser.py
+      - name: Upload packaged-UI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-ui-browser-diagnostics
+          path: |
+            .build-tools/client-ui-tests/*.png
+            .build-tools/client-ui-tests/*.json
+          include-hidden-files: true
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      NO_PROXY: 127.0.0.1,localhost
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Linux development libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libssl-dev patchelf
+      - run: python -m pip install jinja2
+      - run: python clients/build_frontend.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate borderless icons for Tauri build
+        run: |
+          npm ci --prefix clients/desktop --no-audit --no-fund
+          python clients/build_icons.py
+      - name: Compile desktop and run native tests without producing installers
+        working-directory: clients/desktop
+        run: cargo test --locked
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Prepare isolated cross-language update fixtures
+        run: |
+          mkdir -p .build-tools
+          curl --fail --location --retry 3 https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar -o .build-tools/json.jar
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36'
+          test -f "$ANDROID_HOME/platforms/android-36/android.jar"
+          python tests/client_update_fixture.py .build-tools/client-update-fixture
+      - run: python clients/android/test_transport.py --jdk "$JAVA_HOME"
+      - name: Compile Android sources and run update tests without producing an APK
+        run: python clients/android/test_ui_updates.py --jdk "$JAVA_HOME" --json-jar .build-tools/json.jar --android-jar "$ANDROID_HOME/platforms/android-36/android.jar" --fixture .build-tools/client-update-fixture
+
+  # These jobs produce installable CI *test* builds, not a formal signed release.
+  # No repository secrets are injected into PRs; Android gets a new temporary
+  # keystore on each run and cannot upgrade a release-signed installation.
+  package-windows:
+    name: Package Windows ${{ matrix.arch }} (NSIS)
+    needs: [frontend, desktop]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Build pinned frontend assets
+        run: |
+          python -m pip install jinja2
+          python clients/build_frontend.py
+      - name: Build and verify native Windows installer
+        shell: pwsh
+        env:
+          XTYF_USE_SYSTEM_RUST: '1'
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ./clients/build_windows.ps1 -InstallDependencies -Architecture $env:ARCH -OutputDirectory dist/clients/windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $out = 'dist/clients/windows'
+          $installer = @(Get-ChildItem $out -Filter "XTYF-Manager-Setup-*-$env:ARCH.exe")
+          if ($installer.Count -ne 1) { throw 'Expected exactly one Windows installer for architecture' }
+          $hash = (Get-FileHash $installer[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer[0].Name)" | Set-Content "$out/SHA256SUMS.txt" -Encoding ascii
+      - name: Upload Windows CI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: xtyf-client-windows-${{ matrix.arch }}
+          path: |
+            dist/clients/windows/*.exe
+            dist/clients/windows/windows-verification*.json
+            dist/clients/windows/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  package-android:
+    name: Package Android (APK)
+    needs: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Android platform and build tools
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-36' 'build-tools;36.0.0'
+          python -m pip install jinja2
+          python clients/build_frontend.py
+          npm ci --prefix clients/desktop --no-audit --no-fund
+      - name: Build and verify APK with ephemeral CI-only signing key
+        run: |
+          python clients/build_android.py --jdk "$JAVA_HOME" --sdk "$ANDROID_HOME" --skip-frontend-build --output-dir dist/clients/android
+          cd dist/clients/android
+          test "$(find . -maxdepth 1 -type f -name 'XTYF-Manager-*.apk' | wc -l)" -eq 1
+          sha256sum XTYF-Manager-*.apk > SHA256SUMS.txt
+      - name: Upload Android CI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: xtyf-client-android-test-signed
+          path: |
+            dist/clients/android/XTYF-Manager-*.apk
+            dist/clients/android/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  package-linux:
+    name: Package Linux ${{ matrix.arch }} (DEB + RPM)
+    needs: [frontend, desktop]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Linux desktop and package dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev patchelf rpm libarchive-tools
+          rustup toolchain install 1.99.1 --profile minimal
+          python -m pip install jinja2
+      - name: Build pinned resources and native installers
+        run: |
+          python clients/build_frontend.py
+          npm ci --prefix clients/desktop --no-audit --no-fund
+          python clients/build_icons.py
+          python clients/build_linux_native.py --output-dir dist/clients/linux
+      - name: Upload native Linux CI packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: xtyf-client-linux-${{ matrix.arch }}
+          path: |
+            dist/clients/linux/*.deb
+            dist/clients/linux/*.rpm
+            dist/clients/linux/linux-verification.json
+            dist/clients/linux/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

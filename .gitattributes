@@ -1,0 +1,18 @@
+# Shell scripts must keep LF endings: a CRLF checkout fails with
+# "syntax error near unexpected token `$'{\r''" when the server runs them.
+*.sh text eol=lf
+
+# Binary assets stay byte-exact for release checksums.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.wasm binary
+*.pfb binary
+*.ttf binary
+*.jks binary
+*.7z binary
+
+# Locked third-party resources must match vendor-lock.json on every platform.
+clients/frontend/vendor/** -text

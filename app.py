@@ -52,6 +52,8 @@ from modules.email_api import bp as email_bp
 from modules.mail_service import configure as configure_mail
 from modules.security import init_security, migrate_security, write_initial_credentials
 from modules.workspace_settings import bp as workspace_settings_bp, migrate as migrate_workspace, theme_context
+from modules.client_api import create_client_blueprint
+from modules.client_updates import bp as client_updates_bp
 
 # ---- 关键路径与端口（secret.key 用于会话签名，首次运行自动生成）----
 SECRET_PATH = os.environ.get("PROGRESS_SECRET_PATH", os.path.join(BASE_DIR, "secret.key"))
@@ -240,7 +242,8 @@ def init_db():
         migrate_security(db)
         migrate_invoice_owners(db)
         migrate_invoice_jobs(db)
-        # Add indexes needed for high-frequency task dashboards and attachment lookups.
+        # Hot read paths (dashboard tree, status filters, attachment lookups)
+        # would otherwise scan the whole table on every 5s poll.
         db.executescript("""
             CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner_id, id);
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, id);
@@ -313,8 +316,18 @@ def login():
             return redirect(destination)
         return render_template("login.html", me=None, page="login", role_names=ROLE_NAMES)
     data = request.get_json(silent=True) or request.form
-    username = (data.get("username") or "").strip()
+    return authenticate_login(data)
+
+
+def authenticate_login(data):
+    """One credential/rate-limit/session path for the website and native apps."""
+    username = data.get("username") or ""
     password = data.get("password") or ""
+    if (not isinstance(username, str) or not isinstance(password, str)
+            or len(username) > 64 or len(password) > 1024):
+        return jsonify(ok=False, error="用户名或密码格式不正确", reason="invalid_payload"), 400
+    username = username.strip()
+    destination = task_login_destination(data.get("next", ""))
     db = get_db()
     attempt_key = _login_attempt_key(username)
     now = int(time.time())
@@ -563,6 +576,8 @@ def export_csv():
 
 
 # ---- 模块导入即初始化（幂等）：gunicorn 启动时自动完成建表与兜底账号 ----
+app.register_blueprint(create_client_blueprint(authenticate_login, STATUSES, PRIORITIES))
+app.register_blueprint(client_updates_bp)
 init_db()
 
 # ---- 本地调试入口（线上由 systemd 调用 gunicorn，不会走到这里）----
