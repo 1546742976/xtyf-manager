@@ -163,7 +163,10 @@ class AssetsTest(unittest.TestCase):
     def test_permissions_and_delegation(self):
         self.assertEqual(self.member.get("/assets").status_code, 200)
         self.assertEqual(self.member.get(f"/assets/detail?id={self.item}").status_code, 200)
-        self.op("receive", client=self.member, status=403)
+        self.op("receive", client=self.member)
+        self.post(self.member, "/api/assets/catalog/items",
+                  dict(name="不可创建", unit="个", kind="returnable"), 403)
+        self.op("transfer", client=self.member, target_campus_id=self.other, status=403)
         with app_module.app.app_context():
             db = app_module.get_db()
             db.execute("INSERT INTO member_permissions VALUES(?,?,?,?)",
@@ -174,6 +177,67 @@ class AssetsTest(unittest.TestCase):
         bootstrap = self.member.get("/api/client/bootstrap").get_json()
         self.assertTrue(bootstrap["assets_enabled"])
         self.assertTrue(bootstrap["permissions"]["manage_assets"])
+
+    def test_manager_catalog_and_all_members_quantity_changes(self):
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            db.execute("UPDATE members SET role='manager' WHERE id=?", (self.admin_id,))
+            db.commit()
+        category = self.save("categories", {"name": "动力部件"})
+        item = self.save("items", dict(name="项管物品", unit="个", kind="returnable", category="动力部件"))
+        self.assertTrue(self.admin.get("/api/client/bootstrap").get_json()["permissions"]["manage_assets"])
+        self.assertFalse(self.member.get("/api/assets/catalog").get_json()["can_manage"])
+        self.op("receive", 8, self.member)
+        self.op("adjust", 4, self.member, version=self.stock()["stock_version"])
+        self.assertEqual(self.stock()["available"], 4)
+        self.op("adjust", 9, self.member, version=self.stock()["stock_version"])
+        self.assertEqual(self.stock()["available"], 9)
+        self.op("adjust", 10, self.member, version=1, status=409)
+        self.post(self.member, "/api/assets/operations", dict(
+            action="adjust", item_id=self.item, campus_id=self.campus, quantity=0,
+            version=self.stock()["stock_version"]), 400)
+        self.post(self.member, "/api/assets/catalog/categories", dict(name="不可创建"), 403)
+        self.post(self.admin, "/api/assets/catalog/categories",
+                  dict(id=category, name="动力", version=1))
+        edited = self.admin.get(f"/api/assets/items/{item}").get_json()["item"]
+        self.assertEqual((edited["category"], edited["version"]), ("动力", 2))
+        self.post(self.admin, "/api/assets/catalog/categories",
+                  dict(id=category, name="动力", version=2, active=False), 409)
+        self.post(self.admin, "/api/assets/catalog/items",
+                  dict(id=item, name="项管物品", unit="个", kind="returnable",
+                       category="动力", version=2, active=False))
+        self.post(self.admin, "/api/assets/catalog/categories",
+                  dict(id=category, name="动力", version=2, active=False))
+        self.post(self.admin, "/api/assets/catalog/items",
+                  dict(name="停用类别不可新选", unit="个", kind="returnable", category="动力"), 409)
+
+    def test_registration_time_and_immutable_submission_time(self):
+        self.op("receive", 10, self.member)
+        with patch("modules.assets.stamp", return_value="2026-10-20 08:00:00"):
+            for action, item in (("borrow", self.item), ("consume", self.screw)):
+                if item != self.item:
+                    self.post(self.member, "/api/assets/operations", dict(
+                        action="receive", item_id=item, campus_id=self.campus, quantity=10, reason="合成入库"))
+                result = self.post(self.member, "/api/assets/operations", dict(
+                    action=action, item_id=item, campus_id=self.campus, quantity=2,
+                    occurred_at="2026-10-19T23:30"))
+                record = next(e for e in self.member.get(f"/api/assets/events?item_id={item}").get_json()["events"]
+                              if e["id"] == result["event_id"])
+                self.assertEqual(record["created_at"], "2026-10-20 08:00:00")
+                self.assertEqual(record["details"]["occurred_at"], "2026-10-19 23:30:00")
+            for value in ("2026-10-20T08:01", "2026-02-30T10:00", "", 7, "2026-10-20T08:00Z"):
+                self.op("borrow", 1, self.member, occurred_at=value, status=400)
+        self.assertEqual(self.stock()["borrowed"], 2)
+
+    def test_category_migration_preserves_existing_names_and_is_repeatable(self):
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            db.execute("UPDATE asset_items SET category='旧类别' WHERE id=?", (self.item,))
+            db.commit()
+            migrate_assets(db)
+            migrate_assets(db)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM asset_categories WHERE name='旧类别'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT category FROM asset_items WHERE id=?", (self.item,)).fetchone()[0], "旧类别")
 
     def test_asset_login_links_are_local_and_bounded(self):
         for target in ("/assets", "/assets?view=mine", "/assets/detail?id=12"):

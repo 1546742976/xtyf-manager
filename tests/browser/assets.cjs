@@ -8,7 +8,7 @@ const {recordFailure,cleanupResources}=require('./diagnostics.cjs');
 const root=path.resolve(__dirname,'../..'),output=path.join(root,'.build-tools/assets-check');
 fs.mkdirSync(output,{recursive:true});
 const server=spawn(process.env.REVIEW_PYTHON||'python',['-B','tests/browser/server.py'],{cwd:root,env:{...process.env,MAIL_MODE:'preview'},stdio:['ignore','pipe','pipe']});
-let browser,page,api,engineName,uiServer;const passed=[],errors=[];
+let browser,page,api,engineName,uiServer;const passed=[],errors=[],accounts=[];
 async function main(){
   const base=await new Promise((resolve,reject)=>{
     let log='';const timer=setTimeout(()=>reject(Error('server timeout '+log)),30000);
@@ -28,6 +28,21 @@ async function main(){
   const campus=await save('campuses',{name:'合成东校区'});
   const west=await save('campuses',{name:'合成西校区'});
   const member=(await post('/api/member',{name:'合成资产成员',username:'assets_browser_member',password:'assets-member-password',role:'member'})).id;
+  async function account(username,role){
+    await post('/api/member',{name:username,username,password:'assets-initial-password',role});
+    const client=await request.newContext({baseURL:base});accounts.push(client);
+    let token=(await (await client.get('/api/csrf')).json()).csrf_token;
+    for(const [url,data] of [
+      ['/api/client/login',{username,password:'assets-initial-password'}],
+      ['/api/password',{old:'assets-initial-password',new:'assets-registered-password',confirm:'assets-registered-password'}]
+    ]){
+      const response=await client.post(url,{headers:{'X-CSRF-Token':token},data});
+      assert.equal(response.status(),200,await response.text());token=response.headers()['x-csrf-token']||token;
+    }
+    return client;
+  }
+  const managerApi=await account('assets_project_manager','manager');
+  const ordinaryApi=await account('assets_ordinary_member','member');
   await post('/api/admin/permissions/'+member,{permissions:['invoices.manage']});
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]){
     engineName=label;browser=await engine.launch();const context=await browser.newContext({...options,storageState:await api.storageState()});
@@ -83,6 +98,49 @@ async function main(){
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'no horizontal overflow');
     await page.screenshot({path:path.join(output,label+'.png'),fullPage:true});
     passed.push(label+': permission grants preserve invoice permissions, create, receive, cancel, lost response retry, partial return, transfer, campus log filter, reload, mobile layout');
+    const managerContext=await browser.newContext({...options,storageState:await managerApi.storageState()});
+    page=await managerContext.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+    await page.goto(base+'/assets');await page.locator('#asset-categories').waitFor();
+    await page.locator('#asset-categories').click();await page.getByRole('button',{name:'新增类别',exact:true}).click();
+    await page.getByLabel('名称',{exact:true}).fill('登记分类 '+label);await page.locator('#asset-save').click();
+    await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    await page.locator('#asset-create').click();await page.getByLabel('名称',{exact:true}).fill('自助耗材 '+label);
+    await page.locator('#asset-form [name=category]').selectOption('登记分类 '+label);
+    await page.locator('#asset-form [name=kind]').selectOption('consumable');
+    await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    await page.getByRole('link',{name:'自助耗材 '+label,exact:true}).waitFor();
+    const supply=(await (await api.get('/api/assets/items?q='+encodeURIComponent('自助耗材 '+label))).json()).items[0];
+    await post('/api/assets/operations',{request_id:crypto.randomUUID(),action:'receive',item_id:supply.id,campus_id:campus,quantity:10,reason:'合成库存'});
+    await post('/api/assets/operations',{request_id:crypto.randomUUID(),action:'receive',item_id:supply.id,campus_id:west,quantity:5,reason:'合成库存'});
+    const ordinaryContext=await browser.newContext({...options,storageState:await ordinaryApi.storageState()});
+    page=await ordinaryContext.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+    await page.goto(base+'/assets');await page.getByRole('link',{name:'自助耗材 '+label,exact:true}).waitFor();
+    assert.equal(await page.locator('#asset-create').isVisible(),false);
+    assert.equal(await page.locator('#asset-categories').isVisible(),false);
+    const supplyCard=page.locator('.asset-card').filter({has:page.getByRole('link',{name:'自助耗材 '+label,exact:true})});
+    await page.locator('#asset-filter [name=campus_id]').selectOption(String(campus));
+    await supplyCard.locator('.asset-count').filter({hasText:'10'}).waitFor();
+    await page.locator('#asset-filter [name=campus_id]').selectOption(String(west));
+    await supplyCard.locator('.asset-count').filter({hasText:'5'}).waitFor();
+    await page.locator('#asset-filter [name=campus_id]').selectOption(String(campus));
+    await supplyCard.locator('.asset-count').filter({hasText:'10'}).waitFor();
+    // The card surface, not just its button, opens registration. The title remains a detail link.
+    await supplyCard.locator('.asset-count').click();
+    assert.equal(await page.locator('#asset-form [name=campus_id]').inputValue(),String(campus));
+    await page.getByLabel('数量',{exact:true}).fill('2');
+    await page.getByLabel('登记时间（北京时间）',{exact:true}).fill('2026-01-01T09:30');
+    await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    await supplyCard.locator('.asset-count').filter({hasText:'8'}).waitFor();
+    await supplyCard.getByRole('button',{name:'调整数量',exact:true}).click();
+    await page.getByLabel('调整后的在库数量',{exact:true}).fill('12');
+    await page.getByLabel('原因（必填）',{exact:true}).fill('合成盘点');
+    await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    await supplyCard.locator('.asset-count').filter({hasText:'12'}).waitFor();
+    await supplyCard.getByRole('link',{name:'自助耗材 '+label,exact:true}).click();
+    await page.getByText('登记时间：2026-01-01 09:30:00（北京时间）',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+    await page.screenshot({path:path.join(output,label+'-registration.png'),fullPage:true});
+    passed.push(label+': manager categories, ordinary member consumption and quantity adjustment, automatic campus filters, card dialog and Beijing registration time');
     await browser.close();browser=null;
   }
   const dist=path.join(output,'ui');
@@ -145,4 +203,4 @@ async function main(){
   console.log(JSON.stringify({ok:true,passed}));
 }
 main().catch(async error=>{await recordFailure(error,{output,page,engine:engineName,phase:'assets',passed,pageErrors:errors});console.error(error);process.exitCode=1;})
-  .finally(()=>cleanupResources({browser:()=>browser?.close(),api:()=>api?.dispose(),server:()=>server.kill(),ui:()=>uiServer?.close()}));
+  .finally(()=>cleanupResources({browser:()=>browser?.close(),api:()=>api?.dispose(),accounts:()=>Promise.all(accounts.map(a=>a.dispose())),server:()=>server.kill(),ui:()=>uiServer?.close()}));

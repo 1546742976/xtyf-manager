@@ -14,6 +14,8 @@
 .asset-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:16px; }
 .asset-card { padding:20px; background:var(--ux-surface); border:1px solid var(--ux-stroke); border-radius:16px; min-width:0; overflow-wrap:anywhere; }
 .asset-card h2,.asset-card h3 { margin:0 0 10px; }
+.asset-card[data-register] { cursor:pointer; }
+.asset-card[data-register]:hover { border-color:var(--ux-text); }
 .asset-count { display:block; font-size:30px; font-weight:650; margin:12px 0; }
 .asset-tag { font-size:12px; padding:4px 8px; border:1px solid var(--ux-stroke); border-radius:6px; }
 .asset-section { margin-top:28px; }

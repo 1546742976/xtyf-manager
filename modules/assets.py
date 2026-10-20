@@ -25,6 +25,12 @@ def migrate_assets(db):
             kind TEXT NOT NULL CHECK(kind IN ('returnable','consumable')),
             active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1
         );
+        CREATE TABLE IF NOT EXISTS asset_categories (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+            active INTEGER NOT NULL DEFAULT 1, version INTEGER NOT NULL DEFAULT 1
+        );
+        INSERT OR IGNORE INTO asset_categories(name)
+            SELECT DISTINCT category FROM asset_items WHERE category<>'';
         CREATE UNIQUE INDEX IF NOT EXISTS asset_item_identity ON asset_items(name,specification);
         CREATE TABLE IF NOT EXISTS asset_stock (
             item_id INTEGER NOT NULL REFERENCES asset_items(id),
@@ -73,7 +79,7 @@ class Invalid(Exception):
 
 def manager(user=None):
     user = user or current_user()
-    return bool(user and (user["role"] == "admin" or has_permission("assets.manage", user)))
+    return bool(user and (user["role"] in ("admin", "manager") or has_permission("assets.manage", user)))
 
 
 def require_manager():
@@ -169,15 +175,17 @@ def page():
 @bp.get("/api/assets/catalog")
 @login_required
 def catalog():
-    return jsonify(ok=True, can_manage=manager(),
-                   campuses=[dict(r) for r in get_db().execute("SELECT * FROM asset_campuses ORDER BY name,id")])
+    db = get_db()
+    return jsonify(ok=True, can_manage=manager(), server_time=stamp(),
+                   categories=[dict(r) for r in db.execute("SELECT * FROM asset_categories ORDER BY name,id")],
+                   campuses=[dict(r) for r in db.execute("SELECT * FROM asset_campuses ORDER BY name,id")])
 
 
 @bp.post("/api/assets/catalog/<kind>")
 @mutation
 def save_catalog(db, data, kind):
     require_manager()
-    if kind not in ("items", "campuses"):
+    if kind not in ("items", "campuses", "categories"):
         raise Invalid("目录类型不存在", 404)
     table = "asset_" + kind
     fields = {"name": text(data, "name")}
@@ -186,6 +194,12 @@ def save_catalog(db, data, kind):
                       unit=text(data, "unit", maximum=12), kind=text(data, "kind"))
         if fields["kind"] not in ("returnable", "consumable"):
             raise Invalid("物品类型无效")
+        if fields["category"]:
+            category = db.execute("SELECT * FROM asset_categories WHERE name=?", (fields["category"],)).fetchone()
+            if category and not category["active"]:
+                raise Invalid("该类别已停用，请选择启用类别", 409)
+            if not category:
+                db.execute("INSERT INTO asset_categories(name) VALUES(?)", (fields["category"],))
     identity = data.get("id")
     before = None
     if identity is not None:
@@ -198,7 +212,16 @@ def save_catalog(db, data, kind):
             raise Invalid("启用状态无效")
         fields["active"] = int(active)
         column = "item_id" if kind == "items" else "campus_id"
-        if not active and (
+        if kind == "categories":
+            if not active and db.execute(
+                "SELECT 1 FROM asset_items WHERE category=? AND active=1", (before["name"],)
+            ).fetchone():
+                raise Invalid("类别下仍有启用物品，请先更换物品类别或停用物品", 409)
+            if before["name"] != fields["name"]:
+                # A rename also invalidates stale item editors, without rewriting history.
+                db.execute("UPDATE asset_items SET category=?,version=version+1 WHERE category=?",
+                           (fields["name"], before["name"]))
+        elif not active and (
             db.execute(f"SELECT 1 FROM asset_stock WHERE {column}=? AND available>0", (identity,)).fetchone()
             or db.execute(f"SELECT 1 FROM asset_loans WHERE {column}=? AND outstanding>0", (identity,)).fetchone()
         ):
@@ -212,7 +235,8 @@ def save_catalog(db, data, kind):
         identity = db.execute(f"INSERT INTO {table}({','.join(fields)}) VALUES({','.join('?' for _ in fields)})",
                               tuple(fields.values())).lastrowid
     event(db, "catalog", "目录维护", item_id=identity if kind == "items" else None,
-          campus_id=identity if kind == "campuses" else None, details={"before": before, "after": fields})
+          campus_id=identity if kind == "campuses" else None,
+          details={"kind": kind, "id": identity, "before": before, "after": fields})
     return {"id": identity}
 
 
@@ -231,6 +255,15 @@ def stock_change(db, item_id, campus_id, delta):
 def operate(db, data):
     action = text(data, "action")
     reason = text(data, "reason", action in ("receive", "adjust", "transfer", "correct"), 500)
+    occurred_at = data.get("occurred_at")
+    if occurred_at is not None:
+        try:
+            occurred = datetime.strptime(occurred_at, "%Y-%m-%dT%H:%M")
+        except (TypeError, ValueError):
+            raise Invalid("登记时间必须为北京时间，格式为 YYYY-MM-DDTHH:MM") from None
+        if occurred > datetime.strptime(stamp(), "%Y-%m-%d %H:%M:%S"):
+            raise Invalid("登记时间不能晚于当前北京时间")
+        occurred_at = occurred.strftime("%Y-%m-%d %H:%M:%S")
     user = current_user()
     if action == "correct":
         require_manager()
@@ -274,7 +307,8 @@ def operate(db, data):
         if not item["active"] or not campus["active"]:
             raise Invalid("物品或校区已停用", 409)
         if action in ("receive", "adjust", "transfer"):
-            require_manager()
+            if action == "transfer":
+                require_manager()
             member_id, member_name = None, ""
         if action == "receive":
             deltas = [(campus_id, quantity)]
@@ -308,7 +342,8 @@ def operate(db, data):
     return {"event_id": event(db, action, reason, item_id=item_id, campus_id=campus_id, quantity=quantity,
                               member_id=member_id, member_name=member_name,
                               consumed_delta=quantity if action == "consume" else 0,
-                              details={"deltas": deltas, "loan_id": loan_id, "loan_delta": loan_delta}),
+                              details={"deltas": deltas, "loan_id": loan_id, "loan_delta": loan_delta,
+                                       "occurred_at": occurred_at or stamp()}),
             "loan_id": loan_id}
 
 

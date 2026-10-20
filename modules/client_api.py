@@ -50,7 +50,7 @@ def create_client_blueprint(authenticate, statuses, priorities):
                 "manage_invoices": invoices,
                 "manage_mail": admin,
                 "manage_security": admin,
-                "manage_assets": bool(ready and (admin or has_permission("assets.manage", user))),
+                "manage_assets": bool(ready and (manager or has_permission("assets.manage", user))),
             },
             role_names=ROLE_NAMES,
             statuses=list(statuses),
