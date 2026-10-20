@@ -98,7 +98,7 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           files=(dist/release-assets/*)
-          if (( $${#files[@]} != 9 )); then
+          if (( ${#files[@]} != 9 )); then
             echo "::error::Need seven installers, SHA256SUMS.txt, and build-report.json"
             exit 1
           fi
@@ -107,9 +107,9 @@ jobs:
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
              --json tagName,isDraft,isPrerelease,isImmutable,assets > "$state" 2> "$err"; then
             python clients/release_target.py --tag "$RELEASE_TAG" --metadata "$state"
-            gh release upload "$RELEASE_TAG" "$${files[@]}" --repo "$GITHUB_REPOSITORY"
+            gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY"
           elif grep -qiE 'release not found|HTTP 404' "$err"; then
-            gh release create "$RELEASE_TAG" "$${files[@]}" \
+            gh release create "$RELEASE_TAG" "${files[@]}" \
               --repo "$GITHUB_REPOSITORY" --verify-tag \
               --title "XTYF Manager v1.1.0" --generate-notes --latest
           else

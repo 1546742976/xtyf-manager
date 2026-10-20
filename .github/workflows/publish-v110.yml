@@ -1,0 +1,144 @@
+name: Publish already-built v1.1.0 without rebuilding
+
+# Runs automatically once when this workflow file is introduced on main.
+# Reuses only verified installers from the earlier, fully successful package jobs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-v110.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: stable-release-v1.1.0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Finish v1.1.0 from verified Actions artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v1.1.0
+      SOURCE_SHA: a6a355ba448366b5974521c044e557e89f7f4d00
+      SOURCE_RUN_ID: '39379131081'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify source and successful packaging jobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+          actual="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          if [[ "$actual" != "$SOURCE_SHA" && "$actual" != "$GITHUB_SHA" ]]; then
+            echo "::error::Unexpected version tag source: $actual"
+            exit 1
+          fi
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/build-run.json"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/build-jobs.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          temp = Path(os.environ["RUNNER_TEMP"])
+          run = json.loads((temp/"build-run.json").read_text())
+          jobs = json.loads((temp/"build-jobs.json").read_text())["jobs"]
+          assert run["id"] == int(os.environ["SOURCE_RUN_ID"])
+          assert run["path"] == ".github/workflows/recover-v110.yml"
+          assert run["event"] == "push" and run["head_branch"] == "main"
+          assert run["head_sha"] == os.environ["SOURCE_SHA"]
+          assert run["status"] == "completed"
+          required = ("Package Android (APK)", "Package Windows x64 (NSIS)",
+                      "Package Windows arm64 (NSIS)", "Package Linux x64 (DEB + RPM)",
+                      "Package Linux arm64 (DEB + RPM)")
+          for title in required:
+              matching = [j for j in jobs if j["name"].endswith("/ " + title)]
+              assert len(matching) == 1 and matching[0]["conclusion"] == "success", title
+          config = json.loads(Path("clients/config.json").read_text(encoding="utf-8"))
+          assert config["version"] == "1.1.0"
+          print("All five package jobs succeeded with the same original application source.")
+          PY
+      - name: Download installers from the completed build, not PR test builds
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 39379131081
+          pattern: xtyf-client-*
+          path: dist/github-artifacts
+          merge-multiple: false
+      - name: Check all seven installers, filenames and SHA-256 values
+        run: |
+          python clients/collect_release_assets.py \
+            --artifacts-dir dist/github-artifacts \
+            --output-dir dist/release-assets \
+            --tag "$RELEASE_TAG" --channel stable
+      - name: Publish verified packages without editing Release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/release-assets/*)
+          if (( ${#files[@]} != 9 )); then
+            echo "::error::Expected nine verified Release attachments"
+            exit 1
+          fi
+          state="$RUNNER_TEMP/current-release.json"
+          err="$RUNNER_TEMP/release-error.txt"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+             --json tagName,isDraft,isPrerelease,isImmutable,assets > "$state" 2> "$err"; then
+            python clients/release_target.py --tag "$RELEASE_TAG" --metadata "$state"
+            gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY"
+          elif grep -qiE 'release not found|HTTP 404' "$err"; then
+            # Only CI / documentation changed after SOURCE_SHA. Current main has
+            # identical application sources, while a tag pointing to a historical
+            # workflow revision cannot be published by a limited GITHUB_TOKEN.
+            previous="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+            if [[ "$previous" != "$GITHUB_SHA" ]]; then
+              python - "$previous" "$GITHUB_SHA" <<'PY'
+          import subprocess, sys
+          changed = subprocess.check_output(
+              ["git", "diff", "--name-only", sys.argv[1], sys.argv[2]], text=True
+          ).splitlines()
+          allowed = {
+              ".github/workflows/recover-v110.yml",
+              ".github/workflows/publish-v110.yml",
+              ".github/RELEASING.md",
+          }
+          unexpected = set(changed) - allowed
+          if unexpected:
+              raise SystemExit("Cannot retarget release tag; application source changed: "
+                               + ", ".join(sorted(unexpected)))
+          print("Only release automation and documentation changed.")
+          PY
+              git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
+              git push --force-with-lease="refs/tags/$RELEASE_TAG:$previous" origin "refs/tags/$RELEASE_TAG"
+            fi
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "XTYF Manager v1.1.0" --generate-notes --latest
+          else
+            cat "$err" >&2
+            exit 1
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets > "$RUNNER_TEMP/final-release.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          expected = {p.name: p.stat().st_size for p in Path("dist/release-assets").iterdir()}
+          releases = json.loads((Path(os.environ["RUNNER_TEMP"])/"final-release.json").read_text())
+          actual = {a["name"]: a["size"] for a in releases["assets"]}
+          if len(expected) != 9 or actual != expected:
+              raise SystemExit(f"Release asset mismatch; expected {expected}, got {actual}")
+          print("Success: all nine Release attachments match validated local files.")
+          PY
+          echo "Published https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
