@@ -75,14 +75,10 @@ git push origin v1.1.0
 
 如正式 Android 构建在恢复 KeyStore 步骤失败，优先检查仓库 Secrets 是否完整、Base64 是否单行、密钥别名是否为 `xtyf-manager`、原密钥的 key password 是否与 Keystore password 相同。不要通过删掉签名检查或生成新密钥绕过问题。
 
-## 2026-10-20 v1.1.0 自动恢复
+## v1.1.0 发布恢复记录（2026-10-20）
 
-2026-10-20 的 `Client release` 手动运行 #39375216684 已完成 Windows、Linux、Android 所有七个安装包的正式签名和 SHA-256 校验，但 `softprops/action-gh-release` 尝试修改人工创建的 Release 的元数据时返回 GitHub 403。此前的失败构建不必重做。
+本次版本首次自动发布出现的问题已修复并完成验收。最初使用的 `softprops/action-gh-release` 试图修改已经存在的 Release 元数据，因目标提交包含不同版本的工作流文件而被 GitHub Token 拒绝（403）。正式发布流程现已改为：若 Release 尚不存在，使用 `gh release create --verify-tag` 创建；若存在但没有附件，直接用 `gh release upload` 上传，而不更新 Release 元数据。
 
-仓库配置了仅在首次新增 `.github/workflows/recover-v110.yml` 到 main 时运行的一次性恢复任务。它固定复用第 #39375216684 次运行的五组安装包 Artifacts、核对构建来源和版本为 1.1.0、恢复旧的 `v1.1.0` 标签到原始提交，再上传到 Release。整个流程不读取 Android Keystore，也不会重签名或重新编译。
+历史标签恢复还暴露出 GitHub 内置 Token 无法创建指向含有不同工作流文件的旧提交的标签。最后将尚未发布的 `v1.1.0` 标签设置为与实际打包相一致的 main 源代码，在所有平台重新构建并校验，再复用该次 Actions Artifacts 完成发布。2026-10-20 的 [正式 v1.1.0](https://github.com/SHM-white/xtyf-manager/releases/tag/v1.1.0) 已发布，含 7 个安装包、`SHA256SUMS.txt` 和 `build-report.json` 共 9 个附件。
 
-以后正常的 Client release 采用 `gh release upload` 为现有空 Release 上传附件（无需调用 Update release API），对于没有 Release 的已存在标签则调用 `gh release create --verify-tag`。禁止覆盖已有附件；不要再使用不匹配实际应用版本的 `v1.0.0` 标签发布 `1.1.0` 的安装包。
-
-## v1.1.0 仅发布恢复
-
-在 2026-10-20 的自动恢复运行 #39379131081 中，五个安装包构建任务、正式 APK 签名及所有七个包的 SHA-256 验证已通过，最终上传脚本因误用 `$$` Shell 展开而失败。后续 `publish-v110.yml` 只下载该运行的已验证产物，**不会再次构建**。为避开 Actions Token 对历史工作流改动的限制，发布前严格确认标签与当前 main 之间仅有恢复工作流、发布工作流及发布文档的差异，再把尚未成功发布的 `v1.1.0` 标签指向这一仅涉及 CI 的提交；客户端源代码保持与本次构建一致。发布后核对全部九个附件的文件名和大小。此专用工作流仅用于恢复此版本，后续版本使用正常的 Client release。
+临时恢复工作流已退役；下一版请先提交一致的客户端版本元数据，再推送相同版本号的 `vX.Y.Z` 标签。无需手动在网页端创建 Release，也不要重复使用或移动已发布标签。
