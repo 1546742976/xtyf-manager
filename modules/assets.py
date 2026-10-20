@@ -254,7 +254,7 @@ def stock_change(db, item_id, campus_id, delta):
 @mutation
 def operate(db, data):
     action = text(data, "action")
-    reason = text(data, "reason", action in ("receive", "adjust", "transfer", "correct"), 500)
+    reason = text(data, "reason", True, 500)
     occurred_at = data.get("occurred_at")
     if occurred_at is not None:
         try:

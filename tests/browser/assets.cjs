@@ -71,6 +71,7 @@ async function main(){
     await page.locator('#asset-close').click();assert.equal((await (await api.get(`/api/assets/items/${id}`)).json()).campuses.find(c=>c.id===campus).available,10);
     await eastCard.getByRole('button',{name:'借用',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('3');
     // A committed response is lost: retry must return the existing result.
+    await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成借用验证');
     let lost=true;
     await page.route('**/api/assets/operations',async route=>{
       if(lost){lost=false;await route.fetch();await route.abort();}else await route.continue();
@@ -82,7 +83,7 @@ async function main(){
     await page.unroute('**/api/assets/operations');
     await page.getByRole('link',{name:'我的借用',exact:true}).click();
     await page.locator('#asset-content [data-action=return]').first().click();
-    await page.locator('#asset-form [name=quantity]').fill('1');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    await page.locator('#asset-form [name=quantity]').fill('1');await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成归还验证');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.locator('#asset-content .asset-card').filter({has:page.getByRole('link',{name:'测试电机 '+label,exact:true})}).getByText('未还 2 个',{exact:true}).waitFor();
     await page.goto(base+`/assets/detail?id=${id}`);await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.reload();await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
@@ -129,6 +130,11 @@ async function main(){
     assert.equal(await page.locator('#asset-form [name=campus_id]').inputValue(),String(campus));
     await page.getByLabel('数量',{exact:true}).fill('2');
     await page.getByLabel('登记时间（北京时间）',{exact:true}).fill('2026-01-01T09:30');
+    await page.locator('#asset-save').click();
+    assert.equal(await page.locator('#asset-dialog').isVisible(),true);
+    assert.equal(await page.locator('#asset-form [name=reason]').evaluate(el=>el.validity.valueMissing),true);
+    assert.equal((await (await api.get(`/api/assets/items/${supply.id}`)).json()).campuses.find(c=>c.id===campus).available,10);
+    await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成装配领用验证');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await supplyCard.locator('.asset-count').filter({hasText:'8'}).waitFor();
     await supplyCard.getByRole('button',{name:'调整数量',exact:true}).click();
@@ -181,6 +187,7 @@ async function main(){
     await frame.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     const east=frame.locator('.asset-card').filter({has:frame.getByRole('heading',{name:'合成东校区',exact:true})});
     await east.getByRole('button',{name:'借用',exact:true}).click();
+    await frame.getByLabel('用途／备注（必填）',{exact:true}).fill('合成本地客户端借用');
     state.offline=true;await frame.locator('#asset-save').click();
     await frame.locator('#asset-form-status').filter({hasText:'结果尚未确认'}).waitFor();
     assert.equal(await frame.locator('#asset-form [name=quantity]').inputValue(),'1');
@@ -189,7 +196,7 @@ async function main(){
     await east.getByText('总量 · 在库 5 / 借出 3',{exact:true}).waitFor();
     // Restore fixture stock through the real own-loan return API for the next engine.
     const nativeLoan=(await (await api.get('/api/assets/loans?mine=1')).json()).loans.find(l=>l.quantity===1&&l.outstanding===1);
-    await post('/api/assets/operations',{request_id:crypto.randomUUID(),action:'return',quantity:1,loan_id:nativeLoan.id});
+    await post('/api/assets/operations',{request_id:crypto.randomUUID(),action:'return',quantity:1,loan_id:nativeLoan.id,reason:'合成测试归还'});
     assert.deepEqual(remoteHtml,[],'local view must use native API bridge, not remote HTML');
     state.old=true;await page.goto(local+'/#/');await page.reload();await frame.locator('#workspace-sidebar').waitFor();
     assert.equal(await frame.locator('#workspace-sidebar a[href="/assets"]').count(),0,'old server hides navigation');

@@ -92,7 +92,7 @@
     finally{if(own===generation)$('asset-content').setAttribute('aria-busy','false');}
   }
   const input=(name,label,value='',extra='')=>`<label>${label}<input name="${name}" value="${esc(value)}" ${extra}></label>`;
-  const reason=required=>`<label>${required?'原因（必填）':'用途／备注（选填）'}<textarea name="reason" maxlength="500" ${required?'required':''} rows="3"></textarea></label>`;
+  const reason=management=>`<label>${management?'原因（必填）':'用途／备注（必填）'}<textarea name="reason" maxlength="500" required rows="3"></textarea></label>`;
   function timeField(){
     const server=Date.parse((catalog.server_time||'').replace(' ','T')+'+08:00');
     const time=new Date((Number.isFinite(server)?server+Date.now()-serverReceivedAt:Date.now())+8*3600000).toISOString().slice(0,16);

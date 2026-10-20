@@ -81,7 +81,7 @@ class AssetsTest(unittest.TestCase):
         received = self.post(self.admin, "/api/assets/operations", dict(
             action="receive", item_id=self.screw, campus_id=self.campus, quantity=10, reason="初始库存"))
         consumed = self.post(self.member, "/api/assets/operations", dict(
-            action="consume", item_id=self.screw, campus_id=self.campus, quantity=3))
+            action="consume", item_id=self.screw, campus_id=self.campus, quantity=3, reason="合成装配领用"))
         self.assertEqual(self.stock(self.screw)["consumed"], 3)
         self.op("correct", event_id=consumed["event_id"])
         self.assertEqual(self.stock(self.screw)["available"], 10)
@@ -124,7 +124,7 @@ class AssetsTest(unittest.TestCase):
         def borrow(client):
             return client.post("/api/assets/operations", json=dict(
                 request_id=uuid4().hex, action="borrow", item_id=self.item,
-                campus_id=self.campus, quantity=4)).status_code
+                campus_id=self.campus, quantity=4, reason="合成并发借用")).status_code
         with ThreadPoolExecutor(max_workers=2) as pool:
             self.assertEqual(sorted(pool.map(borrow, clients)), [200, 409])
         self.assertEqual(self.stock()["available"], 1)
@@ -220,7 +220,7 @@ class AssetsTest(unittest.TestCase):
                         action="receive", item_id=item, campus_id=self.campus, quantity=10, reason="合成入库"))
                 result = self.post(self.member, "/api/assets/operations", dict(
                     action=action, item_id=item, campus_id=self.campus, quantity=2,
-                    occurred_at="2026-10-19T23:30"))
+                    occurred_at="2026-10-19T23:30", reason="合成补登记"))
                 record = next(e for e in self.member.get(f"/api/assets/events?item_id={item}").get_json()["events"]
                               if e["id"] == result["event_id"])
                 self.assertEqual(record["created_at"], "2026-10-20 08:00:00")
@@ -238,6 +238,20 @@ class AssetsTest(unittest.TestCase):
             migrate_assets(db)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM asset_categories WHERE name='旧类别'").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT category FROM asset_items WHERE id=?", (self.item,)).fetchone()[0], "旧类别")
+
+    def test_registration_requires_nonblank_reason_without_changing_stock(self):
+        self.op("receive", 10)
+        loan = self.op("borrow", 2, self.member)["loan_id"]
+        self.post(self.admin, "/api/assets/operations", dict(
+            action="receive", item_id=self.screw, campus_id=self.campus, quantity=10, reason="合成入库"))
+        for action, item in (("borrow", self.item), ("consume", self.screw), ("return", self.item)):
+            for fields in ({}, {"reason": ""}, {"reason": " \t\n "}, {"reason": None}):
+                self.post(self.member, "/api/assets/operations", dict(
+                    action=action, item_id=item, campus_id=self.campus, quantity=1,
+                    loan_id=loan, **fields), 400)
+        self.assertEqual((self.stock()["available"], self.stock()["borrowed"]), (8, 2))
+        self.assertEqual(self.stock(self.screw)["available"], 10)
+        self.assertEqual(self.stock(self.screw)["consumed"], 0)
 
     def test_asset_login_links_are_local_and_bounded(self):
         for target in ("/assets", "/assets?view=mine", "/assets/detail?id=12"):
