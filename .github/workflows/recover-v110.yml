@@ -1,7 +1,8 @@
-name: Recover verified v1.1.0 packages (one time)
+name: Recover v1.1.0 by building from its exact source
 
-# This file is added together with the fix, so the initial push runs recovery
-# automatically. Future pushes to other paths will not rerun this operation.
+# One-time recovery of the user-deleted v1.1.0 tag and stable Release.
+# GITHUB_TOKEN cannot create a tag pointing to the old workflow-changing
+# commit; creating a new consistent source tag on current main is permitted.
 on:
   push:
     branches: [main]
@@ -10,105 +11,99 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  actions: read
+  contents: read
 
 concurrency:
   group: stable-release-v1.1.0
   cancel-in-progress: false
 
 jobs:
-  recover:
-    name: Publish already-built v1.1.0 installers
+  prepare:
+    name: Establish correct v1.1.0 tag and application version
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      RELEASE_TAG: v1.1.0
-      SOURCE_SHA: 3d3197bdc6f119e23917ae6e97cb642fa9f5c608
-      BUILDER_SHA: 436e96eaa753a8d1f3b0fb167cfac753a9c61dd0
-      SOURCE_RUN_ID: '39375216684'
-      GH_TOKEN: ${{ github.token }}
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
     steps:
-      - name: Checkout latest trusted release tooling
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Resolve or create the version tag on matching current source
+        shell: bash
+        id: source
+        run: |
+          set -euo pipefail
+          if git show-ref --quiet --verify refs/tags/v1.1.0; then
+            source="$(git rev-parse refs/tags/v1.1.0^{commit})"
+          else
+            source="$(git rev-parse HEAD)"
+            git tag v1.1.0 "$source"
+            git push origin refs/tags/v1.1.0
+          fi
+          git merge-base --is-ancestor "$source" refs/remotes/origin/main
+          git show "$source:clients/config.json" > "$RUNNER_TEMP/version.json"
+          python - "$RUNNER_TEMP/version.json" <<'PY'
+          import json, sys
+          config = json.load(open(sys.argv[1], encoding="utf-8"))
+          if config["version"] != "1.1.0" or int(config["versionCode"]) < 1:
+              raise SystemExit("v1.1.0 tag must point to source version 1.1.0")
+          PY
+          echo "sha=$source" >> "$GITHUB_OUTPUT"
+          echo "Valid release source: $source"
+
+  build:
+    name: Test and build installers matching the new v1.1.0 tag
+    needs: prepare
+    uses: ./.github/workflows/clients.yml
+    with:
+      source_ref: ${{ needs.prepare.outputs.sha }}
+    secrets: inherit
+    permissions:
+      contents: write
+
+  publish:
+    name: Upload seven signed/verified installers as v1.1.0
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v1.1.0
+    steps:
+      - name: Checkout the exact tagged build source and verification code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Verify previous build job and original source commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          git cat-file -e "$SOURCE_SHA^{commit}"
-          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-          git show "$SOURCE_SHA:clients/config.json" > "$RUNNER_TEMP/v110-config.json"
-          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/v110-run.json"
-          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/v110-jobs.json"
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          temp = Path(os.environ["RUNNER_TEMP"])
-          run = json.loads((temp / "v110-run.json").read_text())
-          jobs = json.loads((temp / "v110-jobs.json").read_text())["jobs"]
-          config = json.loads((temp / "v110-config.json").read_text())
-          assert config["version"] == "1.1.0", "Prior source version mismatch"
-          assert run["id"] == int(os.environ["SOURCE_RUN_ID"])
-          assert run["path"] == ".github/workflows/release.yml", "Artifacts not from stable release workflow"
-          assert run["event"] == "workflow_dispatch" and run["head_branch"] == "main"
-          assert run["head_sha"] == os.environ["BUILDER_SHA"], "Unexpected build workflow revision"
-          assert run["status"] == "completed", "Previous build not complete"
-          required = [
-              "Package Android (APK)",
-              "Package Linux arm64 (DEB + RPM)",
-              "Package Linux x64 (DEB + RPM)",
-              "Package Windows x64 (NSIS)",
-              "Package Windows arm64 (NSIS)",
-          ]
-          for suffix in required:
-              found = [j for j in jobs if j["name"] == "Test and package all platforms / " + suffix]
-              assert len(found) == 1 and found[0]["conclusion"] == "success", f"Prior build failed: {suffix}"
-          print("Trusted previous build: five packaging jobs succeeded, source 1.1.0")
-          PY
-      - name: Download previously built signed installers
+      - name: Retrieve packages built in this same run
         uses: actions/download-artifact@v4
         with:
-          github-token: ${{ github.token }}
-          run-id: 39375216684
           pattern: xtyf-client-*
           path: dist/github-artifacts
           merge-multiple: false
-      - name: Reverify all seven installers and their SHA256 checksums
+      - name: Verify artifact completeness and checksums
         run: |
           python clients/collect_release_assets.py \
             --artifacts-dir dist/github-artifacts \
             --output-dir dist/release-assets \
-            --tag "$RELEASE_TAG" \
-            --channel stable \
-            --config "$RUNNER_TEMP/v110-config.json"
-      - name: Restore exact original version tag if user deleted it
-        shell: bash
-        run: |
-          set -euo pipefail
-          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
-            actual="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
-            test "$actual" = "$SOURCE_SHA" || {
-              echo "::error::Existing $RELEASE_TAG points to $actual, not verified original source $SOURCE_SHA"
-              exit 1
-            }
-          else
-            git tag "$RELEASE_TAG" "$SOURCE_SHA"
-            git push origin "refs/tags/$RELEASE_TAG"
-          fi
-      - name: Publish existing binary assets without Release metadata updates
+            --tag "$RELEASE_TAG" --channel stable
+      - name: Publish packages without updating Release metadata
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           files=(dist/release-assets/*)
-          test "$${#files[@]}" -eq 9
-          state="$RUNNER_TEMP/v110-release.json"
-          err="$RUNNER_TEMP/v110-release-error.txt"
+          if (( $${#files[@]} != 9 )); then
+            echo "::error::Need seven installers, SHA256SUMS.txt, and build-report.json"
+            exit 1
+          fi
+          state="$RUNNER_TEMP/stable-release.json"
+          err="$RUNNER_TEMP/stable-release-error.txt"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
              --json tagName,isDraft,isPrerelease,isImmutable,assets > "$state" 2> "$err"; then
             python clients/release_target.py --tag "$RELEASE_TAG" --metadata "$state"
@@ -116,14 +111,14 @@ jobs:
           elif grep -qiE 'release not found|HTTP 404' "$err"; then
             gh release create "$RELEASE_TAG" "$${files[@]}" \
               --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --title "XTYF Manager $RELEASE_TAG" --generate-notes --latest
+              --title "XTYF Manager v1.1.0" --generate-notes --latest
           else
             cat "$err" >&2
             exit 1
           fi
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq '.assets | length' | grep -qx '9' || {
-              echo "::error::Expected nine Release assets after upload"
-              exit 1
-            }
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,assets --jq '.assets | length' | grep -qx '9' || {
+            echo "::error::Incomplete Release attachments"
+            exit 1
+          }
           echo "Published https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
