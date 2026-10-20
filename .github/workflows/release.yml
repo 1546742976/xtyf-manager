@@ -1,0 +1,119 @@
+name: Client release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable tag (for example v1.1.0)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stable-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Verify stable tag and version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.verify.outputs.tag }}
+      sha: ${{ steps.verify.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check tag, metadata, and main ancestry
+        id: verify
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          tag = os.environ['REQUESTED_TAG']
+          if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
+              raise SystemExit(f'Expected stable tag vMAJOR.MINOR.PATCH, got {tag!r}')
+          config = json.loads(Path('clients/config.json').read_text(encoding='utf-8'))
+          if tag != 'v' + config['version']:
+              raise SystemExit(f'Tag {tag} does not match committed app version {config["version"]}')
+          if int(config['versionCode']) < 1:
+              raise SystemExit('Android versionCode must be positive')
+          PY
+          tag_sha="$(git rev-parse "refs/tags/$REQUESTED_TAG^{commit}")"
+          test "$tag_sha" = "$(git rev-parse HEAD)" || { echo "::error::Tag does not match checkout"; exit 1; }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main || {
+            echo "::error::Stable release tag must point to a commit on main"
+            exit 1
+          }
+          echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Test and package all platforms
+    needs: validate
+    uses: ./.github/workflows/clients.yml
+    with:
+      source_ref: ${{ needs.validate.outputs.sha }}
+    secrets: inherit
+    permissions:
+      # Reusable Client validation also defines a PR-only publisher with write
+      # permissions. Grant the caller the maximum; ordinary build jobs retain
+      # contents:read in the called workflow, and its PR publisher is skipped.
+      contents: write
+
+  publish:
+    name: Publish verified stable release
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: xtyf-client-*
+          path: dist/github-artifacts
+          merge-multiple: false
+      - name: Verify every binary, version and SHA-256
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: python clients/collect_release_assets.py --artifacts-dir dist/github-artifacts --output-dir dist/release-assets --tag "$RELEASE_TAG" --channel stable
+      - name: Refuse to overwrite an existing stable release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $RELEASE_TAG already exists; create a new version instead."
+            exit 1
+          fi
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          target_commitish: ${{ needs.validate.outputs.sha }}
+          name: XTYF Manager ${{ needs.validate.outputs.tag }}
+          prerelease: false
+          make_latest: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/release-assets/*

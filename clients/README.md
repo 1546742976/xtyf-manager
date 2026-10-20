@@ -136,7 +136,7 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 
 - `xtyf-client-windows-x64` 和 `xtyf-client-windows-arm64`：两个独立架构的 NSIS `.exe`、安装包验证报告与 SHA-256。
 - `xtyf-client-linux-x64` 和 `xtyf-client-linux-arm64`：分别内含对应架构的 Ubuntu 22.04 `.deb`、Fedora `.rpm`、验证报告与 SHA-256。
-- `xtyf-client-android-test-signed`：一个通用 `.apk` 与 SHA-256。Android 原生层为纯 Java/WebView，没有 `.so` ABI 库，因此该 APK 同时支持 ARM64 和 x86_64，无需生成重复 APK。
+- `xtyf-client-android-apk`：一个通用 `.apk` 与 SHA-256。Android 原生层为纯 Java/WebView，没有 `.so` ABI 库，因此该 APK 同时支持 ARM64 和 x86_64，无需生成重复 APK。
 
 产物保留 14 天。CI 只使用 `clients/config.json` 的当前版本，不调用会递增版本的 `clients/release.py`，不创建 Release、不部署服务器、不上传任何密钥。Windows 未进行代码签名；Android 每次运行临时生成不同的测试签名密钥，**不能覆盖安装正式签名 APK，也不保证两次 CI 生成的 APK 可以相互覆盖升级**。这些测试安装包不属于正式交付，不应分发给生产用户。Linux 构建进行实际包结构、ELF 架构与依赖校验，但不能替代 Ubuntu ARM64 和 Fedora 的真机运行验收。
 
@@ -156,3 +156,8 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 ## 应用图标源文件
 
 原始彩色图标以透明 SVG 形式保存在 `clients/assets/xtyf-logo.svg`。旧 JPEG 转为白色方形图标时带来的上下白边已移除。图标只保留透明安全间距；桌面 PNG/ICO 与 Android 512px 启动图标属于 **构建输出**，由 `python clients/build_icons.py` 调用固定版本 Tauri CLI 生成，不进入 Git。首次运行前安装依赖：`npm ci --prefix clients/desktop`。所有 Actions 打包任务都会重新生成同一份图标；不会拿旧二进制图标冒充修复版本。
+
+
+## GitHub Actions 自动发布
+
+PR 的客户端构建全部通过后，同仓库 PR 自动发布 `YYYYMMDD-betaN` 测试 Pre-release；推送 `vX.Y.Z` 标签后自动发布正式 Release（须预先配置原 Android 签名密钥 Secrets）。发布前严格核对所有平台安装包 SHA-256 和版本，缺一不发布。详情与密钥配置步骤见 [Actions 版本发布指南](../.github/RELEASING.md)。
