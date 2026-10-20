@@ -79,6 +79,35 @@ class TestConsistentSnapshot(unittest.TestCase):
         with closing(sqlite3.connect(restored / "data.db")) as db, db:
             self.assertEqual(db.execute("SELECT cents FROM entries").fetchone()[0], 30)
 
+    def test_avatar_reference_and_image_survive_snapshot_restore(self):
+        import io
+
+        from PIL import Image
+        from modules.member_avatars import migrate
+
+        relative = "data/task_attachments/avatars/synthetic-avatar.webp"
+        target = self.root / relative
+        target.parent.mkdir(parents=True)
+        with Image.new("RGB", (512, 512), "blue") as image, io.BytesIO() as output:
+            image.save(output, "WEBP")
+            target.write_bytes(output.getvalue())
+        with closing(sqlite3.connect(self.root / "data.db")) as db:
+            db.execute("CREATE TABLE members(id INTEGER PRIMARY KEY,name TEXT)")
+            migrate(db)
+            db.execute("INSERT INTO members VALUES(7,'合成头像成员','synthetic-avatar.webp')")
+            db.commit()
+        manifest = self.create()
+        self.assertIn(relative, manifest["files"])
+        restored = Path(self.temp.name) / "avatar-restored"
+        restore_snapshot(self.archive, restored)
+        self.assertEqual((restored / relative).read_bytes(), target.read_bytes())
+        with closing(sqlite3.connect(restored / "data.db")) as db:
+            self.assertEqual(db.execute("SELECT id,name,avatar_key FROM members").fetchone(),
+                             (7, "合成头像成员", "synthetic-avatar.webp"))
+        with Image.open(restored / relative) as image:
+            self.assertEqual(image.size, (512, 512))
+            self.assertEqual(image.format, "WEBP")
+
     def test_collaboration_snapshot_restores_live_and_withdrawn_records_and_original_files(self):
         from modules.collaboration_schema import migrate
 

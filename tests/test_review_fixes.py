@@ -1,6 +1,7 @@
 """Regressions for the defects reproduced during the whole-project review."""
 import io
 import csv
+import json
 import os
 import sqlite3
 import tempfile
@@ -46,9 +47,11 @@ class TestReviewFixes(unittest.TestCase):
     def test_stale_review_rejected_and_unchanged_edit_keeps_version(self):
         record = self.record()
         rid = record['id']
-        same = self.admin.put(f'/funds/api/records/{rid}', json={'amount': '5.000', 'version': record['version']}).get_json()
+        same = self.admin.put(f'/funds/api/records/{rid}',
+                              json={'amount': '5.000', 'version': record['version']}).get_json()
         self.assertEqual(same['version'], record['version'])
-        updated = self.admin.put(f'/funds/api/records/{rid}', json={'amount': '999.00', 'version': record['version']}).get_json()
+        updated = self.admin.put(f'/funds/api/records/{rid}',
+                                 json={'amount': '999.00', 'version': record['version']}).get_json()
         self.assertEqual(updated['version'], record['version'] + 1)
         stale = self.member.post(f'/funds/api/records/{rid}/review', json={'version': record['version']})
         self.assertEqual(stale.status_code, 409)
@@ -221,15 +224,18 @@ class TestReviewFixes(unittest.TestCase):
         from deploy import seed_data
         from common import DB_PATH, get_db
         name = 'seed_' + uuid4().hex[:8]
-        with patch.multiple(seed_data, DB_PATH=DB_PATH,
-                            MEMBERS=[(name, name, '视觉;电控', 'member')],
-                            TASKS=[(name, name, '哨兵', '视觉', '未开始', 80, '中', '')]), \
+        with tempfile.TemporaryDirectory() as root, patch.object(seed_data, 'DB_PATH', DB_PATH), \
                 contextlib.redirect_stdout(io.StringIO()):
-            seed_data.main()
+            seed_path = os.path.join(root, 'seed-import.json')
+            with open(seed_path, 'w', encoding='utf-8') as stream:
+                json.dump({'members': [(name, name, '视觉;电控', 'member')],
+                           'tasks': [(name, name, '哨兵', '视觉', '未开始', 80, '中', '')]},
+                          stream, ensure_ascii=False)
+            seed_data.main(seed_path)
             with app_module.app.app_context():
                 db = get_db()
                 before = dict(db.execute('SELECT * FROM members WHERE username=?', (name,)).fetchone())
-            seed_data.main()
+            seed_data.main(seed_path)
         with app_module.app.app_context():
             db = get_db()
             after = dict(db.execute('SELECT * FROM members WHERE username=?', (name,)).fetchone())
@@ -243,6 +249,39 @@ class TestReviewFixes(unittest.TestCase):
             self.assertEqual(db.execute('SELECT kind FROM task_revisions WHERE task_id=?', (task['id'],)).fetchone()[0], 'create')
             self.assertTrue(db.execute('SELECT 1 FROM member_projects WHERE member_id=? AND project_id=?',
                                        (after['id'], task['project_id'])).fetchone())
+
+    def test_seed_import_is_atomic_when_later_task_is_invalid(self):
+        from deploy import seed_data
+        from common import DB_PATH, get_db
+        unique = 'atomic_' + uuid4().hex[:10]
+        with tempfile.TemporaryDirectory() as root, patch.object(seed_data, 'DB_PATH', DB_PATH), \
+                contextlib.redirect_stdout(io.StringIO()):
+            seed_path = os.path.join(root, 'seed-import.json')
+            payload = {
+                'members': [(unique, unique, '视觉', 'member')],
+                'tasks': [
+                    (unique + ' good', unique, '哨兵', '视觉', '未开始', 0, '中', ''),
+                    (unique + ' invalid', unique, '哨兵', '视觉', '非法状态', 0, '中', ''),
+                ],
+            }
+            with open(seed_path, 'w', encoding='utf-8') as stream:
+                json.dump(payload, stream, ensure_ascii=False)
+            with self.assertRaises(RuntimeError):
+                seed_data.main(seed_path)
+        with app_module.app.app_context():
+            db = get_db()
+            self.assertIsNone(db.execute('SELECT id FROM members WHERE username=?', (unique,)).fetchone())
+            self.assertEqual(db.execute('SELECT count(*) FROM tasks WHERE title LIKE ?',
+                                        (unique + '%',)).fetchone()[0], 0)
+
+    def test_seed_missing_local_file_does_not_open_database(self):
+        from deploy import seed_data
+        self.assertEqual(seed_data.MEMBERS, [])
+        self.assertEqual(seed_data.TASKS, [])
+        with tempfile.TemporaryDirectory() as root, patch.object(seed_data.sqlite3, 'connect') as connect:
+            with self.assertRaises(FileNotFoundError):
+                seed_data.main(os.path.join(root, 'missing.json'))
+            connect.assert_not_called()
 
     def test_seed_refuses_archived_catalog_and_missing_admin_without_writes(self):
         from deploy import seed_data
@@ -286,3 +325,80 @@ class TestReviewFixes(unittest.TestCase):
                 'missing_member_groups', 'missing_task_project', 'orphan_invoice_metadata',
                 'invalid_invoice_fields', 'invalid_confirmed_amount'})
             self.assertEqual(before, [hashlib.sha256(item.read_bytes()).hexdigest() for item in files])
+
+
+    def test_funds_delete_requires_current_version_and_audits_the_record(self):
+        record = self.record()
+        rid = record['id']
+        self.assertEqual(self.admin.delete(f'/funds/api/records/{rid}').status_code, 400)
+        self.assertEqual(
+            self.admin.delete(f'/funds/api/records/{rid}',
+                              query_string={'version': record['version'] + 5}).status_code, 409)
+        with funds.get_funds_db() as db:
+            still_there = db.execute('SELECT COUNT(*) FROM records WHERE id=?', (rid,)).fetchone()[0]
+        db.close()
+        self.assertEqual(still_there, 1)
+        removed = self.admin.delete(f'/funds/api/records/{rid}',
+                                    query_string={'version': record['version']})
+        self.assertEqual(removed.status_code, 200, removed.get_json())
+        with funds.get_funds_db() as db:
+            gone = db.execute('SELECT COUNT(*) FROM records WHERE id=?', (rid,)).fetchone()[0]
+        db.close()
+        self.assertEqual(gone, 0)
+        from common import get_db
+        with app_module.app.app_context():
+            audit = get_db().execute(
+                "SELECT details FROM security_audit WHERE action='funds.delete_record' AND target=? "
+                "ORDER BY id DESC LIMIT 1", (f'/funds/api/records/{rid}',)).fetchone()
+        self.assertIsNotNone(audit, 'deleting a record must leave a durable audit row')
+        self.assertIn('"deleted"', audit['details'])
+        self.assertIn(f'"id": {rid}', audit['details'])
+
+    def test_only_a_reviewer_may_delete_an_approved_record(self):
+        record = self.record()
+        rid = record['id']
+        self.assertTrue(self.member.post(
+            f'/funds/api/records/{rid}/review', json={'version': record['version']}).get_json()['code'] == 0)
+        plain_name = 'plain_' + uuid4().hex[:8]
+        created = self.admin.post('/api/member', json={
+            'name': plain_name, 'username': plain_name, 'password': 'plain-password', 'role': 'manager'})
+        self.assertTrue(created.get_json()['ok'])
+        plain = app_module.app.test_client()
+        self.assertTrue(plain.post('/login', json={
+            'username': plain_name, 'password': 'plain-password'}).get_json()['ok'])
+        denied = plain.delete(f'/funds/api/records/{rid}', query_string={'version': record['version'] + 1})
+        self.assertEqual(denied.status_code, 403, denied.get_json())
+        allowed = self.member.delete(f'/funds/api/records/{rid}',
+                                     query_string={'version': record['version'] + 1})
+        self.assertEqual(allowed.status_code, 200, allowed.get_json())
+
+    def test_duplicate_invoice_cannot_be_forced_by_a_non_finance_member(self):
+        content = b'%PDF-1.4\n' + uuid4().hex.encode()
+        tmp = self.upload(content=content)
+        self.assertTrue(self.confirm(tmp).get_json()['success'])
+        duplicate_tmp = self.upload(content=content)
+        blocked = self.confirm(duplicate_tmp)
+        self.assertEqual(blocked.get_json().get('code'), 'DUPLICATE')
+        forced = self.confirm(duplicate_tmp, allow_duplicate=True)
+        self.assertEqual(forced.status_code, 403, forced.get_json())
+        # Finance may force its own duplicate, never another member's temp file.
+        admin_tmp = self.upload(client=self.admin, content=content)
+        blocked_finance = self.admin.post('/invoices/api/upload/confirm', json={
+            'tmp_path': admin_tmp, 'month': '2026.10', 'amount': '1.00'})
+        self.assertEqual(blocked_finance.get_json().get('code'), 'DUPLICATE')
+        allowed = self.admin.post('/invoices/api/upload/confirm', json={
+            'tmp_path': admin_tmp, 'month': '2026.10', 'amount': '1.00',
+            'allow_duplicate': True})
+        self.assertTrue(allowed.get_json()['success'], allowed.get_json())
+
+    def test_single_record_endpoint_returns_money_fields_and_404s(self):
+        record = self.record()
+        rid = record['id']
+        response = self.admin.get(f'/funds/api/records/{rid}')
+        self.assertEqual(response.status_code, 200, response.get_json())
+        data = response.get_json()['data']
+        self.assertEqual(data['id'], rid)
+        self.assertEqual(data['amount'], '5.00')
+        self.assertEqual(data['amount_cents'], '500')
+        self.assertEqual(data['version'], record['version'])
+        self.assertEqual(self.admin.get('/funds/api/records/99999999').status_code, 404)

@@ -44,3 +44,4 @@ clients/android/res/drawable-nodpi/xtyf_launcher.png
 # Restored on demand from npm tarballs pinned in vendor-lock.json.
 clients/frontend/vendor/
 client-ui-release/
+clients/windows/node_modules/

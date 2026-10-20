@@ -50,12 +50,14 @@
 
 2026-10-14 修复增加资金审核版本校验、发票安全事件及元数据校验/保留、草稿选择保留、Windows 连接关闭和只读历史诊断。实现及验收边界见[全项目审查修复](docs/technical/全项目审查修复.md)。资金审核旧页面必须刷新，旧脚本必须携带记录 `version`。
 
-邮件服务首次部署与后续升级均自动安装 systemd 模板与共享环境配置，默认不启用发信；在服务器设置 `/etc/xtyf-manager/mail.env` 后自行启用邮件 timer，见[邮件服务配置](docs/technical/日常项目与邮件服务.md)。\n\n本仓库使用 GitHub Actions 在 PR、main 分支提交及手工触发时自动执行
+邮件服务首次部署与后续升级均自动安装 systemd 模板与共享环境配置，默认不启用发信；在服务器设置 `/etc/xtyf-manager/mail.env` 后自行启用邮件 timer，见[邮件服务配置](docs/technical/日常项目与邮件服务.md)。
+
+本仓库使用 GitHub Actions 在指向 `main` 的 PR 创建或更新时自动执行
 Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查与分支覆盖率统计。
 覆盖率报告见 Actions Summary 和 python-coverage Artifact。
 
     python -m pip install -r requirements-dev.txt
-    coverage run --branch --source=app,common,modules -m unittest discover -s tests -v
+    coverage run --branch --source=app,common,modules,deploy -m unittest discover -s tests -v
     coverage report -m
     node --test tests/js/*.test.cjs
 
@@ -80,6 +82,7 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 - [成员使用手册](docs/usage/成员使用手册.md) · [管理员操作手册](docs/usage/管理员操作手册.md)
 - [系统架构](docs/technical/系统架构与技术说明.md) · [源码导读](docs/technical/source-guide.md) · [开发指南](docs/technical/开发与优化指南.md)
 - [配置与权限参考](docs/technical/配置与权限参考.md) · [服务器运维](docs/technical/服务器运维手册.md) · [发布检查与数据恢复](docs/technical/发布检查与数据恢复.md)
+- [Windows / Android / Linux 客户端与版本交付](clients/README.md)：先确认是否生成安装包及目标版本号，再通过 `python clients/release.py` 生成 Windows EXE、Android APK、Ubuntu 22.04 ARM64 DEB、Fedora 44/45 共用 x86_64 RPM，四个产物全部成功后才清理旧安装包。
 - [当前待办](TODO.md) · [设计规范](DESIGN.md)
 
 详细实现与数据迁移行为以当前代码和测试为准，历史重构记录不再作为现行功能说明。

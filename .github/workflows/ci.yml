@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, "split/pr31-04-account-ui", "split/pr31-05-client-final"]
+    branches: [main]
 
 permissions:
   contents: read
@@ -45,26 +45,28 @@ jobs:
         run: python -m compileall -q app.py common.py modules tests deploy
       - name: Invoice correction and PDF preview regression
         run: python -m unittest discover -s tests -p 'test_invoice_regression.py' -v
+      - name: 'Lint (ruff: syntax, unused imports/variables)'
+        run: ruff check app.py common.py modules deploy tests
       - name: Run unit and integration tests with branch coverage
-        run: coverage run --branch --source=app,common,modules -m unittest discover -s tests -v
+        run: coverage run --branch --source=app,common,modules,deploy -m unittest discover -s tests -v
       - name: Coverage report
         if: always()
         shell: bash
         run: |
-          if [ -f .coverage ]; then
-            coverage report -m
-            coverage xml -o coverage.xml
-            coverage json -o coverage.json
-            python -c 'import json,os; p=json.load(open("coverage.json"))["totals"]["percent_covered_display"]; open(os.environ["GITHUB_STEP_SUMMARY"],"a").write("## Python branch coverage\n\nTotal: **"+p+"%**\n")'
-            coverage report --fail-under=65
-          fi
+          set -euo pipefail
+          coverage report -m
+          coverage xml -o coverage.xml
+          coverage json -o coverage.json
+          python -c 'import json,os; p=json.load(open("coverage.json"))["totals"]["percent_covered_display"]; open(os.environ["GITHUB_STEP_SUMMARY"],"a").write("## Python branch coverage\n\nTotal: **"+p+"%**\n")'
+          coverage report --fail-under=65
+
       - name: Upload coverage XML
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: python-coverage-${{ matrix.os }}
           path: coverage.xml
-          if-no-files-found: ignore
+          if-no-files-found: warn
           include-hidden-files: true
 
   javascript:
@@ -111,7 +113,7 @@ jobs:
         run: |
           set -euo pipefail
           failures=0
-          for suite in review_fixes pr22_merge task_center task_schedule daily_mail action_failures login_mobile palette_workspace local_collaboration account_avatar account_invoice_ui client_updates_avatar client_connection; do
+          for suite in review_fixes pr22_merge task_center task_schedule daily_mail action_failures login_mobile palette_workspace local_collaboration account_avatar account_invoice_ui client_updates_avatar client_connection seven_repairs seven_repairs_review; do
             echo "::group::Browser test: ${suite}"
             if ! node "tests/browser/${suite}.cjs"; then
               echo "::error::Browser suite ${suite} failed"
@@ -130,6 +132,8 @@ jobs:
             .venv/*-check/*.json
             .build-tools/*-check/*.png
             .build-tools/*-check/*.json
+            .build-tools/seven-repairs-20261018/browser/*.png
+            .build-tools/seven-repairs-20261018/browser/*.json
           include-hidden-files: true
           if-no-files-found: ignore
 

@@ -23,12 +23,14 @@ sudo apt-get install -y python3-venv python3-pip sqlite3 rsync fonts-noto-cjk
 
 echo "==> 同步代码"
 sudo mkdir -p "$APP_DIR"
+# Only synchronize source and explicitly permitted assets; local secrets and build caches stay off the server.
 sudo rsync -a --delete \
   --exclude venv --exclude data.db --exclude 'data.db-*' \
   --exclude secret.key --exclude backups --exclude __pycache__ \
   --exclude data --exclude mail.env --exclude index.html \
-  --exclude /clients/signing --exclude .build-tools --exclude .git \
+  --exclude /clients/signing/ --exclude .build-tools --exclude .git \
   --exclude .venv --exclude node_modules --exclude dist \
+  --exclude .env --exclude '.env.*' --exclude 'initial-admin-password.txt' --exclude '*.log' --exclude .omo \
   --exclude /clients/desktop/target --exclude /clients/android/build \
   "$SRC_DIR"/ "$APP_DIR"/
 sudo chmod +x "$APP_DIR"/deploy/*.sh

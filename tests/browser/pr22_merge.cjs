@@ -47,9 +47,13 @@ async function login(page, base, username, password, firstLogin=true) {
     const groups=(await api(page,'/api/groups')).body.groups;
     const projects=(await api(page,'/api/projects')).body.projects;
     const member=(await api(page,'/api/member',{name:'合并验收项管',username:'merge-manager',password:'merge-test-password',role:'manager',group_ids:[groups.find(g=>g.name==='机械').id]})).body;
+    // Server calendar, not UTC runner clock, controls due-date expectations.
+    const calendar=await api(page,'/api/workspace/countdown');
+    assert.equal(calendar.status,200);
+    const today=calendar.body.countdown.today;
     const date=offset=>{
-      const day=new Date();day.setDate(day.getDate()+offset);
-      return [day.getFullYear(),String(day.getMonth()+1).padStart(2,'0'),String(day.getDate()).padStart(2,'0')].join('-');
+      const day=new Date(`${today}T12:00:00Z`);day.setUTCDate(day.getUTCDate()+offset);
+      return day.toISOString().slice(0,10);
     };
     const project=projects.find(p=>p.is_active).id;
     const blocked=(await api(page,'/api/task',{title:'阻塞且今天截止',owner_id:member.id,project_id:project,status:'阻塞',blocker_reason:'联调待解决',blocker_next_action:'负责人确认资源',start_date:date(-2),due_date:date(0)})).body;

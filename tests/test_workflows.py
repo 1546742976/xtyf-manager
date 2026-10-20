@@ -1,5 +1,4 @@
 """前端资源与关键业务流程冒烟测试（隔离于生产数据）。"""
-import os
 import unittest
 from test_tasks import app_module
 

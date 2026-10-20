@@ -126,17 +126,25 @@ def _revision(
 
 
 def create_task(
-    db: sqlite3.Connection, actor: Actor, data: JsonObject
+    db: sqlite3.Connection, actor: Actor, data: JsonObject, *, manage_transaction: bool = True
 ) -> tuple[int | None, int | None, str | None, int]:
-    db.execute("BEGIN IMMEDIATE")
+    if manage_transaction:
+        db.execute("BEGIN IMMEDIATE")
+    elif not db.in_transaction:
+        raise RuntimeError("External task transaction must already be active")
+
+    def rollback_owned():
+        if manage_transaction:
+            db.rollback()
+
     if "schedule_locked" in data and type(data["schedule_locked"]) is not bool:
-        db.rollback(); return None, None, "自动排期固定日期必须为布尔值", 400
+        rollback_owned(); return None, None, "自动排期固定日期必须为布尔值", 400
     owner_id = parse_id(data.get("owner_id"), "owner_id")
     project_id = parse_id(data.get("project_id"), "project_id")
     if "project" in data:
         legacy_id = _legacy_catalog(db, "projects", str(data.get("project") or ""), True)
         if "project_id" in data and project_id != legacy_id:
-            db.rollback(); return None, None, "project 与 project_id 冲突", 400
+            rollback_owned(); return None, None, "project 与 project_id 冲突", 400
         project_id = legacy_id
     values = {"title": str(data.get("title") or "").strip(), "detail": str(data.get("detail") or "").strip(),
               "owner_id": owner_id, "project_id": project_id,
@@ -149,7 +157,7 @@ def create_task(
     member_ids = relations.get("participant_ids", []) + ([owner_id] if owner_id is not None else [])
     error = error or _validate(db, None, values, relations, member_ids, relations.get("group_ids", []), project_id)
     if error:
-        db.rollback(); return None, None, error, 400
+        rollback_owned(); return None, None, error, 400
     stamp = now_str()
     initial = {'status': '未开始', 'progress': 0, 'completed_at': None}
     try:
@@ -157,7 +165,7 @@ def create_task(
         blockers, blocker_event = blocker_values(db, initial, values, data)
         values.update(blockers)
     except ValueError as exc:
-        db.rollback(); return None, None, str(exc), 400
+        rollback_owned(); return None, None, str(exc), 400
     try:
         columns = ",".join(values)
         placeholders = ",".join("?" for _ in values)
@@ -170,10 +178,11 @@ def create_task(
         after = dict(values) | dict(relations)
         _revision(db, task_id, actor, {}, after, 1, "create")
         record_blocker_event(db, task_id, actor, blocker_event, stamp)
-        db.commit()
+        if manage_transaction:
+            db.commit()
         return task_id, 1, None, 200
     except (sqlite3.Error, TypeError, ValueError):
-        db.rollback()
+        rollback_owned()
         raise
 
 
