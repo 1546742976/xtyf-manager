@@ -5,7 +5,7 @@
   const params=new URLSearchParams(location.search), itemId=Number(params.get('id'))||null;
   const mine=params.get('view')==='mine';
   const names={receive:'入库',borrow:'借用',return:'归还',consume:'领用',adjust:'盘点调整',transfer:'校区调拨',correct:'纠错',catalog:'目录维护'};
-  let catalog, detail, listing=[], loans=[], events=[], generation=0, listPage=1, loanPage=1, eventPage=1;
+  let catalog, detail, listing=[], loans=[], events=[], generation=0, listPage=1, loanPage=1, eventPage=1, eventCampus='';
   let operation=null, pending=false, requestMemo=null, opener=null;
   const dialog=$('asset-dialog'), form=$('asset-form'), filter=$('asset-filter');
   const requestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
@@ -35,7 +35,7 @@
   }
   function renderEvents(data){
     events=data.events;
-    return `<h2>操作记录</h2><p class="asset-muted">时间为北京时间；纠错追加记录，保留原始流水。</p><ol class="asset-log">${events.map(e=>{
+    return `<h2>操作记录</h2><label>记录校区<select id="asset-event-campus">${options(catalog.campuses,eventCampus,'全部校区')}</select></label><p class="asset-muted">时间为北京时间；纠错追加记录，保留原始流水。</p><ol class="asset-log">${events.map(e=>{
       const movements=(e.details.deltas||[]).map(([id,delta])=>`${esc(catalog.campuses.find(c=>c.id===id)?.name||id)}：在库 ${delta>=0?'+':''}${delta}`).join('；');
       return `<li><strong>#${e.id} ${names[e.action]||esc(e.action)}${e.action!=='catalog'?' · '+e.quantity:''}</strong>
         <p>${esc(e.actor_name)} · ${esc(e.created_at)}${e.member_name?' · 相关成员：'+esc(e.member_name):''}</p>
@@ -54,7 +54,7 @@
       const campus=filter.elements.campus_id.value;
       filter.elements.campus_id.innerHTML=options(c.campuses,campus,'全部校区');
       if(itemId){
-        const [d,l,e]=await Promise.all([api('items/'+itemId),api(`loans?item_id=${itemId}&page=${loanPage}`),api(`events?item_id=${itemId}&page=${eventPage}`)]);
+        const [d,l,e]=await Promise.all([api('items/'+itemId),api(`loans?item_id=${itemId}&page=${loanPage}`),api(`events?item_id=${itemId}&page=${eventPage}&campus_id=${encodeURIComponent(eventCampus)}`)]);
         if(own!==generation)return; detail=d;
         $('asset-title').textContent=d.item.name;
         $('asset-content').innerHTML=`<p>${esc(d.item.specification)} · ${esc(d.item.category||'未分类')} · ${d.item.kind==='returnable'?'可借用品':'耗材'}${d.item.active?'':' · 已停用'}</p>
@@ -159,6 +159,7 @@
   dialog.addEventListener('cancel',e=>{if(pending)e.preventDefault();});
   $('asset-close').onclick=()=>{if(!pending){dialog.close();opener?.focus();}};
   document.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(b&&!pending)act(b.dataset.action,Number(b.dataset.id));});
+  document.addEventListener('change',e=>{if(e.target.id==='asset-event-campus'){eventCampus=e.target.value;eventPage=1;load();}});
   $('asset-create').onclick=()=>catalogEditor('items');
   $('asset-campuses').onclick=campusManager;
   $('asset-refresh').onclick=()=>load();

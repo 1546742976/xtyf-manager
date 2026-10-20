@@ -1,13 +1,14 @@
 'use strict';
 // Real API and public pages, synthetic inventory only.
 const assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs');
-const {spawn}=require('node:child_process');
+const {spawn,execFileSync}=require('node:child_process');
+const http=require('node:http');
 const {chromium,webkit,devices,request}=require('playwright');
 const {recordFailure,cleanupResources}=require('./diagnostics.cjs');
 const root=path.resolve(__dirname,'../..'),output=path.join(root,'.build-tools/assets-check');
 fs.mkdirSync(output,{recursive:true});
 const server=spawn(process.env.REVIEW_PYTHON||'python',['-B','tests/browser/server.py'],{cwd:root,env:{...process.env,MAIL_MODE:'preview'},stdio:['ignore','pipe','pipe']});
-let browser,page,api,engineName;const passed=[],errors=[];
+let browser,page,api,engineName,uiServer;const passed=[],errors=[];
 async function main(){
   const base=await new Promise((resolve,reject)=>{
     let log='';const timer=setTimeout(()=>reject(Error('server timeout '+log)),30000);
@@ -26,9 +27,18 @@ async function main(){
   async function save(kind,data){return (await post('/api/assets/catalog/'+kind,{request_id:crypto.randomUUID(),...data})).id;}
   const campus=await save('campuses',{name:'合成东校区'});
   const west=await save('campuses',{name:'合成西校区'});
+  const member=(await post('/api/member',{name:'合成资产成员',username:'assets_browser_member',password:'assets-member-password',role:'member'})).id;
+  await post('/api/admin/permissions/'+member,{permissions:['invoices.manage']});
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]){
     engineName=label;browser=await engine.launch();const context=await browser.newContext({...options,storageState:await api.storageState()});
     page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+    await page.goto(base+'/admin/security');
+    const permissionRow=page.locator(`[data-member-id="${member}"]`);
+    await permissionRow.locator('[data-permission="assets.manage"]').check();
+    await permissionRow.getByRole('button',{name:'保存权限',exact:true}).click();
+    await page.locator('#permission-result').filter({hasText:'权限已保存'}).waitFor();
+    const granted=(await (await api.get('/api/admin/permissions')).json()).members.find(m=>m.id===member).permissions;
+    assert(granted.includes('assets.manage'));assert(granted.includes('invoices.manage'));
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.locator('#asset-create').click();
     await page.locator('#asset-form [name=name]').fill('测试电机 '+label);
@@ -65,11 +75,69 @@ async function main(){
     await page.locator('#asset-form [name=target_campus_id]').selectOption(String(west));await page.locator('#asset-form [name=reason]').fill('合成调拨');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await eastCard.getByText('总量 · 在库 6 / 借出 2',{exact:true}).waitFor();
+    await page.locator('#asset-event-campus').selectOption(String(west));
+    await page.waitForFunction(()=>document.querySelectorAll('.asset-log li').length===1);
+    await page.locator('.asset-log').getByText('合成调拨',{exact:true}).waitFor();
     const loans=(await (await api.get(`/api/assets/loans?item_id=${id}`)).json()).loans;
     assert.equal(loans.length,1);assert.equal(loans[0].member_id,uid);assert.equal(loans[0].outstanding,2);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'no horizontal overflow');
     await page.screenshot({path:path.join(output,label+'.png'),fullPage:true});
-    passed.push(label+': create, receive, cancel, lost response retry, partial return, transfer, reload, mobile layout');
+    passed.push(label+': permission grants preserve invoice permissions, create, receive, cancel, lost response retry, partial return, transfer, campus log filter, reload, mobile layout');
+    await browser.close();browser=null;
+  }
+  const dist=path.join(output,'ui');
+  execFileSync(process.env.REVIEW_PYTHON||'python',['-B','clients/build_frontend.py','--output-dir',dist],{cwd:root});
+  uiServer=http.createServer((req,res)=>{
+    const file=path.resolve(dist,'.'+new URL(req.url,'http://local').pathname.replace(/\/$/,'/index.html'));
+    if(!file.startsWith(dist+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404).end();return;}
+    const mime={'.html':'text/html','.js':'application/javascript','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'};
+    res.setHeader('Content-Type',mime[path.extname(file)]||'application/octet-stream');fs.createReadStream(file).pipe(res);
+  });
+  await new Promise(resolve=>uiServer.listen(0,'127.0.0.1',resolve));
+  const local='http://127.0.0.1:'+uiServer.address().port;
+  for(const [label,engine] of [['chromium',chromium],['webkit',webkit]]){
+    engineName=label+'-local';browser=await engine.launch();page=await browser.newPage({viewport:{width:1280,height:900}});
+    page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+    const state={offline:false,old:false};const remoteHtml=[];
+    page.on('request',r=>{if(r.url().startsWith(base))remoteHtml.push(r.url());});
+    await page.exposeFunction('__assetsNative',async(action,args)=>{
+      if(action==='get_config')return {serverUrl:base,version:'test',capabilities:[]};
+      if(action==='cancel'||action==='ui_ready')return {};
+      if(action!=='request'&&action!=='read_resource')throw Error('unexpected native action '+action);
+      if(state.offline)throw Error('离线测试');
+      const response=await api.fetch(args.path,{method:args.method||'GET',headers:{...args.headers,'X-XTYF-Client-Protocol':'1','X-CSRF-Token':csrf},...(args.body!==undefined?{data:args.body}:{})});
+      const headers=response.headers();csrf=headers['x-csrf-token']||csrf;
+      let body=await response.text();
+      if(state.old&&args.path==='/api/client/bootstrap'){
+        const parsed=JSON.parse(body);delete parsed.assets_enabled;body=JSON.stringify(parsed);
+      }
+      return {status:response.status(),headers,body,encoding:'text'};
+    });
+    await page.addInitScript(()=>{if(window===window.top)window.XTYFNative={invoke:(action,args)=>window.__assetsNative(action,args)};});
+    await page.goto(local+'/#/assets');
+    let frame=page.frameLocator('#page-host iframe');
+    // The shell host ID is stable; fail clearly if it changes.
+    if(await page.locator('#page-host').count()===0)frame=page.frameLocator('iframe');
+    await frame.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
+    await frame.getByRole('link',{name:'测试电机 chromium',exact:true}).click();
+    await frame.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
+    const east=frame.locator('.asset-card').filter({has:frame.getByRole('heading',{name:'合成东校区',exact:true})});
+    await east.getByRole('button',{name:'借用',exact:true}).click();
+    state.offline=true;await frame.locator('#asset-save').click();
+    await frame.locator('#asset-form-status').filter({hasText:'结果尚未确认'}).waitFor();
+    assert.equal(await frame.locator('#asset-form [name=quantity]').inputValue(),'1');
+    state.offline=false;await frame.locator('#asset-save').click();
+    await frame.locator('#asset-dialog').waitFor({state:'hidden'});
+    await east.getByText('总量 · 在库 5 / 借出 3',{exact:true}).waitFor();
+    // Restore fixture stock through the real own-loan return API for the next engine.
+    const nativeLoan=(await (await api.get('/api/assets/loans?mine=1')).json()).loans.find(l=>l.quantity===1&&l.outstanding===1);
+    await post('/api/assets/operations',{request_id:crypto.randomUUID(),action:'return',quantity:1,loan_id:nativeLoan.id});
+    assert.deepEqual(remoteHtml,[],'local view must use native API bridge, not remote HTML');
+    state.old=true;await page.goto(local+'/#/');await page.reload();await frame.locator('#workspace-sidebar').waitFor();
+    assert.equal(await frame.locator('#workspace-sidebar a[href="/assets"]').count(),0,'old server hides navigation');
+    await page.evaluate(()=>window.XTYF.navigate('/assets'));
+    await page.getByRole('heading',{name:'服务器暂未启用资产管理'}).waitFor();
+    passed.push(label+': packaged routes, native API simulation, offline draft and retry, old-server capability gate');
     await browser.close();browser=null;
   }
   assert.deepEqual(errors,[]);
@@ -77,4 +145,4 @@ async function main(){
   console.log(JSON.stringify({ok:true,passed}));
 }
 main().catch(async error=>{await recordFailure(error,{output,page,engine:engineName,phase:'assets',passed,pageErrors:errors});console.error(error);process.exitCode=1;})
-  .finally(()=>cleanupResources({browser:()=>browser?.close(),api:()=>api?.dispose(),server:()=>server.kill()}));
+  .finally(()=>cleanupResources({browser:()=>browser?.close(),api:()=>api?.dispose(),server:()=>server.kill(),ui:()=>uiServer?.close()}));

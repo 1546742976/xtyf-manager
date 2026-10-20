@@ -7,6 +7,7 @@
     '/account':['account.html','account'], '/manage':['manage.html','manage','manage_tasks'],
     '/members':['members.html','members','manage_members'], '/discussions':['discussions.html','discussions'],
     '/funds':['funds.html','funds','access_funds'], '/invoices':['invoices.html','invoices'],
+    '/assets':['assets.html','assets'], '/assets/detail':['assets.html','assets'],
     '/admin/mail':['mail_admin.html','mail','manage_mail'],
     '/admin/security':['security.html','security','manage_security']
   };
@@ -145,6 +146,7 @@
     if(bootstrap.authenticated&&key==='/login'){
       setRoute(url.searchParams.get('next')||'/',true,false);return renderRoute();
     }
+    if(key.startsWith('/assets')&&!bootstrap.assets_enabled)return localError('服务器暂未启用资产管理','请联系管理员更新服务器；已有任务和其他业务仍可正常使用。');
     if(entry[2]&&!bootstrap.permissions[entry[2]])return localError('没有访问权限','当前账户不能访问此页面。');
     const taskType=url.searchParams.get('type')==='daily'?'daily':'vehicle',project=url.searchParams.get('project')||'';
     const context={...bootstrap,page:entry[1],task_type:taskType,project_id:taskType==='daily'&&/^[1-9]\d{0,18}$/.test(project)?project:''};

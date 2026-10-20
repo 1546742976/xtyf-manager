@@ -304,6 +304,8 @@ def task_login_destination(candidate):
     """Only supported local task links can survive the login round trip."""
     if not isinstance(candidate, str):
         return '/'
+    if re.fullmatch(r'/assets(?:/detail\?id=[1-9]\d{0,18}|\?view=mine)?', candidate):
+        return candidate
     old_daily = re.fullmatch(r'/daily-projects(?:/([1-9]\d{0,18}))?', candidate)
     if old_daily:
         return '/tasks?type=daily' + ('&project=' + old_daily[1] if old_daily[1] else '')

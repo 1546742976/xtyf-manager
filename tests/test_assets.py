@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -128,6 +129,30 @@ class AssetsTest(unittest.TestCase):
             self.assertEqual(sorted(pool.map(borrow, clients)), [200, 409])
         self.assertEqual(self.stock()["available"], 1)
 
+    def test_aggregate_reads_one_snapshot_during_concurrent_borrow(self):
+        from modules.assets import totals
+        self.op("receive", 10)
+        with app_module.app.app_context():
+            reader = app_module.get_db()
+            changed = []
+            def commit_between_reads(sql):
+                if "SUM(outstanding)" not in sql or changed:
+                    return
+                changed.append(True)
+                with closing(sqlite3.connect(self.path)) as writer, writer:
+                    writer.execute("UPDATE asset_stock SET available=available-1 WHERE item_id=? AND campus_id=?",
+                                   (self.item, self.campus))
+                    writer.execute(
+                        "INSERT INTO asset_loans(item_id,campus_id,member_id,member_name,quantity,outstanding,created_at)"
+                        " VALUES(?,?,?,'并发测试',1,1,'2026-10-20')", (self.item, self.campus, self.member_id))
+            reader.set_trace_callback(commit_between_reads)
+            before = totals(reader)[self.item, self.campus]
+            reader.set_trace_callback(None)
+            after = totals(reader)[self.item, self.campus]
+            self.assertTrue(changed)
+            self.assertEqual((before["available"], before.get("borrowed", 0)), (10, 0))
+            self.assertEqual((after["available"], after["borrowed"]), (9, 1))
+
     def test_own_loans_only_and_return_limit(self):
         self.op("receive")
         loan = self.op("borrow", 3, self.member)["loan_id"]
@@ -146,6 +171,15 @@ class AssetsTest(unittest.TestCase):
             db.commit()
         self.op("receive", client=self.member)
         self.assertTrue(self.member.get("/api/assets/catalog").get_json()["can_manage"])
+        bootstrap = self.member.get("/api/client/bootstrap").get_json()
+        self.assertTrue(bootstrap["assets_enabled"])
+        self.assertTrue(bootstrap["permissions"]["manage_assets"])
+
+    def test_asset_login_links_are_local_and_bounded(self):
+        for target in ("/assets", "/assets?view=mine", "/assets/detail?id=12"):
+            self.assertEqual(app_module.task_login_destination(target), target)
+        for target in ("//evil.test/assets", "/assets/detail?id=-1", "/assets?next=https://evil.test"):
+            self.assertEqual(app_module.task_login_destination(target), "/")
 
     def test_validation_and_type(self):
         for quantity in (0, -1, 1.5, True, "1", 1000000001):
@@ -196,6 +230,19 @@ class AssetsTest(unittest.TestCase):
         self.assertEqual(backup.execute("SELECT available FROM asset_stock WHERE item_id=?", (self.item,)).fetchone()[0], 8)
         self.assertEqual(backup.execute("PRAGMA integrity_check").fetchone()[0], "ok")
 
+    def test_additive_migration_preserves_existing_rows_and_starts_empty(self):
+        with sqlite3.connect(":memory:") as db:
+            db.execute("CREATE TABLE members(id INTEGER PRIMARY KEY,name TEXT)")
+            db.execute("INSERT INTO members VALUES(5,'原成员')")
+            db.execute("CREATE TABLE existing_business(id INTEGER PRIMARY KEY,body TEXT)")
+            db.execute("INSERT INTO existing_business VALUES(7,'原有业务')")
+            migrate_assets(db)
+            migrate_assets(db)
+            self.assertEqual(db.execute("SELECT name FROM members WHERE id=5").fetchone()[0], "原成员")
+            self.assertEqual(db.execute("SELECT body FROM existing_business WHERE id=7").fetchone()[0], "原有业务")
+            for table in ("asset_items", "asset_campuses", "asset_stock", "asset_loans", "asset_events"):
+                self.assertEqual(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+
     def test_auth_csrf_first_password_and_disabled_member(self):
         from flask.testing import FlaskClient
         raw = FlaskClient(app_module.app)
@@ -236,7 +283,7 @@ class AssetsTest(unittest.TestCase):
             queries = []
             db.set_trace_callback(queries.append)
             totals(db)
-            self.assertEqual(len(queries), 3)
+            self.assertEqual(len([q for q in queries if q.startswith("SELECT")]), 3)
         # Snapshots are strings, not links to mutable member display data.
         json.dumps(records, ensure_ascii=False)
 

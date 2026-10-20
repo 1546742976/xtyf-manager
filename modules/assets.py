@@ -204,7 +204,7 @@ def save_catalog(db, data, kind):
         ):
             raise Invalid("仍有库存或未还借单，不能停用", 409)
         if kind == "items" and any(before[k] != fields[k] for k in ("unit", "kind")):
-            if db.execute("SELECT 1 FROM asset_events WHERE item_id=?", (identity,)).fetchone():
+            if db.execute("SELECT 1 FROM asset_events WHERE item_id=? AND action<>'catalog'", (identity,)).fetchone():
                 raise Invalid("已有历史记录，不能改变单位或借还类型", 409)
         db.execute(f"UPDATE {table} SET " + ",".join(f"{k}=?" for k in fields) +
                    ",version=version+1 WHERE id=?", (*fields.values(), identity))
@@ -321,13 +321,20 @@ def paging():
 
 def totals(db):
     # Three aggregate queries, independent of the number of items/campuses.
-    balances = {(r["item_id"], r["campus_id"]): dict(r) for r in db.execute("SELECT * FROM asset_stock")}
-    for r in db.execute("SELECT item_id,campus_id,SUM(outstanding) borrowed FROM asset_loans GROUP BY item_id,campus_id"):
-        balances.setdefault((r["item_id"], r["campus_id"]), {"available": 0, "version": 0})["borrowed"] = r["borrowed"]
-    for r in db.execute("SELECT item_id,campus_id,SUM(consumed_delta) consumed FROM asset_events "
-                        "WHERE item_id IS NOT NULL AND campus_id IS NOT NULL GROUP BY item_id,campus_id"):
-        balances.setdefault((r["item_id"], r["campus_id"]), {"available": 0, "version": 0})["consumed"] = r["consumed"]
-    return balances
+    own_snapshot = not db.in_transaction
+    if own_snapshot:
+        db.execute("BEGIN")
+    try:
+        balances = {(r["item_id"], r["campus_id"]): dict(r) for r in db.execute("SELECT * FROM asset_stock")}
+        for r in db.execute("SELECT item_id,campus_id,SUM(outstanding) borrowed FROM asset_loans GROUP BY item_id,campus_id"):
+            balances.setdefault((r["item_id"], r["campus_id"]), {"available": 0, "version": 0})["borrowed"] = r["borrowed"]
+        for r in db.execute("SELECT item_id,campus_id,SUM(consumed_delta) consumed FROM asset_events "
+                            "WHERE item_id IS NOT NULL AND campus_id IS NOT NULL GROUP BY item_id,campus_id"):
+            balances.setdefault((r["item_id"], r["campus_id"]), {"available": 0, "version": 0})["consumed"] = r["consumed"]
+        return balances
+    finally:
+        if own_snapshot:
+            db.rollback()
 
 
 @bp.get("/api/assets/items")
@@ -337,6 +344,12 @@ def items():
     balances = totals(db)
     campus = request.args.get("campus_id", "")
     query, category = request.args.get("q", "").casefold(), request.args.get("category", "")
+    grouped = {}
+    for (identity, location), stock in balances.items():
+        if not campus or str(location) == campus:
+            summary = grouped.setdefault(identity, {"available": 0, "borrowed": 0, "consumed": 0})
+            for key in summary:
+                summary[key] += stock.get(key, 0)
     values = []
     for r in db.execute("SELECT * FROM asset_items ORDER BY name,specification,id"):
         item = dict(r)
@@ -344,11 +357,10 @@ def items():
             continue
         if category and category != item["category"]:
             continue
-        stocks = [s for (i, c), s in balances.items() if i == item["id"] and (not campus or str(c) == campus)]
-        if campus and not stocks:
+        if campus and item["id"] not in grouped:
             continue
         for k in ("available", "borrowed", "consumed"):
-            item[k] = sum(s.get(k, 0) for s in stocks)
+            item[k] = grouped.get(item["id"], {}).get(k, 0)
         item["total"] = item["available"] + item["borrowed"]
         values.append(item)
     page_number = paging()
