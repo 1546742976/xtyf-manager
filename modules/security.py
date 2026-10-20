@@ -13,7 +13,7 @@ from flask import (Blueprint, current_app, g, jsonify, redirect, render_template
 from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str
 
 bp = Blueprint("security", __name__)
-PERMISSIONS = {"funds.review": "资金审核", "invoices.manage": "发票管理"}
+PERMISSIONS = {"funds.review": "资金审核", "invoices.manage": "发票管理", "assets.manage": "资产管理"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 AUDITED_READS = {"funds.export_csv", "invoices.api_export_download", "invoices.api_export_zip"}
 AUDIT_FIELDS = {"id", "ids", "member_id", "record_type", "amount", "invoice_count",

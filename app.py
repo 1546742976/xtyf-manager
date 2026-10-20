@@ -124,6 +124,10 @@ app.config.setdefault("TASK_ATTACHMENTS_DIR", os.environ.get("TASK_ATTACHMENTS_D
 configure_mail(app)
 
 # ---- 注册子模块蓝图（三个系统共用同一登录会话与页面风格）----
+from modules.assets import bp as assets_bp, migrate_assets
+
+app.register_blueprint(assets_bp)
+app.context_processor(lambda: {"assets_enabled": True})
 app.register_blueprint(funds_bp, url_prefix="/funds")
 app.register_blueprint(invoices_bp, url_prefix="/invoices")
 app.register_blueprint(task_api_bp)
@@ -240,6 +244,7 @@ def init_db():
         migrate_collaboration(db)
         migrate_item_topics(db)
         migrate_security(db)
+        migrate_assets(db)
         migrate_invoice_owners(db)
         migrate_invoice_jobs(db)
         # Hot read paths (dashboard tree, status filters, attachment lookups)
