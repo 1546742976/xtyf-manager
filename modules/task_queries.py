@@ -136,7 +136,7 @@ def task_data(db: sqlite3.Connection) -> tuple[list[JsonObject], list[JsonObject
             boundary = dependency_boundary(predecessor)
             if boundary:
                 if parse_calendar_date(task.get("start_date")) and task["start_date"] < boundary:
-                    warnings.append(f"开始日期早于前置任务“{predecessor['title']}”允许衔接日期 {boundary}（最多提前 2 天）")
+                    warnings.append(f"开始日期早于前置任务“{predecessor['title']}”的默认衔接建议 {boundary}；人工预留允许更早重叠")
             else:
                 warnings.append(f"前置任务“{predecessor['title']}”缺少有效完成日期或截止日期")
         parent = by_id.get(parent_id)

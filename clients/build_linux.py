@@ -106,8 +106,12 @@ def linux_environment(setup=False):
     return cache, env
 
 
-def verify_package(package, target, config, source, executable_source, env, cache):
-    arch, machine = ('arm64', 183) if target == 'deb' else ('x86_64', 62)
+def verify_package(package, target, config, source, executable_source, env, cache, architecture=None):
+    arch = architecture or ('arm64' if target == 'deb' else 'x86_64')
+    if arch not in ('arm64', 'x86_64'):
+        raise ValueError('Unsupported Linux architecture')
+    machine = 183 if arch == 'arm64' else 62
+    package_arch = ('arm64' if arch == 'arm64' else 'amd64') if target == 'deb' else ('aarch64' if arch == 'arm64' else 'x86_64')
     if target == 'deb':
         metadata = [capture(['dpkg-deb', '--field', package, field], env=env)
                     for field in ('Package', 'Version', 'Architecture')]
@@ -116,7 +120,7 @@ def verify_package(package, target, config, source, executable_source, env, cach
         metadata = capture(['rpm', '-qp', '--queryformat', '%{NAME}\n%{VERSION}\n%{ARCH}', package], env=env).splitlines()
         dependencies = capture(['rpm', '-qp', '--requires', package], env=env).splitlines()
         capture(['rpm', '--checksig', package], env=env)
-    if metadata != ['xtyf-manager', config['version'], arch]:
+    if metadata != ['xtyf-manager', config['version'], package_arch]:
         raise RuntimeError(f'Incorrect {target} package metadata: {metadata}')
     settings = json.loads((source / 'tauri.conf.json').read_text(encoding='utf-8'))
     expected_dependencies = settings['bundle']['linux'][target]['depends']
@@ -182,7 +186,7 @@ def verify_package(package, target, config, source, executable_source, env, cach
             build_info = extracted / 'build-info.json'
             run([executable, '--build-info', build_info], env=env)
             info = json.loads(build_info.read_text(encoding='utf-8'))
-            if (info.get('version') != config['version'] or info.get('architecture') != 'x86_64'
+            if (info.get('version') != config['version'] or info.get('architecture') != ('aarch64' if arch == 'arm64' else 'x86_64')
                     or info.get('framework') != 'tauri' or info.get('frontend') != json.loads(manifest.read_text(encoding='utf-8'))):
                 raise RuntimeError('Native build information disagrees with package/frontend metadata')
         result = {

@@ -122,7 +122,7 @@ def pe_machine(path):
         return struct.unpack('<H',stream.read(2))[0]
 
 
-def verify(installer,application,manifest,version,report=None):
+def verify(installer,application,manifest,version,report=None,architecture='x64'):
     installer,application,manifest=(Path(p).resolve() for p in (installer,application,manifest))
     for path in (installer,application,manifest):
         if not path.is_file():raise FileNotFoundError(path)
@@ -149,14 +149,15 @@ def verify(installer,application,manifest,version,report=None):
         if packaged_bytes!=compiled_bytes and not (compiled_bytes.count(marker)==1 and packaged_bytes==compiled_bytes.replace(marker,b'__TAURI_BUNDLE_TYPE_VAR_NSS',1)):
             raise ValueError('NSIS application differs from the compiled release EXE beyond the Tauri package marker')
         if sha256(bundled_manifest)!=manifest_hash:raise ValueError('NSIS frontend manifest differs from the shared frontend build')
-        if pe_machine(bundled_app)!=0x8664:raise ValueError('NSIS application is not x86_64')
+        expected_machine = {'x64':0x8664,'arm64':0xaa64}[architecture]
+        if pe_machine(bundled_app)!=expected_machine:raise ValueError('NSIS application has incorrect PE architecture')
         build_info=target/'extracted-build-info.json'
         run([bundled_app,'--build-info',build_info],timeout=30)
         embedded=json.loads(build_info.read_text(encoding='utf-8-sig'))
         expected=json.loads(manifest.read_text(encoding='utf-8-sig'))
-        if embedded.get('version')!=version or embedded.get('framework')!='tauri' or embedded.get('architecture')!='x86_64':raise ValueError('Extracted application version/framework/architecture mismatch')
+        if embedded.get('version')!=version or embedded.get('framework')!='tauri' or embedded.get('architecture')!=('aarch64' if architecture=='arm64' else 'x86_64'):raise ValueError('Extracted application version/framework/architecture mismatch')
         if embedded.get('frontend')!=expected or expected.get('version')!=version:raise ValueError('Extracted executable embedded frontend manifest mismatch')
-        result={'version':version,'installer':'NSIS','framework':'tauri','architecture':'x64',
+        result={'version':version,'installer':'NSIS','framework':'tauri','architecture':architecture,
                 'clientPayloadVerified':True,'installerPayloadExtracted':True,'nativeExecutableVerified':True,
                 'embeddedFrontendVerified':True,'runtimeUiVerified':False,
                 'installerSha256':sha256(installer),'applicationSha256':executable_hash,
@@ -175,11 +176,12 @@ def main():
     parser.add_argument('--installer',type=Path);parser.add_argument('--application',type=Path)
     parser.add_argument('--manifest',type=Path,default=ROOT/'clients/frontend/dist/asset-manifest.json')
     parser.add_argument('--version');parser.add_argument('--report',type=Path)
+    parser.add_argument('--architecture',choices=('x64','arm64'),default='x64')
     args=parser.parse_args()
     if args.setup:print('WINDOWS_EXTRACTOR_READY',setup());return
     if args.check:print('WINDOWS_EXTRACTOR_READY',find_extractor());return
     if not args.installer or not args.application or not args.version:parser.error('--installer, --application and --version are required')
-    print(json.dumps(verify(args.installer,args.application,args.manifest,args.version,args.report),ensure_ascii=False,indent=2))
+    print(json.dumps(verify(args.installer,args.application,args.manifest,args.version,args.report,args.architecture),ensure_ascii=False,indent=2))
 
 
 if __name__=='__main__':main()

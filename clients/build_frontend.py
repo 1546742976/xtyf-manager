@@ -14,6 +14,10 @@ import shutil
 from pathlib import Path
 
 from jinja2 import Environment, nodes
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from clients.frontend.vendor_dependencies import ensure_vendor_assets
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "clients" / "frontend"
@@ -112,8 +116,6 @@ def adapt_script(text):
 
 
 def adapt_template(name, text):
-    if name in {"_web_app_head.html", "_ios_install.html"}:
-        return ""  # Home-screen installation applies only to the hosted website.
     if name == "_security_head.html":
         text = text.replace('<script src="{{ url_for(\'static\', filename=\'security.js\') }}"></script>', '')
     if name == "funds.html":
@@ -127,6 +129,8 @@ def adapt_template(name, text):
 
 
 def build(output=DIST):
+    # Resolve only exact hashed browser assets, never floating dependencies.
+    ensure_vendor_assets()
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
     env, compiler = Environment(), Compiler()

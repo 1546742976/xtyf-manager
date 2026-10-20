@@ -6,18 +6,6 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 
 ## 安装和升级
 
-### iPhone：Safari 主屏幕网页版
-
-用 Safari 打开 **https://manager.skywalker-rm.online/**，在分享菜单选择“添加到主屏幕”，如有“作为网页 App 打开”选项则保持开启，然后点“添加”。也可在登录页或账户页展开 iPhone 安装指引。主屏幕名称为“巡天御风”，进入后使用网站自身的导航，不增加客户端工具栏。安装操作由 Safari 提供，网站不能代替用户点击系统安装。
-
-此入口复用网站的登录、任务、头像、发票和资金功能，不生成 IPA、不需要 Mac 或开发者签名，也不改变现有四平台安装包版本。首次从主屏幕打开可能需要重新登录。需要联网；不注册 Service Worker、不离线缓存业务页面，继续使用服务端既有的页面 `no-store` 和静态文件重新验证规则。重新打开或主动重载页面获取云端内容，使用期间不强制刷新草稿。
-
-网站保留默认 viewport 安全区域行为和非透明系统状态栏，不使用覆盖刘海的全屏布局。iPhone 主屏幕入口、刘海／底部手势区域和系统文件操作仍需真机验收，桌面 WebKit 手机模拟不能代替真机。
-
-这些声明、图标及安装说明需要随网站源码部署才会在线生效；构建 EXE／APK／DEB／RPM 不会部署网站。普通网页使用不依赖 `/api/client/bootstrap`。参考：[Apple 安装说明](https://support.apple.com/en-lamr/guide/iphone/iphea86e5236/ios)、[WebKit 主屏幕应用说明](https://webkit.org/blog/13878/)。
-
-### 原生客户端
-
 - Windows 10/11 x64：`dist/clients/windows/XTYF-Manager-Setup-<版本>-x64.exe`。NSIS 安装器提供快捷方式和卸载入口；缺少 WebView2 时联网补齐运行时。EXE 未使用发布者证书签名。
 - Android 8.0+：`dist/clients/android/XTYF-Manager-<版本>.apk`。保留包名 `online.skywalker.manager` 和既有发布密钥，递增 versionCode 后覆盖安装。返回使用系统返回键或手势。
 - Ubuntu 22.04 ARM64：`sudo apt install ./XTYF-Manager-<版本>-arm64.deb`。
@@ -103,7 +91,7 @@ python clients/release.py --version 1.0.11 --rebuild-current
 
 ## 本地构建环境
 
-Python 3.9+（前端构建需要 Jinja2）、Node.js/npm、Visual Studio C++ Build Tools、Rust 1.99.1，以及既有 JDK 17+ / Android platform 36 / build-tools 36。Python 业务回归使用项目 `.venv`。
+Python 3.9+（前端构建需要 Jinja2；首次还原第三方资源需访问 npm registry）、Node.js/npm、Visual Studio C++ Build Tools、Rust 1.99.1，以及既有 JDK 17+ / Android platform 36 / build-tools 36。Python 业务回归使用项目 `.venv`。
 
 Windows Rust 安装在项目 `.build-tools/cargo` 与 `.build-tools/rustup`，构建输出位于 `.build-tools/tauri-target-windows`。Tauri CLI 由 `clients/desktop/package-lock.json` 锁定，Rust 依赖由 Cargo.lock 锁定。
 
@@ -118,7 +106,7 @@ $env:RUSTUP_HOME = Join-Path $PWD '.build-tools/rustup'
 npm.cmd ci --prefix clients/desktop --no-audit --no-fund
 python clients/verify_windows.py --setup
 
-# 准备本地前端（供应商资源已固定版本并记录校验值）
+# 准备本地前端（供应商资源固定版本及哈希；首次从锁定 npm 源下载，后续走本地缓存）
 python clients/build_frontend.py
 
 # Linux 首次准备：Ubuntu 22.04 WSL 中安装主机开发库和独立 ARM64 sysroot
@@ -141,12 +129,24 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 
 请独立备份整个 `clients/signing/`，后续覆盖安装需要原密钥和密码文件。密钥、用户数据、数据库、附件和邮件配置不进入客户端安装包。
 
+
+## GitHub Actions 测试安装包（仅供 PR 验收）
+
+现有 [Client validation](../.github/workflows/clients.yml) 在原有前端／Rust／Java 验证通过后，使用 Windows x64／ARM64、Ubuntu 22.04 x64／ARM64 和 Android SDK runner 构建实际客户端。打开 GitHub Actions → **Client validation** → 对应 PR 的运行 → **Artifacts**，获取以下产物：
+
+- `xtyf-client-windows-x64` 和 `xtyf-client-windows-arm64`：两个独立架构的 NSIS `.exe`、安装包验证报告与 SHA-256。
+- `xtyf-client-linux-x64` 和 `xtyf-client-linux-arm64`：分别内含对应架构的 Ubuntu 22.04 `.deb`、Fedora `.rpm`、验证报告与 SHA-256。
+- `xtyf-client-android-test-signed`：一个通用 `.apk` 与 SHA-256。Android 原生层为纯 Java/WebView，没有 `.so` ABI 库，因此该 APK 同时支持 ARM64 和 x86_64，无需生成重复 APK。
+
+产物保留 14 天。CI 只使用 `clients/config.json` 的当前版本，不调用会递增版本的 `clients/release.py`，不创建 Release、不部署服务器、不上传任何密钥。Windows 未进行代码签名；Android 每次运行临时生成不同的测试签名密钥，**不能覆盖安装正式签名 APK，也不保证两次 CI 生成的 APK 可以相互覆盖升级**。这些测试安装包不属于正式交付，不应分发给生产用户。Linux 构建进行实际包结构、ELF 架构与依赖校验，但不能替代 Ubuntu ARM64 和 Fedora 的真机运行验收。
+
 ## 验证边界
 
 - 页面更新协议可用 `python -m unittest discover -s tests -p "test_client_u*.py"` 验证。跨语言测试先运行 `python tests/client_update_fixture.py .build-tools/client-update-fixture`，该命令仅使用临时签名密钥生成公共测试资源，不发布或生成安装包。
 - Android 原生存储与 HTTP 生命周期使用 `python clients/android/test_ui_updates.py --fixture .build-tools/client-update-fixture`；需要现有 JDK、Android SDK 以及固定 SHA-256 的测试用 `org.json:json:20240303` JAR（默认在 `.build-tools/client-ui-updates/android-tests/`）。该检查执行 JVM 断言并编译 Activity，不生成 APK。
 - 桌面原生检查为 `cargo test --manifest-path clients/desktop/Cargo.toml --locked`；本机回环 HTTP 测试应设置 `NO_PROXY=127.0.0.1,localhost`，避免系统代理介入隔离测试服务器。
 - 业务会话由原生网络层管理，保留 CSRF、服务端权限及认证；网站和站外视图不共享原生接口 Cookie 或通用原生命令权限。
+- 桌面端在 Unix 系统使用私有配置目录和会话文件，通过原子替换保存 Cookie。桌面端与 Android 的 API／附件预览响应最多读取 128 MiB，超过限额时返回错误；另存为下载仍使用流式处理。
 - 安装包检查包含本地资源清单、版本、真实架构、Linux 动态依赖和桌面入口；Ubuntu ARM64 的 GLIBC 上限为 2.35。
 - Windows、Android、Ubuntu ARM64、Fedora 的实际启动、导航、上传下载和业务操作分别记录。包检查、APK 签名与对齐通过不能替代目标系统运行验证。
 - 交付记录中的运行验证仅在确实执行后标记通过。模拟器测试与真机测试分别说明；未部署服务器不等于线上业务已经验收。
@@ -155,4 +155,4 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 
 ## 应用图标源文件
 
-客户端图标使用 `static/brand/xtyf-red-blue.jpg` 中的原始红蓝队徽。在安装好固定版本的 Tauri CLI 后，运行 `python clients/build_icons.py` 可按原比例放入白底方形画布，生成桌面的 ICO、128/256 px PNG 和 Android 的 512 px PNG。Android 保留 `@drawable/ic_launcher` 入口，通过 `drawable-nodpi` 中的高清图缩放显示；图标留有边距，不拉伸队徽。此命令仅更新图标资源，不修改版本、不生成安装包；已安装客户端要在下次打包安装后才会使用新图标。
+原始彩色图标以透明 SVG 形式保存在 `clients/assets/xtyf-logo.svg`。旧 JPEG 转为白色方形图标时带来的上下白边已移除。图标只保留透明安全间距；桌面 PNG/ICO 与 Android 512px 启动图标属于 **构建输出**，由 `python clients/build_icons.py` 调用固定版本 Tauri CLI 生成，不进入 Git。首次运行前安装依赖：`npm ci --prefix clients/desktop`。所有 Actions 打包任务都会重新生成同一份图标；不会拿旧二进制图标冒充修复版本。

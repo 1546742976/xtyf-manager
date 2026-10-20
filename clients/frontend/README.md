@@ -17,7 +17,7 @@
 
 ## 固定依赖
 
-`vendor-lock.json` 记录 Bootstrap 5.3.3、Bootstrap Icons 1.11.3、PDF.js 5.4.624 的 npm 官方来源、SHA-512 和各文件 SHA-256。普通构建不联网，先验证本地文件的锁定哈希。维护者更新版本时才运行 `python clients/frontend/vendor_dependencies.py`，并审阅锁文件和上游许可。`vendor/` 中保留相应许可文件。
+`vendor-lock.json` 记录 Bootstrap 5.3.3、Bootstrap Icons 1.11.3、PDF.js 5.4.624 的 npm 官方来源、SHA-512 和各文件 SHA-256。第三方资源不再逐文件提交到 Git；构建首次运行时，从锁定的 npm 官方地址获取 tarball，先校验 SHA-512，再校验每个资源的 SHA-256，并缓存于被 Git 忽略的 `vendor/`。随后构建离线可用；新机器或清空缓存后需联网一次。构建后的 Windows／Linux／Android 安装包仍内置全部 PDF.js 资源、字体与许可文件，运行时不依赖 npm。需要离线构建时，可提前执行 `python clients/frontend/vendor_dependencies.py` 准备已校验缓存。维护者更新依赖版本时，才运行 `python clients/frontend/vendor_dependencies.py --refresh-lock` 并审阅锁文件与上游许可。
 
 ## 验证
 

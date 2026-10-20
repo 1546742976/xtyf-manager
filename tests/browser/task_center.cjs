@@ -265,6 +265,7 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     }
     checks.push('member task list scrolls internally and fits 375/390/760/761/767/768/1280/1864 widths');
 
+    await page.locator('#modal [data-close]').click();
     for(const width of [375,390,767,768,850,1280,1606]) {
       await page.setViewportSize({width,height:900});await page.goto(base+'/');await page.locator('#daily-dashboard .daily-card').waitFor();
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'dashboard overflow '+width);

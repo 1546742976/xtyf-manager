@@ -64,7 +64,7 @@ class TestTaskSchedule(unittest.TestCase):
                                parent_id=visual, predecessor_ids=[visual, electrical])
         downstream = self.task(self.vision, '2026-10-16', '2026-10-16', parent_id=mechanical)
         before = self.tasks()
-        preview = self.preview()
+        preview = self.preview(base_date='2026-10-22', task_ids=[mechanical, downstream])
         rows = self.rows(preview)
         self.assertTrue(preview['can_apply'], preview)
         self.assertEqual(rows[mechanical]['duration_days'], 3)
@@ -89,7 +89,8 @@ class TestTaskSchedule(unittest.TestCase):
         successor = self.task(self.electrical, '2026-10-15', '2026-10-15', parent_id=predecessor)
         row = self.rows(self.preview())[successor]
         self.assertEqual(row['duration_days'], 1)
-        self.assertEqual(row['after'], {'start_date': '2026-10-20', 'due_date': '2026-10-20'})
+        self.assertEqual(row['after'], {'start_date': '2026-10-15', 'due_date': '2026-10-15'})
+        self.assertTrue(any(item.get('kind') == 'dependency_early_reservation' for item in self.preview()['warnings']))
 
     def test_base_date_defaults_beijing_and_never_advances_existing_dates(self):
         past = self.task(self.mechanical, '2026-10-14', '2026-10-16')
@@ -141,7 +142,7 @@ class TestTaskSchedule(unittest.TestCase):
         predecessor = self.task(self.mechanical)
         successor = self.task(self.electrical, '2026-10-15', '2026-10-17', parent_id=predecessor)
         self.assertFalse(self.preview(task_ids=[])['can_apply'])
-        preview = self.preview(task_ids=[successor])
+        preview = self.preview(base_date='2026-10-20', task_ids=[successor])
         self.assertEqual(self.rows(preview)[successor]['after']['start_date'], '2026-10-20')
         self.assertEqual(self.apply(preview).status_code, 200)
         self.assertEqual(self.tasks()[predecessor]['start_date'], '2026-10-14')
@@ -172,12 +173,13 @@ class TestTaskSchedule(unittest.TestCase):
     def test_completed_predecessor_uses_actual_completion_then_plan_fallback(self):
         completed = self.task(self.mechanical, '2026-10-14', '2026-10-30', status='已完成')
         successor = self.task(self.electrical, '2026-10-15', '2026-10-17', parent_id=completed)
+        self.sql("UPDATE tasks SET start_date='',due_date='' WHERE id=?", (successor,))
         self.sql('UPDATE tasks SET completed_at=? WHERE id=?', ('2026-10-20 12:00:00', completed))
-        preview = self.preview()
+        preview = self.preview(durations={str(successor): 3})
         self.assertEqual(self.rows(preview)[successor]['after']['start_date'], '2026-10-18')
         for actual in (None, '2026-10-20 nonsense'):
             self.sql('UPDATE tasks SET completed_at=? WHERE id=?', (actual, completed))
-            preview = self.preview()
+            preview = self.preview(durations={str(successor): 3})
             self.assertEqual(self.rows(preview)[successor]['after']['start_date'], '2026-10-28')
             self.assertTrue(any('实际完成日期' in warning['message'] for warning in preview['warnings']))
 
@@ -185,30 +187,33 @@ class TestTaskSchedule(unittest.TestCase):
         second = self.admin.post('/api/projects', json={'name': '外部车组' + self.marker}).get_json()['id']
         external = self.task(self.mechanical, end='2026-10-25', project_id=second)
         child = self.task(self.electrical, '2026-10-15', '2026-10-17', parent_id=external)
-        preview = self.preview()
+        self.sql("UPDATE tasks SET start_date='',due_date='' WHERE id=?", (child,))
+        preview = self.preview(durations={str(child): 3})
         row = self.rows(preview)[child]
         self.assertEqual(row['after']['start_date'], '2026-10-23')
         self.assertTrue(row['predecessors'][0]['external'])
         self.sql('UPDATE tasks SET due_date=? WHERE id=?', ('2026-10-26', external))
         self.assertEqual(self.apply(preview).status_code, 409)
-        preview = self.preview()
+        preview = self.preview(durations={str(child): 3})
         ancestor = self.task(self.vision, end='2026-10-14', project_id=second)
         self.sql('INSERT INTO task_dependencies(task_id,predecessor_id) VALUES(?,?)', (external, ancestor))
         self.assertEqual(self.apply(preview).status_code, 409)
         before = self.tasks()[external]
-        preview = self.preview()
+        preview = self.preview(durations={str(child): 3})
         self.assertEqual(self.apply(preview).status_code, 200)
         self.assertEqual(self.tasks()[external], before)
 
-    def test_local_shift_cannot_invalidate_intermediate_external_fixed_dates(self):
+    def test_local_shift_warns_for_intermediate_external_reservations(self):
         first = self.task(self.mechanical)
         second = self.admin.post('/api/projects', json={'name': '外部中间车组' + self.marker}).get_json()['id']
         external = self.task(self.electrical, '2026-10-20', '2026-10-25', project_id=second, parent_id=first)
         last = self.task(self.vision, '2026-10-23', '2026-10-25', parent_id=external)
         preview = self.preview(base_date='2026-11-01')
-        self.assertFalse(preview['can_apply'])
-        self.assertEqual(self.rows(preview)[last]['state'], 'conflict')
-        self.assertIsNone(self.rows(preview)[last]['predecessors'][0]['boundary_date'])
+        self.assertTrue(preview['can_apply'], preview)
+        self.assertEqual(self.rows(preview)[last]['after']['start_date'], '2026-11-01')
+        self.assertIsNotNone(self.rows(preview)[last]['predecessors'][0]['boundary_date'])
+        self.assertTrue(any(w.get('task_id') == external and w.get('kind') == 'dependency_early_reservation'
+                            for w in preview['warnings']))
         self.assertEqual(self.tasks()[first]['start_date'], '2026-10-14')
 
     def test_cycles_invalid_cancelled_and_missing_date_predecessors_block(self):
@@ -226,12 +231,15 @@ class TestTaskSchedule(unittest.TestCase):
         self.sql("UPDATE tasks SET deleted_at=NULL,start_date='',due_date='' WHERE id=?", (predecessor,))
         self.assertFalse(self.preview(task_ids=[child])['can_apply'])
 
-    def test_protected_conflict_blocks_batch_until_explicitly_selected(self):
+    def test_protected_early_reservation_is_warning_not_blocker(self):
         predecessor = self.task(self.mechanical, '2026-10-20', '2026-10-25')
         fixed = self.task(self.electrical, '2026-10-14', '2026-10-16', parent_id=predecessor, schedule_locked=True)
         preview = self.preview()
-        self.assertFalse(preview['can_apply'])
-        self.assertEqual(self.rows(preview)[fixed]['state'], 'conflict')
+        self.assertTrue(preview['can_apply'], preview)
+        self.assertEqual(self.rows(preview)[fixed]['state'], 'protected')
+        self.assertEqual(self.rows(preview)[fixed]['after']['start_date'], '2026-10-14')
+        self.assertTrue(any(w.get('kind') == 'dependency_early_reservation' and w['task_id'] == fixed
+                            for w in preview['warnings']))
         self.assertTrue(self.preview(task_ids=[predecessor, fixed])['can_apply'])
 
     def test_owner_overlap_warns_without_automatic_resource_scheduling(self):
@@ -246,7 +254,8 @@ class TestTaskSchedule(unittest.TestCase):
     def test_date_overflow_blocks_entire_apply(self):
         predecessor = self.task(self.mechanical, '9999-12-31', '9999-12-31')
         child = self.task(self.electrical, '2026-10-14', '2026-10-15', parent_id=predecessor)
-        preview = self.preview()
+        self.sql("UPDATE tasks SET start_date='',due_date='' WHERE id=?", (child,))
+        preview = self.preview(durations={str(child): 5})
         self.assertFalse(preview['can_apply'])
         self.assertEqual(self.rows(preview)[child]['state'], 'conflict')
         self.assertEqual(self.tasks()[child]['version'], 1)

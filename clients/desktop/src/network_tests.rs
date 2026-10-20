@@ -77,6 +77,21 @@ fn echo(request: Incoming) -> Outgoing {
 fn response_json(value: &Value) -> Value { serde_json::from_str(value["body"].as_str().unwrap()).unwrap() }
 
 #[test]
+fn bounded_api_bodies_preserve_errors_and_reject_oversized_responses() {
+    let server = LocalServer::start(|_| Outgoing::text(403, "rejected"));
+    let client = Client::new();
+    tauri::async_runtime::block_on(async {
+        let response = client.get(&server.origin).send().await.unwrap();
+        assert_eq!(updates::bounded_body(response, 8).await.unwrap(), b"rejected");
+        let response = client.get(&server.origin).send().await.unwrap();
+        assert!(updates::bounded_body(response, 7).await.is_err());
+        // The update channel continues rejecting non-successful HTTP statuses.
+        let response = client.get(&server.origin).send().await.unwrap();
+        assert!(updates::bounded_response(response, 8).await.is_err());
+    });
+}
+
+#[test]
 fn cookies_csrf_rotation_persistence_and_header_boundary() {
     let server = LocalServer::start(|request| match request.path.as_str() {
         "/bootstrap" => Outgoing::text(200, "boot").with("Set-Cookie", "session=synthetic-login; Path=/; Max-Age=3600; HttpOnly").with("X-CSRF-Token", "token-1"),
@@ -100,6 +115,12 @@ fn cookies_csrf_rotation_persistence_and_header_boundary() {
         let restarted = state(&server.origin, &scratch.0);
         let echoed = response_json(&call(&restarted, request).await);
         assert_eq!(echoed["headers"]["cookie"], "session=synthetic-login"); assert_eq!(echoed["headers"]["x-csrf-token"], "token-after-restart");
+        let session = restarted.session(&server.origin).unwrap();
+        let _: CookieStore = serde_json::from_slice(&fs::read(&session.path).unwrap()).unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&session.path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
     });
 }
 

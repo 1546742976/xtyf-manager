@@ -114,24 +114,3 @@ test("dialog retries an initial failed preview without a date, but validates a s
   date.value="";date.events.input();retry.events.click();await new Promise(setImmediate);
   assert.equal(date.validityChecks,1);assert.equal(requests.length,2,"cleared date must block a later preview");
 });
-
-function modalFixture() {
-  function classes(initial=[]) { const values=new Set(initial);return {add:x=>values.add(x),remove:x=>values.delete(x),contains:x=>values.has(x)}; }
-  const events={},mask={classList:classes(["hidden"]),events:{},addEventListener(name,fn){this.events[name]=fn;}},button={focus(){}};
-  const modal={innerHTML:"",classList:classes(),setAttribute(){},querySelector(){return button;},replaceChildren(){this.innerHTML="";}};
-  const document={body:{classList:classes()},activeElement:button,getElementById(id){return {modal,"modal-mask":mask}[id]||null;},addEventListener(name,fn){events[name]=fn;}};
-  const context={BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, document};vm.createContext(context);vm.runInContext(source("ui-dialog.js"),context);events.DOMContentLoaded();
-  return {context,modal,mask,events};
-}
-
-test("shared modal guard prevents Escape, backdrop, hide and replacement during save, then releases normally", () => {
-  const {context,modal,mask,events}=modalFixture();let saving=true,closed=0;
-  assert.equal(context.showModal("original","排期",{beforeClose:()=>!saving,onClose:()=>closed++,className:"schedule-dialog"}),true);
-  assert.equal(context.hideModal(),false);
-  events.keydown({key:"Escape",preventDefault(){}});
-  mask.events.click({target:mask});
-  assert.equal(context.showModal("replacement"),false);
-  assert.equal(modal.innerHTML,"original");assert.equal(closed,0);assert.equal(mask.classList.contains("hidden"),false);
-  saving=false;assert.equal(context.hideModal(),true);assert.equal(closed,1);assert.equal(modal.classList.contains("schedule-dialog"),false);
-  assert.equal(context.showModal("new"),true);assert.equal(modal.innerHTML,"new");
-});

@@ -61,18 +61,18 @@ function element(tag = 'div') {
   };
 }
 
-async function startShell(bootstrap) {
+async function startShell(bootstrap, readyState = 'complete') {
   const elements = new Map();
   const get = id => {
     if (!elements.has(id)) elements.set(id, element());
     return elements.get(id);
   };
-  const { context } = loadBridge(async (_command, { action }) => {
+  const { context, listeners } = loadBridge(async (_command, { action }) => {
     if (action === 'get_config') return { serverUrl: 'https://server.invalid', version: 'test' };
     return bootstrap();
   });
   Object.assign(context, {
-    document: { getElementById: get, createElement: element, addEventListener() {} },
+    document: { readyState, getElementById: get, createElement: element, addEventListener() {} },
     location: { protocol: 'https:', host: 'tauri.localhost', hash: '' },
     history: { replaceState() {}, pushState() {} },
     XTYFTemplates: { render: () => '<html><head></head><body></body></html>' },
@@ -81,8 +81,21 @@ async function startShell(bootstrap) {
   vm.runInContext(source('connection-runtime.js'), context, { filename: 'connection-runtime.js' });
   vm.runInContext(source('shell.js'), context, { filename: 'shell.js' });
   await new Promise(resolve => setImmediate(resolve));
-  return { context, get };
+  return { context, get, listeners };
 }
+
+test('fast incompatible bootstrap waits for the initial local document to load', async () => {
+  let requests = 0;
+  const { get, listeners } = await startShell(async () => {
+    requests++;
+    return { status: 404, body: '<html>Old server</html>' };
+  }, 'loading');
+  assert.equal(requests, 0);
+  assert.equal(get('page-host').children[0].tag, 'iframe');
+  await listeners.get('load')();
+  assert.equal(requests, 1);
+  assert.equal(get('page-host').children[0].children[0].textContent, '服务器需要更新');
+});
 
 test('local bootstrap failure displays the actual native error', async () => {
   const { get } = await startShell(async () => { throw '禁止向站外地址转发业务请求'; });

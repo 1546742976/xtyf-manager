@@ -17,19 +17,22 @@ SOURCE = CLIENT / 'android'
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--jdk', type=Path, default=next((ROOT / '.build-tools/jdk21').glob('jdk-*'), None))
-    parser.add_argument('--sdk', type=Path, default=ROOT / '.build-tools/android')
+    parser.add_argument('--jdk', type=Path, default=(Path(os.environ['JAVA_HOME']) if os.environ.get('JAVA_HOME') else next((ROOT / '.build-tools/jdk21').glob('jdk-*'), None)))
+    parser.add_argument('--sdk', type=Path, default=(Path(os.environ['ANDROID_HOME']) if os.environ.get('ANDROID_HOME') else ROOT / '.build-tools/android'))
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'dist/clients/android')
     parser.add_argument('--skip-frontend-build', action='store_true', help='Use the shared frontend already built by release.py')
     args = parser.parse_args()
     if not args.jdk:
         parser.error('Provide --jdk pointing to a JDK 17 or newer')
-    tool = next(args.sdk.rglob('aapt2.exe'), None)
-    platform = next(args.sdk.rglob('android.jar'), None)
-    if not tool or not platform:
-        parser.error('Provide --sdk containing Android build-tools 36 and platform 36')
-    tools = tool.parent
-    java = args.jdk / 'bin/java.exe'
+    # Use the *exact* SDK components declared by this project, on both Windows
+    # and Linux hosted Actions runners. Never accidentally select API 35/older.
+    extension = '.exe' if os.name == 'nt' else ''
+    tools = args.sdk / 'build-tools' / '36.0.0'
+    tool = tools / ('aapt2' + extension)
+    platform = args.sdk / 'platforms' / 'android-36' / 'android.jar'
+    if not tool.is_file() or not platform.is_file():
+        parser.error('Provide --sdk containing Android build-tools 36.0.0 and platform android-36')
+    java = args.jdk / 'bin' / ('java' + extension)
     env = dict(os.environ, JAVA_HOME=str(args.jdk))
     def run(*command):
         # Keep SDK input/output arguments relative for portability on Windows.
@@ -52,6 +55,8 @@ def main():
         if not asset.is_relative_to(frontend.resolve()) or not asset.is_file() or hashlib.sha256(asset.read_bytes()).hexdigest() != digest:
             raise RuntimeError(f'Shared frontend asset is missing or changed: {name}')
     out = args.output_dir.resolve()
+    # The raster launcher icon is generated from the checked-in borderless SVG.
+    subprocess.run([sys.executable, str(CLIENT / 'build_icons.py')], cwd=ROOT, check=True)
     work = (SOURCE / 'build').resolve()
     # Compile from an empty directory so removed Java/DEX classes cannot survive.
     if work.parent != SOURCE.resolve():
@@ -72,8 +77,8 @@ def main():
     run(tool, 'compile', '--dir', SOURCE / 'res', '-o', work / 'resources.zip')
     run(tool, 'link', '-o', work / 'resources.apk', '-I', platform, '--manifest', work / 'AndroidManifest.xml', '--java', work / 'gen', work / 'resources.zip')
     sources = list((SOURCE / 'src').rglob('*.java')) + list((work / 'gen').rglob('*.java'))
-    run(args.jdk / 'bin/javac.exe', '-encoding', 'UTF-8', '--release', '8', '-classpath', platform, '-d', work / 'classes', *sources)
-    run(args.jdk / 'bin/jar.exe', 'cf', work / 'classes.jar', '-C', work / 'classes', '.')
+    run(args.jdk / 'bin' / ('javac' + extension), '-encoding', 'UTF-8', '--release', '8', '-classpath', platform, '-d', work / 'classes', *sources)
+    run(args.jdk / 'bin' / ('jar' + extension), 'cf', work / 'classes.jar', '-C', work / 'classes', '.')
     run(java, '-cp', tools / 'lib/d8.jar', 'com.android.tools.r8.D8', '--release', '--min-api', '26', '--lib', platform, '--output', work / 'dex', work / 'classes.jar')
     with zipfile.ZipFile(work / 'resources.apk') as base, zipfile.ZipFile(work / 'unsigned.apk', 'w') as apk:
         apk.write(update_public_key, 'assets/update-public-key.pem', compress_type=zipfile.ZIP_DEFLATED)
@@ -81,7 +86,7 @@ def main():
         for dex in (work / 'dex').glob('*.dex'): apk.write(dex, dex.name, compress_type=zipfile.ZIP_DEFLATED)
         for name in sorted([*asset_manifest['files'], 'asset-manifest.json']):
             apk.write(frontend / name, 'assets/frontend/' + name, compress_type=zipfile.ZIP_DEFLATED)
-    run(tools / 'zipalign.exe', '-f', '-p', '4', work / 'unsigned.apk', work / 'aligned.apk')
+    run(tools / ('zipalign' + extension), '-f', '-p', '4', work / 'unsigned.apk', work / 'aligned.apk')
     signing = CLIENT / 'signing'
     signing.mkdir(exist_ok=True)
     password_path = signing / 'android-password.txt'
@@ -90,11 +95,11 @@ def main():
     if not password_path.exists(): password_path.write_text(secrets.token_urlsafe(36), encoding='ascii')
     env['XTYF_KEY_PASSWORD'] = password_path.read_text(encoding='ascii').strip()
     if not key.exists():
-        run(args.jdk / 'bin/keytool.exe', '-genkeypair', '-keystore', key, '-storetype', 'JKS', '-alias', 'xtyf-manager', '-keyalg', 'RSA', '-keysize', '3072', '-validity', '10000', '-storepass:env', 'XTYF_KEY_PASSWORD', '-keypass:env', 'XTYF_KEY_PASSWORD', '-dname', 'CN=XTYF Manager, OU=Team, O=XTYF, C=CN')
+        run(args.jdk / 'bin' / ('keytool' + extension), '-genkeypair', '-keystore', key, '-storetype', 'JKS', '-alias', 'xtyf-manager', '-keyalg', 'RSA', '-keysize', '3072', '-validity', '10000', '-storepass:env', 'XTYF_KEY_PASSWORD', '-keypass:env', 'XTYF_KEY_PASSWORD', '-dname', 'CN=XTYF Manager, OU=Team, O=XTYF, C=CN')
     apk = out / f'XTYF-Manager-{config["version"]}.apk'
     run(java, '-jar', tools / 'lib/apksigner.jar', 'sign', '--ks', key, '--ks-key-alias', 'xtyf-manager', '--ks-pass', 'env:XTYF_KEY_PASSWORD', '--key-pass', 'env:XTYF_KEY_PASSWORD', '--v4-signing-enabled', 'false', '--out', apk, work / 'aligned.apk')
     run(java, '-jar', tools / 'lib/apksigner.jar', 'verify', '--verbose', '--print-certs', apk)
-    run(tools / 'zipalign.exe', '-c', '-v', '4', apk)
+    run(tools / ('zipalign' + extension), '-c', '-v', '4', apk)
     print(f'APK: {apk}\nSHA256: {hashlib.sha256(apk.read_bytes()).hexdigest()}')
 
 if __name__ == '__main__': main()

@@ -5,7 +5,7 @@ use futures_util::{StreamExt, FutureExt};
 use reqwest::{header, multipart, Client, Method};
 use reqwest_cookie_store::{CookieStore, CookieStoreMutex};
 use serde_json::{json, Value};
-use std::{collections::HashMap, fs, io::{BufReader, BufWriter, Write}, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
+use std::{collections::HashMap, fs, io::BufReader, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
 use tauri::{Manager, State, WebviewUrl};
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
@@ -38,6 +38,20 @@ fn text<'a>(value: &'a Value, key: &str) -> &'a str { value.get(key).and_then(Va
 fn smoke_directory() -> Option<PathBuf> {
     #[cfg(debug_assertions)] { std::env::var_os("XTYF_SMOKE_DIR").map(PathBuf::from) }
     #[cfg(not(debug_assertions))] { None }
+}
+fn private_directory(directory: &std::path::Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(directory)?;
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 fn normalize_server(input: &str) -> Result<String, String> {
     let url = Url::parse(input.trim()).map_err(|_| "请输入完整的 HTTP/HTTPS 网站根地址")?;
@@ -88,10 +102,12 @@ impl Session {
             *self.csrf.lock().unwrap() = token.to_string();
         }
         let cookies = self.cookies.lock().unwrap();
-        let file = fs::File::create(&self.path).map_err(|e| e.to_string())?;
-        let mut writer = BufWriter::new(file);
-        serde_json::to_writer(&mut writer, &*cookies).map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())
+        // NamedTempFile is private on Unix; publish only a complete cookie store.
+        let mut file = tempfile::NamedTempFile::new_in(self.path.parent().ok_or("会话目录无效")?).map_err(|e| e.to_string())?;
+        serde_json::to_writer(&mut file, &*cookies).map_err(|e| e.to_string())?;
+        file.as_file().sync_all().map_err(|e| e.to_string())?;
+        file.persist(&self.path).map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 async fn send_request(state: &AppState, args: &Value) -> Result<reqwest::Response, String> {
@@ -153,7 +169,9 @@ async fn response_value(response: reqwest::Response, binary: bool) -> Result<Val
     let status = response.status().as_u16();
     let headers: HashMap<String, String> = response.headers().iter().filter(|(k,_)| *k != header::SET_COOKIE)
         .filter_map(|(k,v)| v.to_str().ok().map(|v|(k.to_string(),v.to_string()))).collect();
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    // Covers the server's 100 MiB attachment limit without unbounded IPC bodies.
+    // Error responses still reach the UI with their original status and body.
+    let bytes = updates::bounded_body(response, 128 * 1024 * 1024).await?;
     Ok(json!({"status":status,"headers":headers,"body":if binary {STANDARD.encode(&bytes)} else {String::from_utf8_lossy(&bytes).into_owned()},"encoding":if binary {"base64"} else {"text"}}))
 }
 async fn pick_files(state: &AppState, args: &Value) -> Result<Value, String> {
@@ -305,7 +323,7 @@ fn main() {
     tauri::Builder::default().invoke_handler(tauri::generate_handler![native_call]).setup(|app|{
         app.remove_menu()?;
         let directory=smoke_directory().unwrap_or(app.path().app_config_dir()?);
-        fs::create_dir_all(&directory)?;
+        private_directory(&directory)?;
         let defaults:Value=serde_json::from_str(include_str!("../../config.json"))?;
         let saved=fs::read(directory.join("server.json")).ok().and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok()).and_then(|v|normalize_server(text(&v,"serverUrl")).ok());
         let server=saved.or_else(legacy_server).unwrap_or_else(||text(&defaults,"serverUrl").to_string());
@@ -329,6 +347,17 @@ mod network_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn application_directory_restricts_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("client");
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        private_directory(&directory).unwrap();
+        assert_eq!(fs::metadata(&directory).unwrap().permissions().mode() & 0o777, 0o700);
+    }
     #[test] fn server_validation(){
         assert_eq!(normalize_server(" http://127.0.0.1:8520/ ").unwrap(),"http://127.0.0.1:8520");
         for input in ["file:///a","javascript:alert(1)","https://u:p@example.com","https://example.com/a","https://example.com/?a=b","https://example.com/#x",""]{assert!(normalize_server(input).is_err(),"{input}");}

@@ -28,13 +28,19 @@ dist/
 mail.env
 data/mail-preview/
 
-# Local client builds and signing material
+# Client signing secrets and generated build resources belong to this stage.
 .build-tools/
-clients/windows/node_modules/
-clients/android/build/
 clients/signing/
 clients/desktop/node_modules/
 clients/desktop/target/
 clients/desktop/gen/schemas/
+clients/android/build/
 clients/frontend/dist/
+# Icons are compiled from clients/assets/xtyf-logo.svg, not committed rasters.
+clients/desktop/icons/icon.ico
+clients/desktop/icons/128x128.png
+clients/desktop/icons/256x256.png
+clients/android/res/drawable-nodpi/xtyf_launcher.png
+# Restored on demand from npm tarballs pinned in vendor-lock.json.
+clients/frontend/vendor/
 client-ui-release/

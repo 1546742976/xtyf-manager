@@ -13,3 +13,6 @@
 *.ttf binary
 *.jks binary
 *.7z binary
+
+# Locked third-party resources must match vendor-lock.json on every platform.
+clients/frontend/vendor/** -text

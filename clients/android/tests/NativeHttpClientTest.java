@@ -89,8 +89,16 @@ public final class NativeHttpClientTest {
         server.createContext("/api/client/logout", exchange -> send(exchange, 200, "logged-out"));
         server.createContext("/unauthorized", exchange -> send(exchange, 401, "unauthorized"));
         server.createContext("/slow", exchange -> {
-            exchange.sendResponseHeaders(200, 1024); slowStarted.countDown();
-            try { slowFinished.await(10, TimeUnit.SECONDS); exchange.getResponseBody().write(new byte[1024]); } catch (Exception ignored) {} finally { exchange.close(); }
+            exchange.sendResponseHeaders(200, 1024 * 1000);
+            // Keep bytes flowing: HttpURLConnection.disconnect may drain a pending
+            // read, so the server must not wait for disconnect before sending data.
+            try {
+                for (int chunk = 0; chunk < 1000; chunk++) {
+                    exchange.getResponseBody().write(new byte[1024]);
+                    exchange.getResponseBody().flush();
+                    if (slowFinished.await(20, TimeUnit.MILLISECONDS)) break;
+                }
+            } catch (Exception ignored) {} finally { exchange.close(); }
         });
         server.start();
         try {
@@ -139,7 +147,7 @@ public final class NativeHttpClientTest {
             get(restored, "/delete-cookie"); check(get(restored, "/echo").startsWith("GET|null|"), "Honor cookie deletion");
             get(restored, "/bootstrap"); get(restored, "/api/client/logout");
             check("GET|null|null|1|".equals(get(new NativeHttpClient(origin, saved.get(), saved::set), "/echo")), "Logout clears persisted cookie and CSRF");
-            Future<?> pending = pool.submit(() -> { try { restored.request("/slow", "GET", Collections.emptyMap(), null, "slow", (s,h,input) -> NativeHttpClient.copy(input, new ByteArrayOutputStream())); throw new AssertionError("Cancellation must fail"); } catch (IOException expected) {} });
+            Future<?> pending = pool.submit(() -> { try { restored.request("/slow", "GET", Collections.emptyMap(), null, "slow", (s,h,input) -> { slowStarted.countDown(); NativeHttpClient.copy(input, new ByteArrayOutputStream()); }); throw new AssertionError("Cancellation must fail"); } catch (IOException expected) {} });
             check(slowStarted.await(5, TimeUnit.SECONDS), "Slow request started"); restored.cancel("slow"); slowFinished.countDown(); pending.get(5, TimeUnit.SECONDS); assertions++;
             restored.cancelAll(); fails(() -> get(restored, "/echo"), "Server switch retires queued old requests");
             fails(() -> restored.probe("retired-probe", (s,h,i) -> {}), "Server switch also retires connection probes");

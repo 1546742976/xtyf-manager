@@ -123,7 +123,9 @@ class TestCrossProjectSchedule(unittest.TestCase):
 
     def test_external_predecessor_is_not_duplicated_as_owner_conflict(self):
         external = self.task(external=True, start_date='2026-10-20', due_date='2026-10-22')
-        local = self.task(parent_id=external)
+        # Intentionally overlap the external predecessor without requiring
+        # auto-shifting a separately reserved, valid manual start date.
+        local = self.task(parent_id=external, start_date='2026-10-20', due_date='2026-10-22')
         preview = self.preview()
         warning, = self.overlaps(preview)
         self.assertEqual(warning['related_task_ids'], [local, external])

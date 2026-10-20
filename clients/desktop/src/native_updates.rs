@@ -80,10 +80,21 @@ pub(crate) async fn check_verified(state: &AppState, retry: bool, verify: impl F
 
 fn mime(path: &str) -> &'static str {
     match path.rsplit('.').next().unwrap_or("") {
-        "html" => "text/html; charset=utf-8", "js"|"cjs" => "text/javascript; charset=utf-8",
+        "html" => "text/html; charset=utf-8", "js"|"cjs"|"mjs" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8", "json"|"map" => "application/json", "svg" => "image/svg+xml",
         "png" => "image/png", "jpg"|"jpeg" => "image/jpeg", "webp" => "image/webp", "ico" => "image/x-icon",
         "woff" => "font/woff", "woff2" => "font/woff2", "ttf" => "font/ttf", "wasm" => "application/wasm", _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn signed_pdf_modules_keep_javascript_mime_with_nosniff() {
+        for path in ["vendor/pdfjs/pdf.mjs", "vendor/pdfjs/pdf.worker.mjs", "pdf-viewer.js"] {
+            assert_eq!(super::mime(path), "text/javascript; charset=utf-8");
+        }
+        assert_eq!(super::mime("vendor/pdfjs/wasm/openjpeg.wasm"), "application/wasm");
     }
 }
 

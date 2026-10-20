@@ -224,15 +224,21 @@ def _plan(source: dict, request: object) -> dict:
             bounds.append((pid, _date(boundary)))
             if tid in rows and predecessor["status"] == "已完成" and completion_date(predecessor["completed_at"]) is None:
                 warning(tid, f"已完成前置 #{pid} 缺少实际完成日期，暂按计划截止日期衔接", related_task_ids=[pid])
-        # External ancestors are fixed too. Validate their dependency bounds
-        # after any local predecessors move, then propagate conflicts downstream.
+        # A saved earlier start may reserve preparation before the suggested
+        # two-day handoff. It is not a broken dependency and must not block a
+        # whole batch, including a fixed task in another vehicle group.
+        old_start, old_end = _date(task["start_date"]), _date(task["due_date"])
+        handoff = max((bound for _, bound in bounds), default=None)
+        reserved_overlap = bool(handoff and old_start and old_end and old_start <= old_end and old_start < handoff)
+        if reserved_overlap:
+            warning(tid, "已保存的开始日期早于默认两天衔接建议；保留人工预留，不强制顺延",
+                    kind="dependency_early_reservation", related_task_ids=[pid for pid, _ in bounds],
+                    suggested_start=handoff.isoformat())
+        # Missing dates of fixed predecessors remain a real error; their
+        # dependents cannot safely calculate an automatic handoff.
         if tid not in selected:
-            if bounds:
-                current_start = _date(task["start_date"])
-                if current_start is None:
-                    problem(tid, "未参与调整的任务缺少有效开始日期，无法满足前置约束")
-                elif current_start < max(bound for _, bound in bounds):
-                    problem(tid, "固定或未参与调整的日期早于前置允许的日期；请允许本次调整或修改依赖")
+            if bounds and old_start is None:
+                problem(tid, "未参与调整的任务缺少有效开始日期，无法计算前置衔接")
             continue
         row = rows[tid]
         if row["duration_days"] is None:
@@ -240,8 +246,9 @@ def _plan(source: dict, request: object) -> dict:
             continue
         if tid in invalid:
             continue
-        start_candidates = [base] + [bound for _, bound in bounds]
-        old_start, old_end = _date(task["start_date"]), _date(task["due_date"])
+        # Use dependency bounds for missing/invalid intervals and ordinary
+        # automatic schedules. Existing valid early reservations stay intact.
+        start_candidates = [base] + ([] if reserved_overlap else [bound for _, bound in bounds])
         if old_start:
             start_candidates.append(old_start)
         try:
@@ -259,7 +266,7 @@ def _plan(source: dict, request: object) -> dict:
         row["state"] = "changed" if row["before"] != row["after"] else "unchanged"
         if row["state"] == "changed":
             causes = []
-            if bounds and max(bound for _, bound in bounds) == start:
+            if bounds and not reserved_overlap and max(bound for _, bound in bounds) == start:
                 causes.append("满足前置衔接")
             if base == start:
                 causes.append("不早于基准日期")

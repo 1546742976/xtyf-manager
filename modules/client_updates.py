@@ -16,7 +16,7 @@ MAX_UNPACKED = 256 * 1024 * 1024
 MAX_FILES = 4096
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
-PLATFORMS = {"windows-x86_64", "ubuntu-aarch64", "fedora-x86_64", "android"}
+PLATFORMS = {"windows-x86_64", "windows-aarch64", "ubuntu-x86_64", "ubuntu-aarch64", "fedora-x86_64", "fedora-aarch64", "android"}
 bp = Blueprint("client_updates", __name__, url_prefix="/api/client")
 
 

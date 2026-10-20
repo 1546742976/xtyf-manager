@@ -119,11 +119,29 @@ pub fn compatibility(bundle: &Bundle) -> Result<(), String> {
     if minimum > version(env!("CARGO_PKG_VERSION")).unwrap() { return Err(format!("请先升级客户端至 {} 或更高版本", bundle.min_client_version)); }
     Ok(())
 }
+fn linux_distribution() -> bool {
+    // Read the runtime distro, not the build host: the same ELF may run on
+    // Ubuntu-derived or Fedora-based systems.
+    std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .is_some_and(|os| os.lines().any(|line| line.trim() == "ID=fedora" || line.trim() == "ID=\"fedora\""))
+}
 pub fn platform() -> &'static str {
-    if cfg!(target_os = "windows") { "windows-x86_64" } else if cfg!(target_arch = "aarch64") { "ubuntu-aarch64" } else { "fedora-x86_64" }
+    if cfg!(target_os = "windows") {
+        if cfg!(target_arch = "aarch64") { "windows-aarch64" } else { "windows-x86_64" }
+    } else if linux_distribution() {
+        if cfg!(target_arch = "aarch64") { "fedora-aarch64" } else { "fedora-x86_64" }
+    } else if cfg!(target_arch = "aarch64") {
+        "ubuntu-aarch64"
+    } else {
+        "ubuntu-x86_64"
+    }
 }
 pub async fn bounded_response(response: reqwest::Response, limit: u64) -> Result<Vec<u8>, String> {
     if !response.status().is_success() { return Err(format!("更新请求失败（{}）", response.status())); }
+    bounded_body(response, limit).await
+}
+pub async fn bounded_body(response: reqwest::Response, limit: u64) -> Result<Vec<u8>, String> {
     if response.content_length().is_some_and(|n| n > limit) { return Err(invalid("下载超过大小限制")); }
     let mut stream = response.bytes_stream(); let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {

@@ -30,9 +30,9 @@ sudo rsync -a --delete \
   --exclude secret.key --exclude backups --exclude __pycache__ \
   --exclude data --exclude mail.env --exclude index.html \
   --exclude .git --exclude .build-tools --exclude dist \
-  --exclude 'clients/*/node_modules' --exclude 'clients/*/target' \
+  --exclude 'clients/*/node_modules' --exclude node_modules --exclude 'clients/*/target' \
   --exclude 'clients/desktop/target' --exclude 'clients/android/build' \
-  --exclude '*.log' \
+  --exclude /clients/signing --exclude .venv --exclude '*.log' \
   "$SRC_DIR"/ "$APP_DIR"/
 sudo chmod +x "$APP_DIR"/deploy/*.sh
 

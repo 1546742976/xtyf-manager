@@ -28,10 +28,9 @@ def run():
     print('Preparing browser session...',flush=True)
     app=app_module.app
     client=app.test_client()
-    initial=client.post('/login',json={'username':'admin','password':'123456'})
+    initial=client.post('/login',json={'username':'admin','password':'ci-test-password-only'})
     assert initial.status_code==200 and initial.get_json()['ok'], 'isolated fixture login failed'
-    rotated=client.post('/api/password',json={'old':'123456','new':'ci-test-password-only'})
-    assert rotated.status_code==200 and rotated.get_json()['ok'], 'isolated fixture password setup failed'
+    # SecurityAwareTestClient completes the real first-login password rotation.
     client.post('/logout')
     content=b'BT /F1 18 Tf 50 750 Td (Packaged PDF preview) Tj ET'
     objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',b'<< /Length '+str(len(content)).encode()+b' >>\nstream\n'+content+b'\nendstream']
@@ -168,6 +167,10 @@ def run():
             page.locator('#client-settings-open').click();page.locator('#server-url').wait_for(state='visible');page.locator('#settings-cancel').click()
             results.append('offline login and server settings')
             state['offline']=False;state['legacy']=True;page.locator('#connection-retry').click()
+            page.locator('#connection-status').filter(has_text='当前输入已保留').wait_for()
+            assert frame.locator('#login-form').is_visible()
+            results.append('incompatible retry preserves the existing local form')
+            page.reload()
             page.get_by_role('heading',name='服务器需要更新').wait_for()
             results.append('old server rejected without loading remote HTML')
             for legacy in ('html200','array200','object200'):

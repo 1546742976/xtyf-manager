@@ -1,5 +1,9 @@
 """Local UI rendering parity and packaged-asset contract checks."""
 import hashlib
+import base64
+import io
+import tarfile
+from unittest import mock
 import html
 import json
 from pathlib import Path
@@ -11,14 +15,11 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from build_frontend import build,adapt_template,adapt_script
+from frontend import vendor_dependencies as vendor
 from jinja2 import DictLoader,Environment
 
 
 class FrontendTests(unittest.TestCase):
-    def test_website_installation_is_not_rendered_in_native_clients(self):
-        for name in ('_web_app_head.html', '_ios_install.html'):
-            self.assertEqual(adapt_template(name, 'website-only markup'), '')
-
     @classmethod
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory()
@@ -77,6 +78,57 @@ class FrontendTests(unittest.TestCase):
         self.assertIn('window.XTYFLocation.href',result)
         self.assertIn('other.location.href',result)
         self.assertIn('window.XTYFHistory.replaceState',result)
+
+
+
+class VendorRestoreTests(unittest.TestCase):
+    def test_missing_assets_are_verified_and_cached_without_repeated_download(self):
+        payload = b'license fixture'
+        archive_io = io.BytesIO()
+        with tarfile.open(fileobj=archive_io, mode='w:gz') as archive:
+            member = tarfile.TarInfo('package/LICENSE')
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+        archive_bytes = archive_io.getvalue()
+        lock = {'packages': {'bootstrap': {
+            'version': '5.3.3',
+            'source': 'https://registry.npmjs.org/bootstrap/-/bootstrap-5.3.3.tgz',
+            'integrity': 'sha512-' + base64.b64encode(hashlib.sha512(archive_bytes).digest()).decode()
+        }}, 'files': {'bootstrap/LICENSE': hashlib.sha256(payload).hexdigest()}}
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'vendor-lock.json').write_text(json.dumps(lock), encoding='utf-8')
+            with mock.patch.object(vendor, 'HERE', root), mock.patch.object(
+                vendor.urllib.request, 'urlopen', return_value=io.BytesIO(archive_bytes)
+            ) as download:
+                vendor.ensure_vendor_assets()
+                vendor.ensure_vendor_assets()
+                self.assertEqual(download.call_count, 1)
+            self.assertEqual((root / 'vendor/bootstrap/LICENSE').read_bytes(), payload)
+            (root / 'vendor/bootstrap/LICENSE').write_bytes(b'corrupted')
+            with mock.patch.object(vendor, 'HERE', root), mock.patch.object(
+                vendor.urllib.request, 'urlopen', side_effect=AssertionError('unwanted download')
+            ):
+                with self.assertRaisesRegex(ValueError, 'Vendor checksum mismatch'):
+                    vendor.ensure_vendor_assets()
+
+    def test_invalid_tarball_integrity_never_writes_resources(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'vendor-lock.json').write_text(json.dumps({
+                'packages': {'bootstrap': {
+                    'version': '5.3.3',
+                    'source': 'https://registry.npmjs.org/bootstrap/-/bootstrap-5.3.3.tgz',
+                    'integrity': 'sha512-invalid'
+                }},
+                'files': {'bootstrap/LICENSE': hashlib.sha256(b'license').hexdigest()}
+            }), encoding='utf-8')
+            with mock.patch.object(vendor, 'HERE', root), mock.patch.object(
+                vendor.urllib.request, 'urlopen', return_value=io.BytesIO(b'invalid')
+            ):
+                with self.assertRaisesRegex(ValueError, 'npm tarball integrity mismatch'):
+                    vendor.ensure_vendor_assets()
+            self.assertFalse((root / 'vendor/bootstrap/LICENSE').exists())
 
 
 if __name__=='__main__':unittest.main()

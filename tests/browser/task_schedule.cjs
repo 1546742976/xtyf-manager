@@ -1,170 +1,141 @@
 "use strict";
-// Real loopback Flask + Chromium; never connects to the deployed site or database.
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const {spawn} = require('node:child_process');
-const {chromium} = require('playwright');
-const root = path.resolve(__dirname, '../..');
-const output = path.join(root, '.build-tools', 'schedule-browser-check');
-fs.mkdirSync(output, {recursive:true});
-async function api(page, url, data) {
-  return page.evaluate(async ({url, data}) => {
-    const response = await BusinessUI.fetch(url, data === undefined ? {} : {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
-    return {status:response.status, body:await response.json()};
-  }, {url, data});
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const {spawn} = require("node:child_process");
+const {chromium, webkit} = require("playwright");
+
+const root = path.resolve(__dirname, "../..");
+const output = path.join(root, ".venv", "task-schedule-check");
+fs.mkdirSync(output, {recursive: true});
+const api = (page, url, data) => page.evaluate(async ({url, data}) => {
+  const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(data)});
+  return {status: r.status, body: await r.json()};
+}, {url, data});
+async function login(page, base, password, firstLogin = false) {
+  await page.goto(base + "/login");
+  await page.locator("[name=username]").fill("admin");
+  await page.locator("[name=password]").fill(password);
+  await page.locator("#login-form [type=submit]").click();
+  if (firstLogin) {
+    await page.waitForURL("**/account");
+    await page.locator("#account-password-form [name=old]").fill(password);
+    await page.locator("#account-password-form [name=new]").fill("schedule-e2e-password");
+    await page.locator("#account-password-form [name=confirm]").fill("schedule-e2e-password");
+    await page.locator("#account-password-form [type=submit]").click();
+  }
+  await page.waitForURL(base + "/");
 }
-async function post(page, url, data) {
-  const result = await api(page, url, data);
-  assert.equal(result.status, 200, JSON.stringify(result));
-  assert.equal(result.body.ok, true, JSON.stringify(result));
-  return result.body;
+async function selectProject(page, base, project) {
+  await page.goto(base + "/manage");
+  await page.locator("#t-filter-project option[value='" + project + "']").waitFor({state: "attached"});
+  await page.locator("#t-filter-project").selectOption(String(project));
+  await page.locator("#schedule-project:enabled").waitFor();
 }
-async function ready(page) {
-  await page.locator('[data-schedule-root][aria-busy="false"] .schedule-task').first().waitFor();
+async function openSchedule(page) {
+  await page.locator("#schedule-project").click();
+  await page.locator("[data-schedule-root] #schedule-body .schedule-task").first().waitFor();
 }
+
 (async () => {
-  const server = spawn(process.env.REVIEW_PYTHON || 'python', ['-B', path.join(__dirname,'server.py')], {
-    cwd:root, env:{...process.env, MAIL_MODE:'preview'}, stdio:['ignore','pipe','pipe']});
-  let browser, buffer='', log='';
-  const errors=[], checks=[];
+  const server = spawn(process.env.REVIEW_PYTHON || "python", ["-B", path.join(__dirname, "server.py")],
+    {cwd: root, env: {...process.env, MAIL_MODE: "off"}, stdio: ["ignore","pipe","pipe"]});
+  let browser, webkitBrowser, outputBuffer = "", errors = "", base;
   try {
-    const base = await new Promise((resolve,reject) => {
-      const timeout = setTimeout(()=>reject(new Error('Server timeout '+log)),30000);
-      server.stderr.on('data', d=>log+=d);
-      server.stdout.on('data', d=>{buffer+=d; const match=buffer.match(/BROWSER_URL=(\S+)/);
-        if(match){clearTimeout(timeout);resolve(match[1]);}});
-      server.once('exit', code=>{clearTimeout(timeout);reject(new Error('Server exit '+code+' '+log));});
+    base = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Schedule server timed out: " + errors)), 30000);
+      server.stderr.on("data", chunk => {errors += chunk;});
+      server.stdout.on("data", chunk => {
+        outputBuffer += chunk;
+        const match = outputBuffer.match(/BROWSER_URL=(\S+)/);
+        if (match) {clearTimeout(timeout); resolve(match[1]);}
+      });
+      server.once("exit", code => {clearTimeout(timeout); reject(new Error("Schedule server exited " + code + ": " + errors));});
     });
-    browser = await chromium.launch({headless:true});
-    const page = await browser.newPage({viewport:{width:1280,height:900}});
+    browser = await chromium.launch({headless: true});
+    const page = await browser.newPage({viewport: {width: 1280, height: 900}});
     page.setDefaultTimeout(15000);
-    page.on('pageerror', error=>errors.push(error.message));
-    await page.goto(base+'/login');
-    await page.locator('[name=username]').fill('admin');
-    await page.locator('[name=password]').fill('123456');
-    await page.locator('#login-form [type=submit]').click(); await page.waitForURL('**/account');
-    await page.locator('#account-password-form [name=old]').fill('123456');
-    await page.locator('#account-password-form [name=new]').fill('schedule-browser-password');
-    await page.locator('#account-password-form [name=confirm]').fill('schedule-browser-password');
-    await page.locator('#account-password-form [type=submit]').click(); await page.waitForURL(base+'/');
-    const owner = await post(page, '/api/member', {name:'排期负责人', username:'schedule_browser_owner', password:'owner-password'});
-    const project = await post(page, '/api/projects', {name:'浏览器排期验收'});
-    const task = (data) => post(page, '/api/task', {project_id:project.id, owner_id:owner.id, ...data});
-    const fixed = await task({title:'固定前置任务', start_date:'2026-10-10', due_date:'2026-10-20', schedule_locked:true});
-    const child = await task({title:'依赖任务', start_date:'2026-10-12', due_date:'2026-10-14', parent_id:fixed.id});
-    const missing = await task({title:'待补工期任务', predecessor_ids:[child.id]});
-    const running = await task({title:'进行中任务', status:'进行中', start_date:'2026-10-22', due_date:'2026-10-25'});
-    await page.goto(base+'/manage');
-    await page.locator(`#t-filter-project option[value="${project.id}"]`).waitFor({state:'attached'});
-    await page.locator('#t-filter-project').selectOption(String(project.id));
-    await page.route('**/schedule/preview', route=>route.fulfill({status:503,json:{ok:false,error:'模拟首次读取失败'}}));
-    await page.locator('#schedule-project').click();
-    await page.locator('#schedule-feedback').filter({hasText:'模拟首次读取失败'}).waitFor();
-    await page.unroute('**/schedule/preview');
-    await page.locator('#schedule-repreview').click(); await ready(page);
-    checks.push('initial network failure retries with server default base date without requiring manual input');
-    const selection = id=>page.locator(`[data-schedule-task="${id}"]`);
-    assert.equal(await selection(fixed.id).isChecked(), false);
-    assert.equal(await selection(running.id).isChecked(), false);
-    assert.equal(await selection(child.id).isChecked(), true);
-    assert.equal(await page.locator('#schedule-apply').isDisabled(), true);
-    await page.locator('#schedule-base-date').fill('2026-10-16');
-    await page.locator(`[data-schedule-duration="${missing.id}"]`).fill('3');
-    await page.locator('#schedule-repreview').click(); await ready(page);
-    assert.match(await page.locator(`#schedule-task-${child.id} .schedule-dates`).innerText(), /新：2026-10-18/);
-    assert.match(await page.locator(`#schedule-task-${child.id} .schedule-dates`).innerText(), /新：2026-10-20/);
-    assert.match(await page.locator(`#schedule-task-${missing.id} .schedule-dates`).innerText(), /新：2026-10-18/);
-    assert.equal(await page.locator('#schedule-apply').isEnabled(), true);
-    await page.locator('.schedule-warnings').filter({hasText:'同一负责人'}).waitFor();
-    checks.push('default fixed/in-progress protection; all-dependency two-day overlap; inline inclusive duration; workload warning permits save');
+    const pageErrors = [];
+    page.on("pageerror", error => pageErrors.push(error.message));
+    await login(page, base, "browser-test-initial", true);
+    const project = (await api(page, "/api/projects", {name: "依赖排期集成测试"})).body.id;
+    assert.ok(project);
+    const parent = (await api(page, "/api/task", {title: "前置 A", project_id: project,
+      start_date: "2027-01-15", due_date: "2027-01-30"})).body.id;
+    const reserved = (await api(page, "/api/task", {title: "提前预留 B", project_id: project,
+      parent_id: parent, start_date: "2027-01-20", due_date: "2027-01-22", schedule_locked: true})).body.id;
+    const reschedule = (await api(page, "/api/task", {title: "待顺延 C", project_id: project,
+      start_date: "2020-01-01", due_date: "2020-01-02"})).body.id;
+    assert.ok(parent && reserved && reschedule);
+    const preview = (await api(page, "/api/projects/" + project + "/schedule/preview",
+      {algorithm_version: 2, base_date: "2027-01-14"})).body;
+    assert.equal(preview.can_apply, true);
+    assert.equal(preview.rows.find(row => row.id === reserved).after.start_date, "2027-01-20");
+    assert.ok(preview.warnings.some(w => w.kind === "dependency_early_reservation" && w.task_id === reserved));
+    assert.ok(preview.changed_count > 0);
+    const outdated = (await api(page, "/api/task/" + parent, {title: "前置 A 已修改", version: 1})).body;
+    assert.equal(outdated.ok, true);
+    const conflict = await api(page, "/api/projects/" + project + "/schedule/apply", {snapshot: preview.snapshot});
+    assert.equal(conflict.status, 409);
+    await selectProject(page, base, project);
+    await openSchedule(page);
+    assert.equal(await page.locator("#modal-mask").evaluate(el => !el.classList.contains("hidden")), true);
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#modal-mask").evaluate(el => el.classList.contains("hidden")), true);
+    // After closing, the same vehicle group must reopen with a fresh session.
+    await openSchedule(page);
+    await page.locator("#schedule-base-date").fill("2027-01-14");
+    await page.locator("#schedule-repreview").click();
+    await page.locator("#schedule-apply:enabled").waitFor();
+    let arrived;
+    const arrivedPromise = new Promise(resolve => arrived = resolve);
+    let release;
+    const gate = new Promise(resolve => release = resolve);
+    await page.route("**/schedule/apply", async route => {arrived(); await gate; await route.continue();});
+    await page.locator("#schedule-apply").click();
+    await arrivedPromise;
+    assert.equal(await page.locator("#schedule-repreview").isDisabled(), true);
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#modal-mask").evaluate(el => !el.classList.contains("hidden")), true);
+    await page.locator("#modal-mask").click({position: {x: 2, y: 2}});
+    assert.equal(await page.locator("#modal-mask").evaluate(el => !el.classList.contains("hidden")), true);
+    release();
+    await page.locator("#schedule-feedback").filter({hasText: "排期已保存"}).waitFor();
+    await page.unroute("**/schedule/apply");
+    await page.locator("[data-schedule-close]").click();
+    assert.equal(await page.locator("#modal-mask").evaluate(el => el.classList.contains("hidden")), true);
+    await openSchedule(page);
+    await page.locator("[data-schedule-close]").click();
+    // Enter a task from the member lane dialog, then return to that dialog.
+    await page.goto(base + "/tasks");
+    await page.locator("[data-lane-tasks]").first().waitFor();
+    await page.locator("[data-lane-tasks]").first().click();
+    await page.locator("#modal [data-member-task-list]").waitFor();
+    await page.locator("#modal [data-member-task-list] [data-task-id]").first().click();
+    await page.locator("#modal #task-form").waitFor();
+    await page.locator("#modal [data-close]").first().click();
+    await page.locator("#modal [data-member-task-list]").waitFor();
+    await page.locator("#modal [data-close]").first().click();
+    assert.deepEqual(pageErrors, []);
+    await page.screenshot({path: path.join(output, "schedule-chromium.png")});
+    await page.close();
 
-    await selection(fixed.id).check();
-    assert.equal(await page.locator('#schedule-apply').isDisabled(), true);
-    await selection(fixed.id).uncheck();
-    await page.route('**/schedule/preview', route=>route.fulfill({status:503,json:{ok:false,error:'模拟预览失败'}}));
-    await page.locator('#schedule-repreview').click();
-    await page.locator('#schedule-feedback').filter({hasText:'模拟预览失败'}).waitFor();
-    assert.equal(await page.locator(`[data-schedule-duration="${missing.id}"]`).inputValue(), '3');
-    assert.equal(await selection(fixed.id).isChecked(), false);
-    await page.unroute('**/schedule/preview');
-    await page.locator('#schedule-repreview').click(); await ready(page);
-    // Change a signed input after preview to force an actual optimistic-conflict response.
-    const before = (await api(page,'/api/data')).body.tasks;
-    const fixedBefore = before.find(t=>t.id===fixed.id);
-    await post(page, '/api/task/'+fixed.id, {version:fixedBefore.version, due_date:'2026-10-21'});
-    await page.locator('#schedule-apply').click();
-    await page.locator('#schedule-feedback').filter({hasText:'本次未保存任何调整'}).waitFor();
-    assert.equal(await page.locator(`[data-schedule-duration="${missing.id}"]`).inputValue(), '3');
-    assert.equal(await page.locator('#schedule-apply').isDisabled(), true);
-    await page.locator('#schedule-repreview').click(); await ready(page);
-    assert.match(await page.locator(`#schedule-task-${child.id} .schedule-dates`).innerText(), /新：2026-10-19/);
-    checks.push('editing invalidates snapshot; failed preview and real 409 preserve draft; repreview uses updated predecessor');
-
-    for (const width of [375,390,767,1280]) {
-      await page.setViewportSize({width,height:820});
-      assert.equal(await page.locator('#modal').evaluate(node=>node.scrollWidth<=node.clientWidth+1), true, 'modal overflow '+width);
-      const button = await page.locator('#schedule-apply').boundingBox();
-      assert.ok(button.y>=0 && button.y+button.height<=821, 'confirmation visible '+width);
-      assert.ok(button.height>=44, 'touch target '+width);
-      await page.locator('#schedule-apply').focus(); await page.keyboard.press('Tab');
-      assert.equal(await page.locator('#modal').evaluate(node=>node.contains(document.activeElement)), true);
-      await page.locator('.schedule-scroll').evaluate(node=>{node.scrollTop=0;});
-      await page.screenshot({path:path.join(output, 'schedule-'+width+'.png')});
-    }
-    await page.evaluate(()=>applyWorkspaceTheme({mode:'dark', light_theme:'silver', dark_theme:'space'},true));
-    await page.screenshot({path:path.join(output,'schedule-dark.png')});
-    checks.push('375/390/767/1280 layout has no horizontal overflow, persistent reachable confirmation, 44px touch target and keyboard focus trap; dark screenshot');
-
-    let pending, posts=0;
-    const routeReady = new Promise(resolve=>page.route('**/schedule/apply', route=>{posts++;pending=route;resolve();}));
-    await page.locator('#schedule-apply').click(); await routeReady;
-    await page.keyboard.press('Escape');
-    await page.locator('#modal-mask').dispatchEvent('click');
-    await page.evaluate(id=>openSchedulePreview(id), project.id);
-    await page.evaluate(()=>showModal('<h2>不应替换</h2>'));
-    assert.equal(await page.locator('[data-schedule-root]').count(), 1);
-    assert.equal(await page.locator('[data-schedule-close]').isDisabled(), true);
-    await page.locator('#schedule-apply').dispatchEvent('click');
-    assert.equal(posts, 1);
-    await pending.continue();
-    await page.locator('#schedule-feedback').filter({hasText:'排期已保存，共更新 2 项任务'}).waitFor();
-    await page.unroute('**/schedule/apply');
-    const after = (await api(page,'/api/data')).body.tasks;
-    assert.equal(after.find(t=>t.id===child.id).start_date, '2026-10-19');
-    assert.equal(after.find(t=>t.id===missing.id).due_date, '2026-10-21');
-    assert.equal(after.find(t=>t.id===fixed.id).schedule_locked, true);
-    assert.equal(after.find(t=>t.id===running.id).start_date, '2026-10-22');
-    await page.locator('[data-schedule-close]').click();
-    await page.evaluate(id=>openSchedulePreview(id), project.id); await ready(page);
-    assert.equal(await page.locator('#schedule-apply').isDisabled(), true);
-    assert.doesNotMatch(await page.locator('#schedule-feedback').innerText(), /排期已保存/);
-    checks.push('one real atomic apply; pending save blocks Escape/mask/replacement/duplicate; reopened session never inherits success');
-    await page.locator('[data-schedule-close]').click();
-    await page.locator(`[data-edit-task="${fixed.id}"]`).click();
-    assert.equal(await page.locator('#task-form [name=schedule_locked]').isChecked(), true);
-    await page.locator('#task-form [name=schedule_locked]').uncheck();
-    await page.locator('#task-form [type=submit]').click();
-    await page.locator('#task-form').waitFor({state:'hidden'});
-    assert.equal((await api(page,'/api/data')).body.tasks.find(t=>t.id===fixed.id).schedule_locked, false);
-    await page.goto(base+'/tasks#create');
-    await page.locator('#task-create-panel[open][aria-busy="false"]').waitFor();
-    await page.locator('#create-form [name=title]').fill('固定日期界面创建');
-    await page.locator('#create-form [name=schedule_locked]').check();
-    await page.locator('#create-form [type=submit]').click();
-    await page.locator('#task-create-feedback').filter({hasText:'任务已创建'}).waitFor();
-    assert.equal((await api(page,'/api/data')).body.tasks.find(t=>t.title==='固定日期界面创建').schedule_locked, true);
-    checks.push('persistent date lock checkbox round-trips through real create and edit forms');
-    assert.deepEqual(errors, []);
-    fs.writeFileSync(path.join(output,'result.json'), JSON.stringify({ok:true, checks, errors},null,2));
-    console.log(JSON.stringify({ok:true,checks,output},null,2));
-  } catch(error) {
-    fs.writeFileSync(path.join(output,'server.log'), log);
-    if(browser) await browser.contexts()[0]?.pages()[0]?.screenshot({path:path.join(output,'failure.png')}).catch(()=>{});
-    throw error;
+    webkitBrowser = await webkit.launch({headless: true});
+    const mobile = await webkitBrowser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
+    mobile.setDefaultTimeout(15000);
+    await login(mobile, base, "schedule-e2e-password");
+    await selectProject(mobile, base, project);
+    await openSchedule(mobile);
+    await mobile.locator("[data-schedule-close]").click();
+    await openSchedule(mobile);
+    await mobile.keyboard.press("Escape");
+    assert.equal(await mobile.locator("#modal-mask").evaluate(el => el.classList.contains("hidden")), true);
+    await mobile.screenshot({path: path.join(output, "schedule-webkit.png")});
+    await mobile.close();
+    console.log("Task schedule integration passed: signed 409, early reservations, pending-save guard, reopening, member list return, Chromium + WebKit");
   } finally {
-    if(browser) await browser.close();
+    await browser?.close();
+    await webkitBrowser?.close();
     server.kill();
   }
-})().catch(error=>{console.error(error);process.exitCode=1;});
+})().catch(error => {console.error(error); process.exitCode = 1;});

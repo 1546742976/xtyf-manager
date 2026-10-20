@@ -264,6 +264,6 @@ function doExport(){
 // One in-flight operation per record; restore controls even when transport fails.
 handleAdd = BusinessUI.guard(handleAdd, 'funds-add', '#addF button', text=>fundsToast(text,'error'));
 saveE = BusinessUI.guard(saveE, 'funds-save', '#editMd button', text=>fundsToast(text,'error'));
-delR = BusinessUI.guard(delR, id=>'funds-delete:'+id, id=>document.querySelectorAll(`#tbody button[onclick="delR(${id})"]`), text=>fundsToast(text,'error'));
+delR = BusinessUI.guard(delR, id=>'funds-delete:'+id, id=>document.querySelectorAll(`#tbody button[onclick^="delR(${id},"]`), text=>fundsToast(text,'error'));
 reviewRecord = BusinessUI.guard(reviewRecord, id=>'funds-review:'+id, id=>document.querySelectorAll(`#tbody button[onclick^="reviewRecord(${id},"]`), text=>fundsToast(text,'error'));
 edR = BusinessUI.guard(edR, id=>'funds-edit:'+id, id=>document.querySelectorAll(`#tbody button[onclick="edR(${id})"]`), text=>fundsToast(text,'error'));

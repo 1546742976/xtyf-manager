@@ -88,6 +88,9 @@ class TestFeatureContracts(unittest.TestCase):
                     query_string={"amount_min": value}).status_code, 400)
         finally:
             for rid in ids:
+                detail = self.client.get("/funds/api/records/" + str(rid))
+                self.assertEqual(detail.status_code, 200)
+                self.assertEqual(detail.get_json()["data"]["id"], rid)
                 self.assertEqual(self.client.delete(
                     "/funds/api/records/" + str(rid),
                     query_string={"version": versions[rid]}).status_code, 200)

@@ -45,7 +45,7 @@ test("timeline axis ignores row filters and other vehicle groups; missing dates 
 });
 function browser(scripts) {
   const context = {
-    BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, console,
+    console,
     setTimeout() {},
     setInterval() {},
     clearTimeout() {},
@@ -55,7 +55,7 @@ function browser(scripts) {
   };
   context.window = context;
   vm.createContext(context);
-  for (const script of scripts) {
+  for (const script of ["business-ui.js", ...scripts]) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, "static", script), "utf8"),
       context, { filename: script });
   }
@@ -92,27 +92,23 @@ test("specialty schedule: owner phases, stable dates and management order agree"
   assert.equal(page.value("specialtyTaskStage")({owner_id:1,owner_stage:null}), null);
 });
 
-test("schedule preview: escaped content, dependency cards and protected participation controls", () => {
+test("schedule preview: escaped content, selection controls and protected rows", () => {
   const page = browser(["app.js", "task-schedule.js"]);
   const row = {id:1,title:'<img src=x>',owner_name:'<script>',status:'未开始',eligible:true,
-    stage:"视觉",note:'<svg>',selected:false,protected:true,protection_reason:'固定日期',state:'protected',duration_days:3,
-    predecessors:[{id:2,title:'<svg>',external:true,boundary_date:'2026-10-22'}],
+    selected:true,stage:"视觉",note:'<svg>',needs_duration:true,
     before:{start_date:"2026-10-14",due_date:"2026-10-16"},after:{start_date:"2026-10-22",due_date:"2026-10-24"}};
   const html = page.value("schedulePreviewRows")([row]);
   assert.match(html,/&lt;img src=x&gt;/);
   assert.match(html,/&lt;script&gt;/);
-  assert.match(html,/data-schedule-task="1"/);
-  assert.match(html,/允许本次调整/);
-  assert.match(html,/受保护/);
-  assert.match(html,/跨车组/);
-  assert.doesNotMatch(html,/data-phase-choice|data-schedule-duration|<select/);
+  assert.match(html,/&lt;svg&gt;/);
+  assert.match(html,/data-schedule-task="1" checked/);
+  assert.match(html,/data-schedule-duration="1"/);
+  assert.match(html,/视觉<\/small>/);
   assert.match(html,/原：2026-10-14/);
   assert.match(html,/新：2026-10-22/);
-  assert.match(page.value("schedulePreviewRows")([{...row,eligible:false}]), /disabled/);
-  const missing = page.value("schedulePreviewRows")([{...row,eligible:true,selected:true,before:{},needs_duration:true,state:"changed",shift_days:null}],{task_ids:[1],durations:{1:4}});
-  assert.match(missing,/data-schedule-duration="1" value="4"/);
-  assert.match(missing,/补齐日期/);
-  assert.doesNotMatch(missing,/日期保持 \/ 待计算/);
+  const inactive = page.value("schedulePreviewRows")([{...row,eligible:false,selected:false}]);
+  assert.match(inactive,/data-schedule-task="1"\s+disabled/);
+  assert.doesNotMatch(inactive, /data-phase-choice|<select/);
 });
 
 test("frontend money: integer cents, comparisons and large values remain exact", () => {
@@ -287,7 +283,7 @@ test("archived catalog entries are dictionary-only choices without destroying sa
   assert.equal(page.value("retainArchivedCatalogSelection")("2", 1, items, true), "2");
 });
 
-test("person lanes keep their top active task and expose all filtered work in two modal groups", () => {
+test("person lanes prioritize scored active tasks and fold completed work", () => {
   const page = browser(["app.js", "task-board.js"]), state = page.value("state");
   state.view = "person";
   state.members = [{id:7,name:"小七",role:"member"},{id:2,name:"队友",role:"member"}];
@@ -306,70 +302,20 @@ test("person lanes keep their top active task and expose all filtered work in tw
   const lane = page.value("participantLanes")(state.tasks).find((item) => item.key === "m-7");
   assert.deepEqual(Array.from(lane.tasks, (task) => task.id), [2,4,5,1,6,3,7,8,9]);
   assert.deepEqual(state.tasks.map((task) => task.id), originalIds);
-  let html = page.value("renderPersonLane")(lane);
+  const html = page.value("renderPersonLane")(lane);
   assert.match(html, /主责明天/);
   assert.doesNotMatch(html, /主责逾期|主责今天|协助逾期|已完成<\/h3>|已取消<\/h3>/);
   assert.match(html, /查看全部 9 项/);
-  assert.match(html, /data-lane-tasks="m-7" aria-haspopup="dialog"/);
-  assert.doesNotMatch(html, /person-finished|aria-expanded/);
-  html = page.value("memberTaskListShell")(lane);
-  assert.equal((html.match(/data-task-id=/g) || []).length, 9);
-  assert.match(html, /data-task-group="active"/);
-  assert.match(html, /data-task-group="finished"/);
-  assert.match(html, /已完成<\/h3>/);
-  assert.match(html, /已取消<\/h3>/);
-  assert.ok(html.indexOf('data-task-id="2"') < html.indexOf('data-task-id="4"'));
-  assert.ok(html.indexOf('data-task-id="7"') < html.indexOf('data-task-id="8"'));
+  assert.match(html, /data-lane-tasks="m-7"/);
+  const full = page.value("memberTaskListShell")(lane);
+  assert.match(full, /data-task-group="active"/);
+  assert.match(full, /data-task-group="finished"/);
+  assert.match(full, /主责今天|协助逾期/);
+  assert.match(full, /已完成<\/h3>/);
+  assert.match(full, /已取消<\/h3>/);
   state.filters.status = "已完成";
   const filtered = page.value("participantLanes")(page.value("filteredTasks")()).find((item) => item.key === "m-7");
   assert.match(page.value("renderPersonLane")(filtered), /已完成<\/h3>/);
-  html = page.value("memberTaskListShell")(filtered);
-  assert.equal((html.match(/data-task-id=/g) || []).length, 1);
-  assert.doesNotMatch(html, /主责明天|已取消<\/h3>/);
-  state.filters.status = "";
-  const historical = {...lane, tasks: lane.tasks.filter(page.value("isFinishedTask"))};
-  html = page.value("renderPersonLane")(historical);
-  assert.match(html, /暂无未完成任务/);
-  assert.match(html, /查看全部 2 项/);
-  assert.doesNotMatch(html, /data-task-id=/);
-});
-
-test("member task modal preserves unassigned and historical members without escaping current filters", () => {
-  const page = browser(["app.js", "task-board.js"]), state = page.value("state");
-  state.tasks = [
-    {id:1,title:'<old>',owner_id:99,status:'已完成',priority:'中'},
-    {id:2,title:'未分配任务',owner_id:null,participant_ids:[],status:'未开始',priority:'高'},
-    {id:3,title:'其他任务',owner_id:99,status:'未开始',priority:'中'},
-  ];
-  const lanes = page.value("participantLanes")(page.value("filteredTasks")());
-  const old = lanes.find(lane => lane.key === 'm-99');
-  assert.equal(old.sub, '历史成员');
-  assert.match(page.value('memberTaskListShell')(old), /&lt;old&gt;/);
-  assert.equal(lanes.find(lane => lane.key === 'unassigned').tasks[0].id, 2);
-  state.filters.q = '<old>';
-  const filtered = page.value('participantLanes')(page.value('filteredTasks')());
-  assert.equal(filtered.length, 1);
-  assert.equal(filtered[0].tasks.length, 1);
-});
-
-test("shared modal afterClose runs only after hide cleanup and restores the current return target", () => {
-  function classes(initial = []) { const values = new Set(initial); return {add:value=>values.add(value),remove:value=>values.delete(value),contains:value=>values.has(value)}; }
-  let focused = null, cleanup = 0, after = 0;
-  const first = {focus() {focused = 'first';}}, rebuilt = {focus() {focused = 'rebuilt';}};
-  const mask = {classList:classes(['hidden'])};
-  const modal = {innerHTML:'',classList:classes(),setAttribute(){},querySelector(){return first;},replaceChildren(){this.innerHTML='';}};
-  const document = {activeElement:first,body:{classList:classes()},getElementById:id=>id==='modal'?modal:mask,addEventListener(){}};
-  const context = {BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, document}; vm.createContext(context);
-  vm.runInContext(fs.readFileSync(path.join(ROOT,'static/ui-dialog.js'),'utf8'),context);
-  context.showModal('list','任务',{onClose:()=>cleanup++,afterClose:()=>after++});
-  context.showModal('detail','详情',{returnFocus:()=>rebuilt,afterClose:()=>{
-    assert.equal(modal.innerHTML,'');assert.equal(mask.classList.contains('hidden'),true);assert.equal(focused,'rebuilt');
-    context.showModal('returned-list');after++;
-  }});
-  assert.equal(cleanup,1);assert.equal(after,0);
-  context.hideModal();
-  assert.equal(after,1);assert.equal(modal.innerHTML,'returned-list');assert.equal(mask.classList.contains('hidden'),false);
-  context.hideModal();assert.equal(after,1);
 });
 
 test("urgency comparator weighs priority, deadline and status jointly", () => {

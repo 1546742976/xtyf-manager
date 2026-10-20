@@ -304,5 +304,9 @@
   };
   window.addEventListener('popstate',event=>{historyIndex=event.state?.index||0;route=location.hash.slice(1)||'/';renderRoute();});
   window.addEventListener('keydown',event=>{if(event.key==='Escape'&&back())event.preventDefault();});
-  route=location.hash.slice(1)||'/';renderRoute();boot();
+  route=location.hash.slice(1)||'/';renderRoute();
+  // Finish loading the initial local iframe before bootstrap can replace it.
+  // Removing a loading srcdoc frame on a fast protocol rejection crashes WebKit.
+  if(document.readyState==='complete')boot();
+  else window.addEventListener('load',()=>boot(),{once:true});
 })();

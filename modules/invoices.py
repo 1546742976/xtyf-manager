@@ -954,7 +954,7 @@ def duplicate_guard(data, rel_path, index=None, hashes=None):
         return jsonify({
             'success': False, 'error': '存在重复发票',
             'duplicates': _visible_duplicates(duplicates), 'code': 'DUPLICATE',
-        })
+        }), 200
     if not _is_finance():
         return jsonify({'success': False, 'error': '只有财务可以确认重复发票入库'}), 403
     return None

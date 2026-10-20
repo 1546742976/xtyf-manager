@@ -228,9 +228,10 @@ public class MainActivity extends Activity {
         else if (args.has("body") && !args.isNull("body")) { byte[] bytes = args.getString("body").getBytes(StandardCharsets.UTF_8); body = output -> output.write(bytes); }
         final JSONObject[] response = new JSONObject[1];
         request.client.request(path, method, headers, body, args.optString("requestId", request.id.toString()), (status, responseHeaders, input) -> {
-            ByteArrayOutputStream output = new ByteArrayOutputStream(); NativeHttpClient.copy(input, output);
+            // Match desktop IPC limits; larger downloads stream directly to a file.
+            byte[] bytes = UiUpdateStore.read(input, 128L * 1024 * 1024);
             try {
-                byte[] bytes = output.toByteArray(); response[0] = new JSONObject().put("status", status).put("headers", new JSONObject(responseHeaders))
+                response[0] = new JSONObject().put("status", status).put("headers", new JSONObject(responseHeaders))
                     .put("body", binary ? java.util.Base64.getEncoder().encodeToString(bytes) : new String(bytes, StandardCharsets.UTF_8)).put("encoding", binary ? "base64" : "text");
             } catch (JSONException error) { throw new IOException(error); }
         });

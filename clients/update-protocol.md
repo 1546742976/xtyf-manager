@@ -2,8 +2,8 @@
 
 This contract is shared by the Python publisher, Rust desktop and Java Android hosts.
 Business API protocol stays **1**. Native bridge version is **2** and capabilities are
-`ui_updates`, `image_preview` and `website_fallback`. Platform keys: `windows-x86_64`, `ubuntu-aarch64`,
-`fedora-x86_64`, `android`.
+`ui_updates`, `image_preview` and `website_fallback`. Platform keys: `windows-x86_64`, `windows-aarch64`, `ubuntu-x86_64`,
+`ubuntu-aarch64`, `fedora-x86_64`, `fedora-aarch64`, `android` (universal APK).
 
 ## Signed release
 
