@@ -128,15 +128,29 @@ jobs:
             cat "$release_error" >&2
             exit 1
           fi
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.validate.outputs.tag }}
-          target_commitish: ${{ needs.validate.outputs.sha }}
-          name: XTYF Manager ${{ needs.validate.outputs.tag }}
-          prerelease: false
-          make_latest: true
-          # Preserve release notes already written on a manually created empty Release.
-          generate_release_notes: ${{ steps.release_state.outputs.exists != 'true' }}
-          fail_on_unmatched_files: true
-          files: dist/release-assets/*
+      - name: Upload verified packages without editing Release metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/release-assets/*)
+          if (( ${#files[@]} != 9 )); then
+            echo "::error::Expected seven installers plus checksum and report; found ${#files[@]}"
+            exit 1
+          fi
+          if [[ "${{ steps.release_state.outputs.exists }}" == "true" ]]; then
+            # Do not PATCH an already-published Release: GitHub may forbid changing
+            # target_commitish when the tagged revision touched workflow files.
+            gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --title "XTYF Manager $RELEASE_TAG" --generate-notes --latest
+          fi
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets | length' | grep -qx '9' || {
+              echo "::error::Release does not contain all nine expected attachments"
+              exit 1
+            }

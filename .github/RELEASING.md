@@ -74,3 +74,11 @@ git push origin v1.1.0
 查看 Actions → Client validation 或 Client release → 运行详情。历史报错 `can't open file 'clients/release_target.py'` 的原因是发布任务错误地从旧标签查找新脚本；修复后使用 main 的发布工具。请使用 **Run workflow** 并选择 main，不要对旧失败运行直接点击 **Re-run jobs**。上传的 Artifacts 在工作流中保留 14 天；Pre-release / Release 附件长期存储于 Releases 页面。PR 的测试包和正式发布包不能混用。跨平台代码编译与包检查通过不等于各真实操作系统上的安装、运行、升级功能已经验收。
 
 如正式 Android 构建在恢复 KeyStore 步骤失败，优先检查仓库 Secrets 是否完整、Base64 是否单行、密钥别名是否为 `xtyf-manager`、原密钥的 key password 是否与 Keystore password 相同。不要通过删掉签名检查或生成新密钥绕过问题。
+
+## 2026-10-20 v1.1.0 自动恢复
+
+2026-10-20 的 `Client release` 手动运行 #39375216684 已完成 Windows、Linux、Android 所有七个安装包的正式签名和 SHA-256 校验，但 `softprops/action-gh-release` 尝试修改人工创建的 Release 的元数据时返回 GitHub 403。此前的失败构建不必重做。
+
+仓库配置了仅在首次新增 `.github/workflows/recover-v110.yml` 到 main 时运行的一次性恢复任务。它固定复用第 #39375216684 次运行的五组安装包 Artifacts、核对构建来源和版本为 1.1.0、恢复旧的 `v1.1.0` 标签到原始提交，再上传到 Release。整个流程不读取 Android Keystore，也不会重签名或重新编译。
+
+以后正常的 Client release 采用 `gh release upload` 为现有空 Release 上传附件（无需调用 Update release API），对于没有 Release 的已存在标签则调用 `gh release create --verify-tag`。禁止覆盖已有附件；不要再使用不匹配实际应用版本的 `v1.0.0` 标签发布 `1.1.0` 的安装包。
