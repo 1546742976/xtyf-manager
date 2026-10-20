@@ -1,8 +1,20 @@
 name: Client validation
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'clients/**'
+      - '!clients/**/*.md'
+      - 'templates/*.html'
+      - 'static/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'clients/**'
+      - '!clients/**/*.md'
+      - 'templates/*.html'
+      - 'static/**'
   workflow_call:
     inputs:
       source_ref:
@@ -109,8 +121,8 @@ jobs:
       - name: Compile Android sources and run update tests without producing an APK
         run: python clients/android/test_ui_updates.py --jdk "$JAVA_HOME" --json-jar .build-tools/json.jar --android-jar "$ANDROID_HOME/platforms/android-36/android.jar" --fixture .build-tools/client-update-fixture
 
-  # These jobs produce installable packages for PR tests or formal stable releases.
-  # PR builds use no signing secrets; Android gets a new temporary
+  # These jobs produce packages for PR tests, main pre-releases or stable releases.
+  # PR and main builds use no signing secrets; Android gets a new temporary
   # keystore on each run and cannot upgrade a release-signed installation.
   package-windows:
     name: Package Windows ${{ matrix.arch }} (NSIS)
@@ -192,7 +204,7 @@ jobs:
           python clients/build_frontend.py
           npm ci --prefix clients/desktop --no-audit --no-fund
       - name: Restore fixed Android release keystore
-        if: github.event_name != 'pull_request'
+        if: inputs.source_ref != ''
         shell: bash
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -210,7 +222,7 @@ jobs:
           export XTYF_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
           keytool -list -keystore clients/signing/xtyf-manager.jks -storepass:env XTYF_KEY_PASSWORD -alias xtyf-manager
 
-      - name: Build and verify APK (temporary PR or fixed stable key)
+      - name: Build and verify APK (temporary test or fixed stable key)
         run: |
           python clients/build_android.py --jdk "$JAVA_HOME" --sdk "$ANDROID_HOME" --skip-frontend-build --output-dir dist/clients/android
           cd dist/clients/android
@@ -274,11 +286,13 @@ jobs:
           retention-days: 14
 
   publish-prerelease:
-    name: Publish PR test pre-release
-    # Fork PRs can run tests, but never receive a write token or publish a release.
+    name: Publish main test pre-release
+    # Only client changes pushed/merged to main publish; PRs only upload artifacts.
+    # Stable releases reuse the build jobs with source_ref and publish separately.
     if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.source_ref == ''
     needs: [frontend, desktop, android, package-windows, package-android, package-linux]
     runs-on: ubuntu-latest
     permissions:
@@ -286,7 +300,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -304,19 +318,19 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: python clients/collect_release_assets.py --artifacts-dir dist/github-artifacts --output-dir dist/release-assets --tag "$RELEASE_TAG" --channel prerelease
-      - name: Publish immutable PR test snapshot as pre-release
+      - name: Publish immutable main test snapshot as pre-release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
-          target_commitish: ${{ github.event.pull_request.head.sha }}
-          name: ${{ steps.meta.outputs.tag }} (PR #${{ github.event.pull_request.number }})
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.meta.outputs.tag }} (main)
           prerelease: true
           make_latest: false
           fail_on_unmatched_files: true
           generate_release_notes: false
           body: |
-            Automated test build for PR #${{ github.event.pull_request.number }}.
-            Source commit: ${{ github.event.pull_request.head.sha }}.
+            Automated test build for client changes pushed or merged to main.
+            Source commit: ${{ github.sha }}.
             These are CI test installers, not a production release.
             Android is signed with a temporary key for each run; it cannot upgrade an installed production APK and may not upgrade previous CI APKs.
             Windows is not Authenticode-signed. Test on your target OS before distribution.

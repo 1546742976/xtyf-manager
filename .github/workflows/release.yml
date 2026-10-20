@@ -68,9 +68,9 @@ jobs:
       source_ref: ${{ needs.validate.outputs.sha }}
     secrets: inherit
     permissions:
-      # Reusable Client validation also defines a PR-only publisher with write
+      # Reusable Client validation also defines a main pre-release publisher with write
       # permissions. Grant the caller the maximum; ordinary build jobs retain
-      # contents:read in the called workflow, and its PR publisher is skipped.
+      # contents:read in the called workflow, and its pre-release publisher is skipped.
       contents: write
 
   publish:

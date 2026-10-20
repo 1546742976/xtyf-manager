@@ -130,15 +130,15 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 请独立备份整个 `clients/signing/`，后续覆盖安装需要原密钥和密码文件。密钥、用户数据、数据库、附件和邮件配置不进入客户端安装包。
 
 
-## GitHub Actions 测试安装包（仅供 PR 验收）
+## GitHub Actions 测试安装包（PR／main 测试验收）
 
-现有 [Client validation](../.github/workflows/clients.yml) 在原有前端／Rust／Java 验证通过后，使用 Windows x64／ARM64、Ubuntu 22.04 x64／ARM64 和 Android SDK runner 构建实际客户端。打开 GitHub Actions → **Client validation** → 对应 PR 的运行 → **Artifacts**，获取以下产物：
+现有 [Client validation](../.github/workflows/clients.yml) 仅在 `clients/**`（排除 Markdown 文档）、`templates/*.html` 或 `static/**` 变化时自动触发，覆盖指向 `main` 的 PR 和 `main` 推送。在原有前端／Rust／Java 验证通过后，使用 Windows x64／ARM64、Ubuntu 22.04 x64／ARM64 和 Android SDK runner 构建实际客户端。打开 GitHub Actions → **Client validation** → 对应 PR 或 main 的运行 → **Artifacts**，获取以下产物：
 
 - `xtyf-client-windows-x64` 和 `xtyf-client-windows-arm64`：两个独立架构的 NSIS `.exe`、安装包验证报告与 SHA-256。
 - `xtyf-client-linux-x64` 和 `xtyf-client-linux-arm64`：分别内含对应架构的 Ubuntu 22.04 `.deb`、Fedora `.rpm`、验证报告与 SHA-256。
 - `xtyf-client-android-apk`：一个通用 `.apk` 与 SHA-256。Android 原生层为纯 Java/WebView，没有 `.so` ABI 库，因此该 APK 同时支持 ARM64 和 x86_64，无需生成重复 APK。
 
-产物保留 14 天。CI 只使用 `clients/config.json` 的当前版本，不调用会递增版本的 `clients/release.py`，不创建 Release、不部署服务器、不上传任何密钥。Windows 未进行代码签名；Android 每次运行临时生成不同的测试签名密钥，**不能覆盖安装正式签名 APK，也不保证两次 CI 生成的 APK 可以相互覆盖升级**。这些测试安装包不属于正式交付，不应分发给生产用户。Linux 构建进行实际包结构、ELF 架构与依赖校验，但不能替代 Ubuntu ARM64 和 Fedora 的真机运行验收。
+产物保留 14 天。CI 只使用 `clients/config.json` 的当前版本，不调用会递增版本的 `clients/release.py`，不部署服务器、不上传任何密钥。PR 只上传 Artifacts；客户端变更合并或直接推送到 main 后，全部构建通过才发布测试 Pre-release。Windows 未进行代码签名；Android 每次运行临时生成不同的测试签名密钥，**不能覆盖安装正式签名 APK，也不保证两次 CI 生成的 APK 可以相互覆盖升级**。这些测试安装包不属于正式交付，不应分发给生产用户。Linux 构建进行实际包结构、ELF 架构与依赖校验，但不能替代 Ubuntu ARM64 和 Fedora 的真机运行验收。
 
 ## 验证边界
 
@@ -160,4 +160,4 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 
 ## GitHub Actions 自动发布
 
-PR 的客户端构建全部通过后，同仓库 PR 自动发布 `YYYYMMDD-betaN` 测试 Pre-release；推送 `vX.Y.Z` 标签后自动发布正式 Release（须预先配置原 Android 签名密钥 Secrets）。发布前严格核对所有平台安装包 SHA-256 和版本，缺一不发布。详情与密钥配置步骤见 [Actions 版本发布指南](../.github/RELEASING.md)。
+客户端代码或打入安装包的共享 UI 资源变更合并／直接推送到 `main`，全部客户端构建通过后自动发布 `YYYYMMDD-betaN` 测试 Pre-release；PR 阶段只编译并上传 Artifacts。推送 `vX.Y.Z` 标签后自动发布正式 Release（须预先配置原 Android 签名密钥 Secrets）。发布前严格核对所有平台安装包 SHA-256 和版本，缺一不发布。详情与密钥配置步骤见 [Actions 版本发布指南](../.github/RELEASING.md)。

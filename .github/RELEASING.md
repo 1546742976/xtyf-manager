@@ -2,11 +2,13 @@
 
 ## 发布方式
 
-- 指向 `main` 的 PR 会执行 `Client validation`。同仓库的 PR 若所有测试和安装包构建成功，自动创建一个 **Pre-release**，名称与标签为 `YYYYMMDD-betaN`（UTC 日期 + 当前工作流的 `run_number`）。每次 push 更新 PR 会创建新的快照，重新运行同一个工作流则使用相同标签。Fork PR 只执行测试，不发布。
-- 这些测试包包含 Windows x64/ARM64、Android 通用 APK、Linux x64/ARM64 的 DEB/RPM。**PR 的 APK 使用每次新建的临时签名，不能直接覆盖正式版或其他 CI APK**。请先在独立测试设备使用；这些 Release 不是正式升级渠道。
+- 仅客户端构建输入变化时自动执行 `Client validation`：`clients/**`（排除 Markdown 文档）、`templates/*.html` 和 `static/**`。后两项会打入客户端本地 UI，因此也属于客户端变更；仅修改服务器代码或文档不会触发客户端自动构建／Pre-release。
+- 指向 `main` 的 PR 在创建、更新或重新打开时，若包含上述变更，会执行测试和安装包构建，产物只上传到 Actions **Artifacts**，保留 14 天；同仓库和 Fork PR 均不创建 Pre-release。
+- 上述客户端变更通过 PR 合并或直接推送到 `main` 后，若所有测试和安装包构建成功，自动创建一个 **Pre-release**，名称与标签为 `YYYYMMDD-betaN`（UTC 日期 + 当前工作流的 `run_number`，名称另附 `main`）。发布指向该次 push 的精确提交；重新运行同一个工作流使用相同标签。
+- 这些测试包包含 Windows x64/ARM64、Android 通用 APK、Linux x64/ARM64 的 DEB/RPM。**PR 和 main 测试构建的 APK 均使用每次新建的临时签名，不能直接覆盖正式版或其他 CI APK**。请先在独立测试设备使用；这些 Pre-release 不是正式升级渠道。
 - 正式发布：先在 `main` 修改 `clients/config.json` 中的版本与 Android `versionCode`，并同步 Tauri/Cargo/Android Manifest 等元数据（参考 `clients/release.py` 的 `sync_versions`）。完成审查后在 `main` 对应提交打 `vX.Y.Z` 标签并推送，触发 `Client release`。也可在 Actions → Client release → Run workflow 输入**已存在**的标签重新构建。已存在且尚无附件的正式 Release（例如通过 GitHub 网页手动创建的空版本）允许由 Actions 补齐安装包；**已经带有任何附件的正式 Release 禁止覆盖**，需要发布新版本或先人工核对后处理。
 - 标签必须与版本文件一致，且正式标签对应提交必须属于 `main` 的历史。正式构建使用固定 Android Keystore。7 个安装包全部成功、校验和一致后才发布稳定 Release；失败时不会开始发布。Release 自动附带 `SHA256SUMS.txt` 和 `build-report.json`。
-- 日期 beta 标签只是 **GitHub 测试发布标识**，安装包内部保持 PR 的 `clients/config.json` 版本；不要把不同 beta APK 当成可直接升级的 Android 版本。正式版继续使用 `v1.1.0` 这种三段式语义化版本号。
+- 日期 beta 标签只是 **GitHub 测试发布标识**，安装包内部保持对应源码提交的 `clients/config.json` 版本；不要把不同 beta APK 当成可直接升级的 Android 版本。正式版继续使用 `v1.1.0` 这种三段式语义化版本号。
 
 ## Android 固定签名（必须配置）
 
@@ -44,7 +46,7 @@ Windows PowerShell（将输出复制到 Secrets 表单，而非提交 Git）：
 [Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path 'clients/signing/xtyf-manager.jks')))
 ```
 
-正式版 Actions 在隔离 Runner 上恢复 Keystore，先检查别名与密码，再由原有 `clients/build_android.py` 完成 APK 签名和验证。缺少任一 Secret 将**直接阻止正式 Release**；PR 不读取这两个 Secret。
+正式版 Actions 在隔离 Runner 上恢复 Keystore，先检查别名与密码，再由原有 `clients/build_android.py` 完成 APK 签名和验证。缺少任一 Secret 将**直接阻止正式 Release**；PR 和 main 测试构建不读取这两个 Secret。
 
 ## 发布命令示例
 
