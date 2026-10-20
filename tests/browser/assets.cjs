@@ -21,8 +21,8 @@ async function main(){
     const r=await api.post(url,{headers:{'X-CSRF-Token':csrf},data});
     csrf=r.headers()['x-csrf-token']||csrf;const result=await r.json();assert.equal(r.status(),200,JSON.stringify(result));return result;
   }
-  await post('/api/client/login',{username:'admin',password:'123456'});
-  await post('/api/password',{old:'123456',new:'assets-browser-password',confirm:'assets-browser-password'});
+  await post('/api/client/login',{username:'admin',password:'browser-test-initial'});
+  await post('/api/password',{old:'browser-test-initial',new:'assets-browser-password',confirm:'assets-browser-password'});
   const uid=(await (await api.get('/api/client/bootstrap')).json()).me.id;
   async function save(kind,data){return (await post('/api/assets/catalog/'+kind,{request_id:crypto.randomUUID(),...data})).id;}
   const campus=await save('campuses',{name:'合成东校区'});

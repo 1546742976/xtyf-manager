@@ -25,7 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const disabled = !checked && (inactive || (permission === "funds.review" && m.role === "member"));
         return `<input type="checkbox" data-permission="${permission}" aria-label="${escape(m.name)} ${escape(permissionNames[permission])}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}>`;
       };
-      return `<tr data-member-id="${Number(m.id)}"><td>${escape(m.name)}<br><small>ID ${Number(m.id)} · ${escape(m.username)}</small></td><td>${escape({admin: "管理员", manager: "项管", member: "成员"}[m.role])} / ${inactive ? "停用或删除" : "启用"}</td><td>${checkbox("funds.review")}</td><td>${checkbox("invoices.manage")}</td><td>${checkbox("assets.manage")}${m.role==="admin"?"<small>管理员默认拥有</small>":""}</td><td><button type="button" class="btn sm" data-save-permissions>保存权限</button></td></tr>`;
+      return `<tr data-member-id="${Number(m.id)}"><td>${escape(m.name)}<br><small>ID ${Number(m.id)} · ${escape(m.username)}</small></td><td>${escape({admin: "管理员", manager: "项管", member: "成员"}[m.role])} / ${inactive ? "停用或删除" : "启用"}</td><td>${checkbox("funds.review")}</td><td>${checkbox("invoices.manage")}</td><td>${checkbox("assets.manage")}${["admin","manager"].includes(m.role)?"<small>该角色默认拥有</small>":""}</td><td><button type="button" class="btn sm" data-save-permissions>保存权限</button></td></tr>`;
     }).join("") || '<tr><td colspan="6">没有匹配成员</td></tr>';
   }
   async function loadMembers() {
