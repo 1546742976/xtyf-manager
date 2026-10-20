@@ -4,9 +4,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, render_template, request
 
-from common import current_user, get_db, login_required
+from common import ROLE_NAMES, current_user, get_db, login_required
 from modules.security import has_permission
 
 bp = Blueprint("assets", __name__)
@@ -157,6 +157,13 @@ def event(db, action, reason, *, item_id=None, campus_id=None, quantity=0,
         (item_id, campus_id, user["id"], user["name"], member_id, member_name, action,
          quantity, reason, stamp(), json.dumps(details or {}, ensure_ascii=False), consumed_delta, corrects_id),
     ).lastrowid
+
+
+@bp.get("/assets")
+@bp.get("/assets/detail")
+@login_required
+def page():
+    return render_template("assets.html", me=current_user(), page="assets", role_names=ROLE_NAMES)
 
 
 @bp.get("/api/assets/catalog")

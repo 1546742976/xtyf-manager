@@ -1,0 +1,30 @@
+.asset-workspace { max-width:1200px; margin:auto; }
+.asset-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; }
+.asset-heading h1,.asset-heading h2 { margin:8px 0; }
+.asset-eyebrow { letter-spacing:.12em; font-size:12px; color:var(--ux-muted); }
+.asset-muted { color:var(--ux-muted); }
+.asset-tabs,.asset-actions,.asset-pager { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:16px 0; }
+.asset-filters { display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:12px; align-items:end; margin:20px 0; }
+.asset-workspace label,.asset-dialog label { display:grid; gap:6px; font-weight:500; }
+.asset-workspace input,.asset-workspace select,.asset-dialog input,.asset-dialog select,.asset-dialog textarea {
+  width:100%; box-sizing:border-box; min-height:44px; background:var(--ux-surface); color:var(--ux-text);
+  border:1px solid var(--ux-stroke); border-radius:9px; padding:10px; font:inherit;
+}
+.asset-workspace .btn,.asset-dialog .btn { min-height:44px; }
+.asset-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:16px; }
+.asset-card { padding:20px; background:var(--ux-surface); border:1px solid var(--ux-stroke); border-radius:16px; min-width:0; overflow-wrap:anywhere; }
+.asset-card h2,.asset-card h3 { margin:0 0 10px; }
+.asset-count { display:block; font-size:30px; font-weight:650; margin:12px 0; }
+.asset-tag { font-size:12px; padding:4px 8px; border:1px solid var(--ux-stroke); border-radius:6px; }
+.asset-section { margin-top:28px; }
+.asset-log { display:grid; gap:12px; padding:0; list-style:none; }
+.asset-log li { border-bottom:1px solid var(--ux-stroke); padding:12px 0; overflow-wrap:anywhere; }
+.asset-log p { margin:6px 0; }
+.asset-empty { padding:32px 20px; border:1px dashed var(--ux-stroke); border-radius:14px; }
+.asset-dialog { background:var(--ux-surface); color:var(--ux-text); border:1px solid var(--ux-stroke); border-radius:16px; padding:24px; width:min(520px,calc(100vw - 32px)); max-height:85dvh; overflow:auto; box-sizing:border-box; }
+.asset-dialog::backdrop { background:rgba(0,0,0,.45); }
+.asset-fields { display:grid; gap:16px; margin:16px 0; }
+.asset-dialog footer { display:flex; justify-content:flex-end; }
+#asset-form-status { color:var(--ux-danger); }
+.asset-workspace [hidden] { display:none !important; }
+@media(max-width:650px) { .asset-filters { grid-template-columns:1fr; } .asset-grid { grid-template-columns:1fr; } .asset-dialog { padding:18px; } }

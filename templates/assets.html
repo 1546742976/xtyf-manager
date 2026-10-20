@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}资产管理{% endblock %}
+{% block content %}
+<section class="asset-workspace" aria-labelledby="asset-title">
+  <header class="asset-heading">
+    <div><p class="asset-eyebrow">团队资源 / INVENTORY</p><h1 id="asset-title">资产管理</h1><p class="asset-muted">按型号统计，按校区存放。每一次借还与领用都有记录。</p></div>
+    <button class="btn" id="asset-refresh" type="button">刷新数据</button>
+  </header>
+  <nav class="asset-tabs" aria-label="资产导航">
+    <a class="btn" href="/assets">全部物品</a><a class="btn" href="/assets?view=mine">我的借用</a>
+    <button class="btn" id="asset-campuses" type="button" hidden>校区管理</button>
+    <button class="btn primary" id="asset-create" type="button" hidden>新增物品</button>
+  </nav>
+  <p id="asset-status" role="status" aria-live="polite" tabindex="-1"></p>
+  <form id="asset-filter" class="asset-filters">
+    <label>名称或规格<input name="q" type="search" maxlength="120" placeholder="例如：M3 螺丝、3508 电机"></label>
+    <label>校区<select name="campus_id"><option value="">全部校区</option></select></label>
+    <label>类别<select name="category"><option value="">全部类别</option></select></label>
+    <button class="btn" type="submit">筛选</button>
+  </form>
+  <div id="asset-content" aria-busy="true"></div>
+</section>
+<dialog id="asset-dialog" aria-labelledby="asset-dialog-title" class="asset-dialog">
+  <form id="asset-form">
+    <header class="asset-heading"><h2 id="asset-dialog-title">资产操作</h2><button class="btn" type="button" id="asset-close">取消</button></header>
+    <div id="asset-fields" class="asset-fields"></div>
+    <p id="asset-form-status" role="alert" tabindex="-1"></p>
+    <footer><button class="btn primary" id="asset-save" type="submit">确认保存</button></footer>
+  </form>
+</dialog>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='assets.js') }}"></script>{% endblock %}

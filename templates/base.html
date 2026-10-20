@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='item-topics.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='themes.css') }}">
   {% if page == 'account' %}<link rel="stylesheet" href="{{ url_for('static', filename='account-avatar.css') }}">{% endif %}
+  {% if page == 'assets' %}<link rel="stylesheet" href="{{ url_for('static', filename='assets.css') }}">{% endif %}
 </head>
 <body class="{% if me %}ws-app{% endif %}">
   <a href="#main-content" class="ux-skip-link">跳至主内容</a>

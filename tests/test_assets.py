@@ -136,6 +136,8 @@ class AssetsTest(unittest.TestCase):
         self.assertEqual(self.stock()["borrowed"], 3)
 
     def test_permissions_and_delegation(self):
+        self.assertEqual(self.member.get("/assets").status_code, 200)
+        self.assertEqual(self.member.get(f"/assets/detail?id={self.item}").status_code, 200)
         self.op("receive", client=self.member, status=403)
         with app_module.app.app_context():
             db = app_module.get_db()
