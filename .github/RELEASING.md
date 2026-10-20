@@ -65,12 +65,12 @@ git push origin v1.1.0
 
 如果 GitHub Releases 页面已经手动创建了 `v1.1.0`，但该 Release 还没有安装包，旧版工作流可能在最终发布阶段报错 `Release v1.1.0 already exists`，即使所有平台的构建都通过。这不是 APK 签名或标签检查失败。
 
-合并修复后的工作流到 `main`，到 **Actions → Client release → Run workflow**，选择 `main`，`tag` 输入 `v1.1.0`，然后运行。新工作流会重新从**原 `v1.1.0` 标签对应的提交**构建全部平台并校验，只给没有附件的正式 Release 补齐安装包，且保留它已有的更新日志。无需删除原 Release、移动标签、更换密钥或重新递增版本。
+到 **Actions → Client release → Run workflow**，选择 `main`，`tag` 输入 `v1.1.0`，然后运行。发布任务同时检出**标签提交**（用于版本元数据）和 **main 分支**（用于最新版发布校验脚本）；安装包始终从标签提交构建，因此即使旧标签缺少后来添加的 `clients/release_target.py` 也不会失败。新工作流会重新从**原 `v1.1.0` 标签对应的提交**构建全部平台并校验，只给没有附件的正式 Release 补齐安装包，且保留它已有的更新日志。无需删除原 Release、移动标签、更换密钥或重新递增版本。
 
 如果已有任何附件，工作流仍会拒绝改写，以免同一版本被悄然替换；先核实原有发布内容，再决定是否创建新版本。手动操作与自动化发布不要同时执行。
 
 ## 验收与排错
 
-查看 Actions → Client validation 或 Client release → 运行详情。上传的 Artifacts 在工作流中保留 14 天；Pre-release / Release 附件长期存储于 Releases 页面。PR 的测试包和正式发布包不能混用。跨平台代码编译与包检查通过不等于各真实操作系统上的安装、运行、升级功能已经验收。
+查看 Actions → Client validation 或 Client release → 运行详情。历史报错 `can't open file 'clients/release_target.py'` 的原因是发布任务错误地从旧标签查找新脚本；修复后使用 main 的发布工具。请使用 **Run workflow** 并选择 main，不要对旧失败运行直接点击 **Re-run jobs**。上传的 Artifacts 在工作流中保留 14 天；Pre-release / Release 附件长期存储于 Releases 页面。PR 的测试包和正式发布包不能混用。跨平台代码编译与包检查通过不等于各真实操作系统上的安装、运行、升级功能已经验收。
 
 如正式 Android 构建在恢复 KeyStore 步骤失败，优先检查仓库 Secrets 是否完整、Base64 是否单行、密钥别名是否为 `xtyf-manager`、原密钥的 key password 是否与 Keystore password 相同。不要通过删掉签名检查或生成新密钥绕过问题。

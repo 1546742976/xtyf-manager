@@ -80,9 +80,18 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      # Keep the tagged source checkout for the version metadata and audit trail.
+      # Historical tags do not contain publication helpers added to main later.
+      - name: Checkout release source at immutable tag commit
+        uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate.outputs.sha }}
+          persist-credentials: false
+      - name: Checkout current publication tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .release-tooling
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -95,7 +104,7 @@ jobs:
       - name: Verify every binary, version and SHA-256
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-        run: python clients/collect_release_assets.py --artifacts-dir dist/github-artifacts --output-dir dist/release-assets --tag "$RELEASE_TAG" --channel stable
+        run: python .release-tooling/clients/collect_release_assets.py --artifacts-dir dist/github-artifacts --output-dir dist/release-assets --tag "$RELEASE_TAG" --channel stable --config clients/config.json
       - name: Inspect existing stable Release before uploading
         id: release_state
         shell: bash
@@ -109,7 +118,7 @@ jobs:
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,isImmutable,assets >"$release_json" 2>"$release_error"; then
             # Complete an existing empty GitHub Release (e.g. one created
             # manually with its tag). Never overwrite previously published assets.
-            python clients/release_target.py --tag "$RELEASE_TAG" --metadata "$release_json"
+            python .release-tooling/clients/release_target.py --tag "$RELEASE_TAG" --metadata "$release_json"
             echo "exists=true" >> "$GITHUB_OUTPUT"
           elif grep -qiE 'release not found|HTTP 404' "$release_error"; then
             echo "No Release exists for $RELEASE_TAG; create one after verification."
