@@ -4,13 +4,31 @@ const {chromium,webkit,devices}=require('playwright');
 const root=path.resolve(__dirname,'../..'),out=path.join(root,'.venv','palette-workspace-check');fs.mkdirSync(out,{recursive:true});
 const palettes=['silver','rm-light','mist','paw','space','rm-dark','graphite','xueli'];
 const widths=[375,390,767,768,850,1280];
+// The vector fills its native viewBox; ensure rounded logo hosts cannot cut it off.
+async function assertCompleteLogo(page, selector) {
+ const logo=await page.locator(selector).evaluate(host=>{
+  const img=host.querySelector('img.brand-logo');
+  const style=getComputedStyle(img), outer=getComputedStyle(host);
+  return {
+   path:new URL(img.currentSrc||img.src).pathname,
+   loaded:img.complete&&img.naturalWidth>0&&img.naturalHeight>0,
+   clip:outer.overflow, fit:style.objectFit,
+   padding:[style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft].map(parseFloat),
+  };
+ });
+ assert.equal(logo.path,'/static/brand/xtyf-logo.svg');
+ assert.equal(logo.loaded,true);
+ assert.equal(logo.clip,'visible');
+ assert.equal(logo.fit,'contain');
+ assert.ok(logo.padding.every(value=>value>=3),JSON.stringify(logo));
+}
 (async()=>{
  const server=spawn(process.env.REVIEW_PYTHON||'python',['-B',path.join(__dirname,'theme_server.py')],{cwd:root,env:process.env,stdio:['ignore','pipe','pipe']});let browser,log='';const results=[];
  try{
   const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error(log)),30000);server.stderr.on('data',d=>log+=d);server.stdout.on('data',d=>{const m=String(d).match(/THEME_DEMO_URL=(\S+)/);if(m){clearTimeout(timer);resolve(m[1]);}});server.once('exit',code=>{clearTimeout(timer);reject(Error('server '+code+' '+log));});});
   browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'});const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await context.route('**/discussions/api/**',r=>r.fulfill({json:{ok:true,source:'api',items:[]}}));
-  await page.goto(base+'/login');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('theme-demo-password');await page.locator('#login-form button[type=submit]').click();await page.waitForURL(base+'/');
+  await page.goto(base+'/login');await assertCompleteLogo(page,'.login-mark');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('theme-demo-password');await page.locator('#login-form button[type=submit]').click();await page.waitForURL(base+'/');
   const api=async(url,data,method='POST')=>page.evaluate(async({url,data,method})=>{const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return {status:r.status,...await r.json()};},{url,data,method});
   const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'}));today.setDate(today.getDate()+24);const target=[today.getFullYear(),String(today.getMonth()+1).padStart(2,'0'),String(today.getDate()).padStart(2,'0')].join('-');
   assert.equal((await api('/api/workspace/countdown',{title:'完整形态考核',target_date:target,version:1},'PUT')).ok,true);await page.reload();
@@ -25,6 +43,7 @@ const widths=[375,390,767,768,850,1280];
     assert.match(await page.locator('[data-palette-choice="rm-dark"]').innerText(),/黑白极简/);
    }
    await page.goto(base+'/');
+   await assertCompleteLogo(page,'.ws-brand-mark');
    assert.equal(await page.locator('[data-palette-choice]').count(),0,'workspace shortcuts do not expose palette choices');
    const contrast=await page.evaluate(()=>{
     const s=getComputedStyle(document.documentElement);const rgb=v=>{const e=document.createElement('span');e.style.color=v;document.body.append(e);const a=getComputedStyle(e).color.match(/[\d.]+/g).slice(0,3).map(Number);e.remove();return a;};
