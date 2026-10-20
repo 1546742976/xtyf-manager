@@ -4,18 +4,27 @@ const WORKSPACE_PALETTES = {
   mist:{mode:'light',name:'云雾绿',bg:'#f2f7f4'}, paw:{mode:'light',name:'奶霜猫爪粉',bg:'#fff3f2'},
   space:{mode:'dark',name:'GitHub 暗黑',bg:'#000000'}, 'rm-dark':{mode:'dark',name:'黑白极简',bg:'#090909'},
   graphite:{mode:'dark',name:'石墨灰金',bg:'#191a1d'}, xueli:{mode:'dark',name:'雪梨星语',bg:'#231b20'},
+  'custom-light':{mode:'light',name:'自定义浅色',bg:'#f5f7fa'},
+  'custom-dark':{mode:'dark',name:'自定义深色',bg:'#15191f'},
 };
+const paletteFor = (p,theme) => p[theme + '_custom'] ? 'custom-' + theme : p[theme + '_theme'];
 function resolvedTheme(p, systemDark) {return p.mode === 'system' ? (systemDark ? 'dark' : 'light') : p.mode;}
 function applyWorkspaceTheme(p, systemDark) {
-  const theme = resolvedTheme(p, systemDark), palette = p[`${theme}_theme`];
-  Object.assign(document.documentElement.dataset,{theme,palette,themeMode:p.mode,lightTheme:p.light_theme,darkTheme:p.dark_theme});
+  const theme = resolvedTheme(p, systemDark), palette = paletteFor(p, theme), root = document.documentElement;
+  Object.assign(root.dataset,{theme,palette,themeMode:p.mode,lightTheme:p.light_theme,darkTheme:p.dark_theme,
+    lightCustom:String(p.light_custom),darkCustom:String(p.dark_custom),lightAccent:p.light_accent,darkAccent:p.dark_accent});
+  if (palette.startsWith('custom-')) root.style?.setProperty?.('--custom-accent',p[theme + '_accent']);
+  else root.style?.removeProperty?.('--custom-accent');
+  document.querySelectorAll('[data-custom-accent]').forEach(el => {el.value=p[el.dataset.customAccent + '_accent'];});
+  for(const mode of ['light','dark'])document.querySelectorAll('[data-preview="custom-' + mode + '"]').forEach(el =>
+    el.style?.setProperty?.('--pv-accent',p[mode + '_accent']));
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) meta.content = document.documentElement.dataset.page === 'login' ? '#f5f5f5' : WORKSPACE_PALETTES[palette].bg;
   document.querySelectorAll('[data-theme-mode-choice]').forEach(el => {el.checked=el.value===p.mode;});
-  document.querySelectorAll('[data-palette-choice]').forEach(el => el.setAttribute('aria-pressed',String(el.dataset.paletteChoice===p[`${el.dataset.paletteMode}_theme`])));
+  document.querySelectorAll('[data-palette-choice]').forEach(el => el.setAttribute('aria-pressed',String(el.dataset.paletteChoice===paletteFor(p,el.dataset.paletteMode))));
   document.querySelectorAll('[data-theme-toggle]').forEach(el => {
     const next=theme==='dark'?'light':'dark';
-    const label=`切换为${WORKSPACE_PALETTES[p[`${next}_theme`]].name}${p.mode==='system'?'，退出跟随系统':''}`;
+    const label=`切换为${WORKSPACE_PALETTES[paletteFor(p,next)].name}${p.mode==='system'?'，退出跟随系统':''}`;
     el.setAttribute('aria-label',label); el.title=label;
   });
   document.querySelectorAll('[data-current-palette]').forEach(el => {el.textContent=WORKSPACE_PALETTES[palette].name;});
@@ -24,14 +33,20 @@ function applyWorkspaceTheme(p, systemDark) {
 async function saveThemePreference(p) {
   const response=await BusinessUI.fetch('/api/account/preferences',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
   const data=await response.json().catch(()=>({}));
-  if (!response.ok || !data.ok || !['light','dark','system'].includes(data.mode) || WORKSPACE_PALETTES[data.light_theme]?.mode!=='light' || WORKSPACE_PALETTES[data.dark_theme]?.mode!=='dark') throw new Error(data.error||'主题保存失败，请重试');
-  return {mode:data.mode,light_theme:data.light_theme,dark_theme:data.dark_theme};
+  if (!response.ok || !data.ok || !['light','dark','system'].includes(data.mode) || WORKSPACE_PALETTES[data.light_theme]?.mode!=='light' || WORKSPACE_PALETTES[data.dark_theme]?.mode!=='dark'
+    || typeof data.light_custom!=='boolean' || typeof data.dark_custom!=='boolean'
+    || !/^#[0-9a-f]{6}$/i.test(data.light_accent) || !/^#[0-9a-f]{6}$/i.test(data.dark_accent)) throw new Error(data.error||'主题保存失败，请重试');
+  return {mode:data.mode,light_theme:data.light_theme,dark_theme:data.dark_theme,
+    light_custom:data.light_custom,dark_custom:data.dark_custom,light_accent:data.light_accent,dark_accent:data.dark_accent};
 }
 document.addEventListener('DOMContentLoaded',()=>{
   const root=document.documentElement, media=window.matchMedia?.('(prefers-color-scheme: dark)');
-  let preferences={mode:root.dataset.themeMode||root.dataset.theme||'light',light_theme:root.dataset.lightTheme||'silver',dark_theme:root.dataset.darkTheme||'space'};
+  let preferences={mode:root.dataset.themeMode||root.dataset.theme||'light',light_theme:root.dataset.lightTheme||'silver',dark_theme:root.dataset.darkTheme||'space',
+    light_custom:root.dataset.lightCustom==='true',dark_custom:root.dataset.darkCustom==='true',
+    light_accent:root.dataset.lightAccent||'#3266c7',dark_accent:root.dataset.darkAccent||'#80aaff'};
   const modes=[...document.querySelectorAll('[data-theme-mode-choice]')], palettes=[...document.querySelectorAll('[data-palette-choice]')], toggles=[...document.querySelectorAll('[data-theme-toggle]')];
-  const controls=[...modes,...palettes,...toggles],results=[...document.querySelectorAll('[data-theme-result]')],retries=[...document.querySelectorAll('[data-theme-retry]')];
+  const colors=[...document.querySelectorAll('[data-custom-accent]')];
+  const controls=[...modes,...palettes,...colors,...toggles],results=[...document.querySelectorAll('[data-theme-result]')],retries=[...document.querySelectorAll('[data-theme-retry]')];
   const notice=document.querySelector('[data-theme-notice]'),noticeText=document.querySelector('[data-theme-notice-text]');
   let noticeTimer,noticeTrigger;
   const hideNotice=()=>{clearTimeout(noticeTimer);if(notice)notice.hidden=true;};
@@ -72,7 +87,15 @@ document.addEventListener('DOMContentLoaded',()=>{
     }
   }
   modes.forEach(el=>el.addEventListener('change',()=>save({...preferences,mode:el.value})));
-  palettes.forEach(el=>el.addEventListener('click',()=>save({...preferences,mode:el.dataset.paletteMode,[`${el.dataset.paletteMode}_theme`]:el.dataset.paletteChoice})));
+  palettes.forEach(el=>el.addEventListener('click',()=>{
+    const mode=el.dataset.paletteMode,custom=el.dataset.paletteChoice==='custom-'+mode;
+    return save({...preferences,mode,[mode+'_custom']:custom,
+      ...(custom?{}:{[mode+'_theme']:el.dataset.paletteChoice})});
+  }));
+  colors.forEach(el=>el.addEventListener('change',()=>{
+    const mode=el.dataset.customAccent;
+    return save({...preferences,mode,[mode+'_custom']:true,[mode+'_accent']:el.value});
+  }));
   toggles.forEach(el=>el.addEventListener('click',()=>{
     if(saving)return;
     showNotice(el);

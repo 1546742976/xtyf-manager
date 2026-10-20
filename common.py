@@ -52,7 +52,7 @@ def current_user():
         return None
     row = get_db().execute(
         "SELECT id, name, username, role, group_name, session_version, must_change_password, ui_theme, "
-        "theme_mode, light_theme, dark_theme, avatar_key "
+        "theme_mode, light_theme, dark_theme, light_custom, dark_custom, light_accent, dark_accent, avatar_key "
         "FROM members WHERE id = ? AND is_active = 1 AND deleted_at IS NULL",
         (uid,),
     ).fetchone()

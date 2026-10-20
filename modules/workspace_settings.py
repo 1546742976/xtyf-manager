@@ -9,6 +9,8 @@ from common import current_user, get_db, login_required, now_str
 bp = Blueprint("workspace_settings", __name__)
 LIGHT_THEMES = frozenset({"silver", "rm-light", "mist", "paw"})
 DARK_THEMES = frozenset({"space", "rm-dark", "graphite", "xueli"})
+DEFAULT_LIGHT_ACCENT = "#3266c7"
+DEFAULT_DARK_ACCENT = "#80aaff"
 THEME_MODES = frozenset({"light", "dark", "system"})
 BEIJING = timezone(timedelta(hours=8))
 
@@ -28,6 +30,14 @@ def migrate(db):
         if "dark_theme" not in columns:
             db.execute("ALTER TABLE members ADD COLUMN dark_theme TEXT NOT NULL DEFAULT 'space' "
                        "CHECK(dark_theme IN ('space','rm-dark','graphite','xueli'))")
+        for name, definition in (
+            ("light_custom", "INTEGER NOT NULL DEFAULT 0 CHECK(light_custom IN (0,1))"),
+            ("dark_custom", "INTEGER NOT NULL DEFAULT 0 CHECK(dark_custom IN (0,1))"),
+            ("light_accent", "TEXT NOT NULL DEFAULT '#3266c7'"),
+            ("dark_accent", "TEXT NOT NULL DEFAULT '#80aaff'"),
+        ):
+            if name not in columns:
+                db.execute(f"ALTER TABLE members ADD COLUMN {name} {definition}")
         db.execute("""CREATE TABLE IF NOT EXISTS workspace_countdown (
             id INTEGER PRIMARY KEY CHECK(id=1),
             title TEXT NOT NULL DEFAULT '', target_date TEXT NOT NULL DEFAULT '',
@@ -43,9 +53,13 @@ def migrate(db):
 
 def preferences(user=None):
     if user is None:
-        return {"theme": "light", "mode": "light", "light_theme": "silver", "dark_theme": "space"}
+        return {"theme": "light", "mode": "light", "light_theme": "silver", "dark_theme": "space",
+                "light_custom": False, "dark_custom": False,
+                "light_accent": DEFAULT_LIGHT_ACCENT, "dark_accent": DEFAULT_DARK_ACCENT}
     return {"theme": user["ui_theme"], "mode": user["theme_mode"],
-            "light_theme": user["light_theme"], "dark_theme": user["dark_theme"]}
+            "light_theme": user["light_theme"], "dark_theme": user["dark_theme"],
+            "light_custom": bool(user["light_custom"]), "dark_custom": bool(user["dark_custom"]),
+            "light_accent": user["light_accent"], "dark_accent": user["dark_accent"]}
 
 
 def theme_context():

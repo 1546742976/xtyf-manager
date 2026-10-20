@@ -6,6 +6,7 @@ the server even when the management UI hides privileged fields.
 from __future__ import annotations
 
 import sqlite3
+import re
 
 from flask import Blueprint, jsonify, request, session
 from werkzeug.security import generate_password_hash
@@ -192,12 +193,27 @@ def account_preferences():
         if not isinstance(data["theme"], str) or data["theme"] not in {"light", "dark"}:
             return jsonify(ok=False, error="请选择亮色或暗色主题"), 400
         saved.update(mode=data["theme"], theme=data["theme"])
-    elif set(data) == {"mode", "light_theme", "dark_theme"}:
+    elif set(data) in (
+            {"mode", "light_theme", "dark_theme"},
+            {"mode", "light_theme", "dark_theme", "light_custom", "dark_custom",
+             "light_accent", "dark_accent"}):
         if (not isinstance(data["mode"], str) or data["mode"] not in THEME_MODES
                 or not isinstance(data["light_theme"], str) or data["light_theme"] not in LIGHT_THEMES
                 or not isinstance(data["dark_theme"], str) or data["dark_theme"] not in DARK_THEMES):
             return jsonify(ok=False, error="请选择有效的主题模式及亮色、暗色配色"), 400
-        saved.update(data)
+        custom_fields = {"light_custom", "dark_custom", "light_accent", "dark_accent"}
+        if custom_fields <= set(data):
+            if (type(data["light_custom"]) is not bool or type(data["dark_custom"]) is not bool
+                    or any(not isinstance(data[key], str) or
+                           re.fullmatch(r"#[0-9a-fA-F]{6}", data[key], flags=re.ASCII) is None
+                           for key in ("light_accent", "dark_accent"))):
+                return jsonify(ok=False, error="自定义主题色应为 #RRGGBB，主题开关应为布尔值"), 400
+            saved.update({key: data[key].lower() if key.endswith("_accent") else data[key]
+                          for key in custom_fields})
+        else:
+            # Older clients selecting built-in palettes must exit both custom modes.
+            saved.update(light_custom=False, dark_custom=False)
+        saved.update({key: data[key] for key in ("mode", "light_theme", "dark_theme")})
         if saved["mode"] != "system":
             saved["theme"] = saved["mode"]
     else:
@@ -205,8 +221,11 @@ def account_preferences():
     db = get_db()
     # Preferences never change session_version or another member's settings.
     with db:
-        db.execute("UPDATE members SET ui_theme=?,theme_mode=?,light_theme=?,dark_theme=? WHERE id=?",
-                   (saved["theme"], saved["mode"], saved["light_theme"], saved["dark_theme"], actor["id"]))
+        db.execute("UPDATE members SET ui_theme=?,theme_mode=?,light_theme=?,dark_theme=?,"
+                   "light_custom=?,dark_custom=?,light_accent=?,dark_accent=? WHERE id=?",
+                   (saved["theme"], saved["mode"], saved["light_theme"], saved["dark_theme"],
+                    int(saved["light_custom"]), int(saved["dark_custom"]),
+                    saved["light_accent"], saved["dark_accent"], actor["id"]))
     return jsonify(ok=True, **saved)
 
 

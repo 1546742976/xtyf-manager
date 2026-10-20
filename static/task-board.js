@@ -70,6 +70,8 @@ function renderStats() {
 function taskCard(task, extraClass = "", memberId = null) {
   const note = String(task.latest_note ?? task.latest_progress?.note ?? '').trim();
   const noteAuthor = task.latest_note != null ? task.latest_note_author : task.latest_progress?.actor_name;
+  const images = (Array.isArray(task.latest_progress?.image_ids) ? task.latest_progress.image_ids : [])
+    .map(Number).filter(id => Number.isSafeInteger(id) && id > 0).slice(0, 2);
   const lead = memberById(task.owner_id);
   const participants = taskParticipants(task).map((id) => memberById(id)?.name || `成员 #${id}`);
   const warnings = task.dependency_warnings || [];
@@ -81,7 +83,12 @@ function taskCard(task, extraClass = "", memberId = null) {
     ${state.view === "specialty" ? `<p class="task-plan-dates">计划：${esc(task.start_date || "未设开始")} → ${esc(task.due_date || "未设截止")}</p>` : ""}
     <div class="task-progress-heading"><span>任务进度</span><strong>${Math.max(0, Math.min(100, Number(task.progress) || 0))}%</strong></div>
     <div class="progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(task.progress) || 0))}"><div class="progress-inner blue" style="width:${Math.max(0, Math.min(100, Number(task.progress) || 0))}%"></div></div>
-    ${note ? `<div class="task-note"><span>${esc(noteAuthor || "成员")}</span><p>${esc(note)}</p></div>` : ""}
+    ${note || images.length ? `<div class="task-note">
+      <span>${esc(noteAuthor || task.latest_progress?.actor_name || "成员")}</span>
+      ${note ? `<p>${esc(note)}</p>` : ""}
+      ${images.length ? `<div class="task-note-images">${images.map(id =>
+        `<img src="/api/task/${Number(task.id)}/attachments/${id}" alt="进度截图" loading="lazy">`).join("")}</div>` : ""}
+    </div>` : ""}
     <div class="task-foot"><span>${badge(daysLeftText(task), daysLeftClass(task))}</span><span>更新 ${esc(task.updated_at)}</span></div>
   </article>`;
 }

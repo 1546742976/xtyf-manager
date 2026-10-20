@@ -32,7 +32,9 @@ class TestWorkspaceSettings(unittest.TestCase):
                 'title': self.before_countdown['title'],
                 'target_date': self.before_countdown['target_date'], 'version': current['version']})
         self.admin.post('/api/account/preferences', json={
-            key: self.before_preferences[key] for key in ('mode', 'light_theme', 'dark_theme')})
+            key: self.before_preferences[key] for key in (
+                'mode', 'light_theme', 'dark_theme', 'light_custom', 'dark_custom',
+                'light_accent', 'dark_accent')})
 
     def member_login(self):
         client = app_module.app.test_client()
@@ -59,7 +61,8 @@ class TestWorkspaceSettings(unittest.TestCase):
         self.member.post('/api/account/preferences', json={
             'mode': 'system', 'light_theme': 'paw', 'dark_theme': 'xueli'})
         response = self.member.post('/api/account/preferences', json={'theme': 'dark'})
-        self.assertEqual(response.get_json(), {
+        self.assertEqual({key: response.get_json()[key] for key in (
+            'ok', 'mode', 'theme', 'light_theme', 'dark_theme')}, {
             'ok': True, 'mode': 'dark', 'theme': 'dark', 'light_theme': 'paw', 'dark_theme': 'xueli'})
         self.member.post('/api/account/preferences', json={
             'mode': 'system', 'light_theme': 'silver', 'dark_theme': 'graphite'})
@@ -81,6 +84,35 @@ class TestWorkspaceSettings(unittest.TestCase):
         self.assertEqual(self.member.get('/api/account/preferences').get_json(), previous)
         anonymous = app_module.app.test_client()
         self.assertEqual(anonymous.post('/api/account/preferences', json=valid).status_code, 401)
+
+    def test_custom_palettes_persist_validate_and_migrate_without_overwriting(self):
+        custom = {'mode': 'system', 'light_theme': 'silver', 'dark_theme': 'space',
+                  'light_custom': True, 'dark_custom': True,
+                  'light_accent': '#A1b2C3', 'dark_accent': '#123abc'}
+        session_version = self.member.get('/api/data').get_json()['me']['session_version']
+        response = self.member.post('/api/account/preferences', json=custom)
+        self.assertEqual(response.status_code, 200)
+        expected = dict(custom, light_accent='#a1b2c3')
+        saved = self.member_login().get('/api/account/preferences').get_json()
+        self.assertEqual({key: saved[key] for key in custom}, expected)
+        self.assertEqual(self.member.get('/api/data').get_json()['me']['session_version'], session_version)
+        self.assertIn('data-palette="custom-light"', self.member.get('/tasks').get_data(as_text=True))
+        from modules.workspace_settings import migrate as migrate_appearance
+        with app_module.app.app_context():
+            migrate_appearance(settings.get_db())
+        self.assertEqual({key: self.member.get('/api/account/preferences').get_json()[key]
+                          for key in custom}, expected)
+        for invalid_fields in ({'light_accent': '#fff'}, {'dark_accent': '#11223344'},
+                      {'light_custom': 1}, {'dark_custom': 'true'},
+                      {'light_accent': 'red'}, {'dark_accent': '#00zz00'}):
+            invalid = dict(custom, **invalid_fields)
+            self.assertEqual(self.member.post('/api/account/preferences', json=invalid).status_code, 400)
+            self.assertEqual({key: self.member.get('/api/account/preferences').get_json()[key]
+                              for key in custom}, expected)
+        self.assertEqual(self.member.post('/api/account/preferences', json={
+            'mode': 'light', 'light_theme': 'mist', 'dark_theme': 'graphite'}).status_code, 200)
+        self.assertFalse(self.member.get('/api/account/preferences').get_json()['light_custom'])
+        self.assertFalse(self.member.get('/api/account/preferences').get_json()['dark_custom'])
 
     def test_countdown_read_permissions_and_admin_only_write_with_audit(self):
         initial = self.member.get('/api/workspace/countdown').get_json()['countdown']

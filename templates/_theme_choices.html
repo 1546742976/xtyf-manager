@@ -4,7 +4,7 @@
   <label><input type="radio" name="{{ theme_control_id }}-mode" data-theme-mode-choice value="{{ mode }}">{{ label }}</label>
   {% endfor %}
 </fieldset>
-{% for mode, label, palettes in [('light','亮色配色',[('silver','Mistral 暖橙'),('rm-light','RM 机甲红蓝'),('mist','云雾绿'),('paw','奶霜猫爪粉')]),('dark','暗色配色',[('space','GitHub 暗黑'),('rm-dark','黑白极简'),('graphite','石墨灰金'),('xueli','雪梨星语')])] %}
+{% for mode, label, palettes in [('light','亮色配色',[('silver','Mistral 暖橙'),('rm-light','RM 机甲红蓝'),('mist','云雾绿'),('paw','奶霜猫爪粉'),('custom-light','自定义浅色')]),('dark','暗色配色',[('space','GitHub 暗黑'),('rm-dark','黑白极简'),('graphite','石墨灰金'),('xueli','雪梨星语'),('custom-dark','自定义深色')])] %}
 <fieldset class="palette-options" {% if me.must_change_password %}disabled{% endif %}>
   <legend>{{ label }}</legend>
   {% for palette, name in palettes %}
@@ -13,6 +13,11 @@
     <span>{{ name }}</span>
   </button>
   {% endfor %}
+  <label class="custom-accent-picker">
+    <span>自定义主题色</span>
+    <input type="color" data-custom-accent="{{ mode }}" value="{{ (me.light_accent if mode == 'light' else me.dark_accent) if me else ('#3266c7' if mode == 'light' else '#80aaff') }}" aria-label="{{ label }}自定义主题色">
+    <small>选择颜色即启用对应自定义主题</small>
+  </label>
 </fieldset>
 {% endfor %}
 <p class="theme-preference-hint">亮暗配色分别记忆。跟随系统时，自动使用对应配色。</p>

@@ -67,6 +67,8 @@ class TestClientAPI(unittest.TestCase):
         self.assertEqual(data["role_names"], app_module.ROLE_NAMES)
         self.assertEqual(data["theme_preferences"], {
             "theme": "light", "mode": "light", "light_theme": "silver", "dark_theme": "space",
+            "light_custom": False, "dark_custom": False,
+            "light_accent": "#3266c7", "dark_accent": "#80aaff",
         })
         self.assertEqual(len(data["theme_options"]["light"]), 4)
         self.assertEqual(len(data["theme_options"]["dark"]), 4)
@@ -140,6 +142,8 @@ class TestClientAPI(unittest.TestCase):
         data = self.bootstrap().get_json()
         self.assertEqual(data["theme_preferences"], {
             "theme": "light", "mode": "system", "light_theme": "paw", "dark_theme": "xueli",
+            "light_custom": False, "dark_custom": False,
+            "light_accent": "#3266c7", "dark_accent": "#80aaff",
         })
         self.assertEqual(data["user"]["theme_mode"], "system")
         self.assertNotEqual(self.bootstrap(self.admin).get_json()["user"]["id"], data["user"]["id"])
