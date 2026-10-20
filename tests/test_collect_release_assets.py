@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from clients.collect_release_assets import collect, expected_artifacts, validate_tag
+from clients.release_target import validate_existing_release
 
 
 class ReleaseCollectionTests(unittest.TestCase):
@@ -67,6 +68,46 @@ class ReleaseCollectionTests(unittest.TestCase):
             collect(self.artifacts, self.root / "out", version="1.1.0",
                     tag="v1.1.0", channel="stable")
 
+
+
+class ExistingReleaseGuardTests(unittest.TestCase):
+    def setUp(self):
+        self.release = {
+            "tagName": "v1.1.0",
+            "isDraft": False,
+            "isPrerelease": False,
+            "isImmutable": False,
+            "assets": [],
+        }
+
+    def test_empty_manually_created_stable_release_is_allowed(self):
+        validate_existing_release(self.release, "v1.1.0")
+
+    def test_release_with_binary_is_rejected(self):
+        self.release["assets"] = [{"name": "XTYF-Manager-1.1.0.apk"}]
+        with self.assertRaisesRegex(ValueError, "Refusing to overwrite"):
+            validate_existing_release(self.release, "v1.1.0")
+
+    def test_metadata_for_different_tag_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            validate_existing_release(self.release, "v1.1.1")
+
+    def test_prerelease_or_draft_is_rejected(self):
+        for key in ("isDraft", "isPrerelease"):
+            with self.subTest(key=key):
+                self.release[key] = True
+                with self.assertRaisesRegex(ValueError, "published, stable"):
+                    validate_existing_release(self.release, "v1.1.0")
+                self.release[key] = False
+
+    def test_immutable_and_missing_asset_fields_are_rejected(self):
+        self.release["isImmutable"] = True
+        with self.assertRaisesRegex(ValueError, "immutable"):
+            validate_existing_release(self.release, "v1.1.0")
+        self.release["isImmutable"] = False
+        del self.release["assets"]
+        with self.assertRaisesRegex(ValueError, "missing or malformed"):
+            validate_existing_release(self.release, "v1.1.0")
 
 if __name__ == "__main__":
     unittest.main()

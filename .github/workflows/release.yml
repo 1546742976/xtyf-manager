@@ -96,14 +96,27 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: python clients/collect_release_assets.py --artifacts-dir dist/github-artifacts --output-dir dist/release-assets --tag "$RELEASE_TAG" --channel stable
-      - name: Refuse to overwrite an existing stable release
+      - name: Inspect existing stable Release before uploading
+        id: release_state
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::Release $RELEASE_TAG already exists; create a new version instead."
+          set -euo pipefail
+          release_json="$RUNNER_TEMP/stable-release.json"
+          release_error="$RUNNER_TEMP/stable-release-error.txt"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,isImmutable,assets >"$release_json" 2>"$release_error"; then
+            # Complete an existing empty GitHub Release (e.g. one created
+            # manually with its tag). Never overwrite previously published assets.
+            python clients/release_target.py --tag "$RELEASE_TAG" --metadata "$release_json"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'release not found|HTTP 404' "$release_error"; then
+            echo "No Release exists for $RELEASE_TAG; create one after verification."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            # Do not silently interpret authentication/network failures as 404.
+            cat "$release_error" >&2
             exit 1
           fi
       - name: Publish GitHub Release
@@ -114,6 +127,7 @@ jobs:
           name: XTYF Manager ${{ needs.validate.outputs.tag }}
           prerelease: false
           make_latest: true
-          generate_release_notes: true
+          # Preserve release notes already written on a manually created empty Release.
+          generate_release_notes: ${{ steps.release_state.outputs.exists != 'true' }}
           fail_on_unmatched_files: true
           files: dist/release-assets/*
