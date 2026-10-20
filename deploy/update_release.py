@@ -57,8 +57,11 @@ def protect_recovery():
 
 def install_dependencies(python, requirements, log_path):
     """Install while the old service is online, with live output and a total deadline."""
+    # Match the initial installer without changing the server's global pip config.
+    index_url = os.environ.get('PIP_INDEX_URL', '').strip() or 'https://pypi.tuna.tsinghua.edu.cn/simple'
     args = [str(python), '-m', 'pip', 'install', '--disable-pip-version-check',
             '--progress-bar', 'off', '--timeout', '30', '--retries', '2',
+            '--index-url', index_url,
             '-r', str(requirements), 'gunicorn']
     print('Preparing dependencies while the current service remains online.', flush=True)
     print('Dependency log: ' + str(log_path), flush=True)
