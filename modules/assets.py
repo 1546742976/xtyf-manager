@@ -71,6 +71,8 @@ def migrate_assets(db):
         CREATE TRIGGER IF NOT EXISTS asset_event_no_delete BEFORE DELETE ON asset_events
             BEGIN SELECT RAISE(ABORT,'asset history is immutable'); END;
     """)
+    from modules.asset_scan import migrate as migrate_scan
+    migrate_scan(db)
     db.commit()
 
 
@@ -126,11 +128,11 @@ def mutation(view):
             if not isinstance(data, dict):
                 raise Invalid("请求必须是 JSON 对象")
             catalog_fields = {"request_id", "name", "specification", "category", "unit",
-                              "kind", "id", "version", "active"}
+                              "kind", "id", "version", "active", "supplier_code"}
             operation_fields = {"request_id", "action", "reason", "occurred_at", "quantity",
                                 "loan_id", "item_id", "campus_id", "target_campus_id",
                                 "version", "event_id"}
-            allowed = catalog_fields if request.endpoint == "assets.save_catalog" else operation_fields
+            allowed = getattr(view, 'asset_fields', catalog_fields if request.endpoint == "assets.save_catalog" else operation_fields)
             if set(data) - allowed:
                 raise Invalid("资产请求包含不支持的字段")
             key = text(data, "request_id", maximum=100)
@@ -247,6 +249,17 @@ def save_catalog(db, data, kind):
     else:
         identity = db.execute(f"INSERT INTO {table}({','.join(fields)}) VALUES({','.join('?' for _ in fields)})",
                               tuple(fields.values())).lastrowid
+    if kind == 'items' and data.get('supplier_code'):
+        from modules.asset_scan import parse_label
+        parsed = parse_label(data['supplier_code'])
+        if parsed['type'] != 'supplier':
+            raise Invalid('请填写供应商 C 编号')
+        existing = db.execute('SELECT item_id FROM asset_identifiers WHERE supplier=? AND code=?',
+                              (parsed['supplier'], parsed['code'])).fetchone()
+        if existing and existing[0] != identity:
+            raise Invalid('供应商编号已关联其他物料', 409)
+        db.execute('INSERT OR IGNORE INTO asset_identifiers(item_id,supplier,code) VALUES(?,?,?)',
+                   (identity, parsed['supplier'], parsed['code']))
     event(db, "catalog", "目录维护", item_id=identity if kind == "items" else None,
           campus_id=identity if kind == "campuses" else None,
           details={"kind": kind, "id": identity, "before": before, "after": fields})

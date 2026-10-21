@@ -116,7 +116,7 @@
           ${c.can_manage?button('edit-item','编辑物品',i.id):''}</div></article>`).join('')}</div>${pager('items',data.page,data.total)}`:
           '<p class="asset-empty">暂无符合条件的物品。管理员可先配置校区，再新增物品并登记入库。</p>';
       }
-      status('数据已更新。');return true;
+      status('数据已更新。');document.dispatchEvent(new CustomEvent('assets-loaded'));return true;
     }catch(e){if(own===generation)status(e.message+'；可点击“刷新数据”重试。');return false;}
     finally{if(own===generation)$('asset-content').setAttribute('aria-busy','false');}
   }
@@ -277,5 +277,6 @@
   filter.addEventListener('change',e=>{
     if(e.target.name==='campus_id'||e.target.name==='category'){listPage=1;load();}
   });
+  window.AssetLedger={api,load,open,input,reason,options,esc,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;}};
   load();
 })();

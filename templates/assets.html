@@ -8,6 +8,7 @@
   </header>
   <nav class="asset-tabs" aria-label="资产导航">
     <a class="btn" href="/assets">全部物品</a><a class="btn" href="/assets?view=mine">我的借用</a>
+    <button class="btn" id="asset-scan" type="button">扫码登记</button>
     <button class="btn" id="asset-campuses" type="button" hidden>校区管理</button>
     <button class="btn" id="asset-categories" type="button" hidden>类别管理</button>
     <button class="btn primary" id="asset-create" type="button" hidden>新增物品</button>
@@ -33,5 +34,10 @@
     <footer><button class="btn primary" id="asset-save" type="submit">确认保存</button></footer>
   </form>
 </dialog>
+<dialog id="asset-scan-dialog" class="asset-dialog" aria-labelledby="asset-scan-title">
+  <header class="asset-heading"><h2 id="asset-scan-title">扫码工作台</h2><button type="button" class="btn" id="asset-scan-close">关闭</button></header>
+  <form id="asset-scan-form" class="asset-fields"><label>标签原文或商品编号<textarea id="asset-scan-raw" rows="3" maxlength="4096" required></textarea></label><button class="btn" type="submit">识别</button></form>
+  <div id="asset-scan-camera"></div><p id="asset-scan-status" role="status"></p><div id="asset-scan-preview"></div>
+</dialog>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='assets.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='assets.js') }}"></script><script src="{{ url_for('static', filename='asset-scan.js') }}"></script>{% endblock %}

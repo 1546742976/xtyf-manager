@@ -127,6 +127,8 @@ configure_mail(app)
 from modules.assets import bp as assets_bp, migrate_assets
 
 app.register_blueprint(assets_bp)
+from modules.asset_scan import bp as asset_scan_bp
+app.register_blueprint(asset_scan_bp)
 app.context_processor(lambda: {"assets_enabled": True})
 app.register_blueprint(funds_bp, url_prefix="/funds")
 app.register_blueprint(invoices_bp, url_prefix="/invoices")
