@@ -152,15 +152,37 @@
     $('asset-save').textContent='确认保存';
     $('asset-save').hidden=false;dialog.showModal();
   }
-  function catalogEditor(kind,value={}){
+  function campusFields(campuses=catalog.campuses,empty='请选择校区'){
+    return `<label>校区<select name="campus_id">${options(campuses.filter(c=>c.active),'',empty)}</select></label>`+
+      (catalog.can_manage?input('new_campus','或新增校区（填写后请将上方校区留空）','','maxlength="120"'):'');
+  }
+  async function catalogEditor(kind,value={}){
+    let campuses=[];
+    if(kind==='items'&&value.id){
+      try{const fresh=await api('items/'+value.id);value=fresh.item;campuses=fresh.campuses;}
+      catch(error){status(error.message);return;}
+    }
     const isItem=kind==='items',label={items:'物品',campuses:'校区',categories:'类别'}[kind],base=value.id?{id:value.id,version:value.version}:{};
-    const fields=input('name','名称',value.name||'','required maxlength="120"')+(isItem?
+    let fields=input('name','名称',value.name||'','required maxlength="120"')+(isItem?
       input('specification','型号／规格',value.specification||'','maxlength="120"')+input('supplier_code','新增嘉立创 C 编号（选填）','','maxlength="40"')+
       `<label>类别<select name="category">${options((catalog.categories||[]).filter(c=>c.active).map(c=>({id:c.name,name:c.name})),value.category||'','未分类')}</select></label>`+
       input('unit','计量单位',value.unit||'个','required maxlength="12"')+
       `<label>物品类型<select name="kind">${options([{id:'returnable',name:'可借用品（需归还）'},{id:'consumable',name:'耗材（领用消耗）'}],value.kind||'returnable')}</select></label>`:'')+
       (value.id?`<label>启用状态<select name="active">${options([{id:'true',name:'启用'},{id:'false',name:'停用（移出使用目录，保留历史）'}],value.active?'true':'false')}</select></label><p class="asset-muted">物品有库存或未还借单时不可停用；类别下有启用物品时，请先更换其类别。</p>`:'');
-    open((value.id?'编辑':'新增')+label,fields,'catalog/'+kind,base);
+    const quantityEditor=isItem&&value.id&&!['unit','migrating'].includes(value.tracking);
+    if(quantityEditor)fields+='<fieldset><legend>校区与数量</legend><p>选择校区可修改该校区在库数量，其他校区和未还借单保持原值。留空则只修改物品资料。</p>'+
+      campusFields(campuses,'不调整库存')+'<p id="asset-campus-balance" role="status"></p>'+input('quantity','调整后的在库数量','','type="number" min="0" step="1"')+'</fieldset>';
+    if(isItem&&value.id)fields+=reason(true);
+    if(isItem&&['unit','migrating'].includes(value.tracking))fields+='<p>数量按具体设备统计。增减数量、调整校区，请选择具体实物操作。</p><button type="button" class="btn" id="asset-edit-units">调整单件数量与校区</button>';
+    open((value.id?'编辑':'新增')+label,fields,'catalog/'+kind,base,[],quantityEditor?values=>{
+      const body={...base,...Object.fromEntries(values)};
+      body.active=body.active==='true';
+      if(body.campus_id||body.new_campus||body.quantity!==''){body.inventory={campus_id:Number(body.campus_id),new_campus:body.new_campus,quantity:body.quantity===''?null:Number(body.quantity),version:campuses.find(c=>String(c.id)===body.campus_id)?.stock_version||0,reason:body.reason};}
+      delete body.campus_id;delete body.new_campus;delete body.quantity;return body;
+    }:null);
+    if(operation.recovery)return;
+    if(quantityEditor){operation.campuses=campuses;operation.editInventory=true;updateCampusBalance();}
+    if($('asset-edit-units'))$('asset-edit-units').onclick=()=>{dialog.close();window.AssetUnits.show(value.id);};
   }
   function directoryManager(kind){
     const category=kind==='categories',noun=category?'类别':'校区',action=category?'category':'campus';
@@ -221,7 +243,7 @@
     if(!operation?.campuses)return;
     const campus=operation.campuses.find(c=>String(c.id)===form.elements.campus_id.value);
     $('asset-campus-balance').textContent=campus?`在库 ${campus.available} · 借出未还 ${campus.borrowed}`:'请先选择实际操作校区。';
-    if(operation.base.action==='adjust')form.elements.quantity.value=campus?campus.available:'';
+    if(operation.base.action==='adjust'||operation.editInventory)form.elements.quantity.value=campus?campus.available:'';
   }
   form.addEventListener('change',e=>{if(e.target.name==='campus_id')updateCampusBalance();});
   form.addEventListener('submit',async e=>{
@@ -283,6 +305,6 @@
   filter.addEventListener('change',e=>{
     if(e.target.name==='campus_id'||e.target.name==='category'){listPage=1;load();}
   });
-  window.AssetLedger={api,load,open,input,reason,options,esc,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
+  window.AssetLedger={api,load,open,input,reason,options,esc,campusFields,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
   load();
 })();

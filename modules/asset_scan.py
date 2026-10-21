@@ -169,9 +169,26 @@ def identify(db, data):
 
 
 @bp.post("/api/assets/scan/receive")
-@write("raw", "item_id", "campus_id", "quantity", "reason", "receipt_version", "duplicate_reason")
+@write("raw", "item_id", "campus_id", "new_campus", "quantity", "reason", "receipt_version", "duplicate_reason")
 def receive(db, data):
-    return receive_one(db, data)
+    from modules.assets import inventory_campus
+
+    return receive_one(db, {**data, "campus_id": inventory_campus(db, data)})
+
+
+@bp.post("/api/assets/scan/create-receive")
+@write("raw", "name", "specification", "unit", "kind", "category", "campus_id", "new_campus",
+       "quantity", "reason", "receipt_version", "duplicate_reason")
+def create_receive(db, data):
+    from modules.assets import inventory_campus, save_catalog_record
+
+    require_manager()
+    parsed = parse_label(data.get("raw"))
+    if parsed["type"] != "package":
+        raise Invalid("建档入库需要采购包装标签")
+    campus_id = inventory_campus(db, data)
+    item = save_catalog_record(db, {**data, "supplier_code": parsed["code"]}, "items")
+    return {"item_id": item["id"], **receive_one(db, {**data, "item_id": item["id"], "campus_id": campus_id})}
 
 
 def receive_one(db, data):

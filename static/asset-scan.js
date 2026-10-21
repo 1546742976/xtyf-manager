@@ -53,15 +53,22 @@
         close();if(p.type!=='package'){location.href='/assets/detail?id='+value.item.id;return;}
         core.open('包装入库预览',`<p>${esc(value.item.name)} · 标签数量 ${p.label_quantity??'未知'}</p>`+
           input('quantity','实收数量',p.label_quantity??'','type="number" min="1" step="1" required')+
-          `<label>校区<select name="campus_id" required>${options(core.catalog.campuses.filter(c=>c.active),'','请选择')}</select></label>`+
+          core.campusFields()+
           (value.history.length?'<label>重复标签核对说明（必填）<textarea name="duplicate_reason" required maxlength="500"></textarea></label>':'')+reason(false),
           'scan/receive',{raw:p.raw,item_id:value.item.id,receipt_version:value.receipt_version},['quantity','campus_id']);
       };
       if($('scan-create'))$('scan-create').onclick=()=>{
-        close();core.open('确认物料资料',input('name','名称','','required maxlength="120"')+
-          input('specification','厂家型号',p.model||'','maxlength="120"')+input('supplier_code','商品编号',p.code,'required readonly')+
-          input('unit','单位','颗','required maxlength="12"')+'<label>管理类型<select name="kind"><option value="consumable">耗材</option><option value="returnable">非耗材（逐件建档）</option></select></label>',
-          'catalog/items',{});
+        const packageLabel=p.type==='package';
+        let fields=input('name','名称','','required maxlength="120"')+
+          input('specification','厂家型号',p.model||'','maxlength="120"')+(packageLabel?`<p>商品编号：${esc(p.code)} · 标签数量：${p.label_quantity??'未知'}</p>`:input('supplier_code','商品编号',p.code,'required readonly'))+
+          input('unit','单位','颗','required maxlength="12"')+'<label>管理类型<select name="kind"><option value="consumable">耗材</option><option value="returnable">非耗材（逐件建档）</option></select></label>';
+        close();
+        if(packageLabel){
+          // Keep the scanned quantity and provenance through unknown-material creation.
+          fields+=input('quantity','实收数量',p.label_quantity??'','type="number" min="1" step="1" required')+
+            core.campusFields()+(value.history.length?'<label>重复标签核对说明（必填）<textarea name="duplicate_reason" required maxlength="500"></textarea></label>':'')+reason(false);
+          core.open('确认物料资料并入库',fields,'scan/create-receive',{raw:p.raw,receipt_version:value.receipt_version},['quantity','campus_id']);
+        }else core.open('确认物料资料',fields,'catalog/items',{});
       };
       if($('scan-bind'))$('scan-bind').onclick=async()=>{
         const found=await core.api('items?q='+encodeURIComponent(p.model||p.code));

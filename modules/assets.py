@@ -130,7 +130,7 @@ def mutation(view):
             if not isinstance(data, dict):
                 raise Invalid("请求必须是 JSON 对象")
             catalog_fields = {"request_id", "name", "specification", "category", "unit",
-                              "kind", "id", "version", "active", "supplier_code"}
+                              "kind", "id", "version", "active", "supplier_code", "inventory", "reason"}
             operation_fields = {"request_id", "action", "reason", "occurred_at", "quantity",
                                 "loan_id", "item_id", "campus_id", "target_campus_id",
                                 "version", "event_id"}
@@ -201,6 +201,34 @@ def catalog():
 @bp.post("/api/assets/catalog/<kind>")
 @mutation
 def save_catalog(db, data, kind):
+    result = save_catalog_record(db, data, kind)
+    if "inventory" in data:
+        if kind != "items":
+            raise Invalid("只有物品可以调整库存")
+        inventory = data["inventory"]
+        if not isinstance(inventory, dict) or set(inventory) - {"campus_id", "new_campus", "quantity", "version", "reason"}:
+            raise Invalid("校区库存参数无效")
+        campus_id = inventory_campus(db, inventory)
+        item = row(db, "asset_items", result["id"])
+        if item["tracking"] == "unit":
+            raise Invalid("逐件物品请通过单件管理增减、移动具体设备", 409)
+        operate_record(db, {**inventory, "campus_id": campus_id, "item_id": result["id"], "action": "adjust"})
+    return result
+
+
+def inventory_campus(db, data):
+    """An optional new campus is created inside the caller's inventory transaction."""
+    if data.get("new_campus"):
+        require_manager()
+        if data.get("campus_id"):
+            raise Invalid("新建校区与现有校区不能同时指定")
+        return save_catalog_record(db, {"name": text(data, "new_campus")}, "campuses")["id"]
+    if not data.get("campus_id"):
+        raise Invalid("请选择校区或填写新校区")
+    return integer(data, "campus_id")
+
+
+def save_catalog_record(db, data, kind):
     require_manager()
     if kind not in ("items", "campuses", "categories"):
         raise Invalid("目录类型不存在", 404)
@@ -247,7 +275,8 @@ def save_catalog(db, data, kind):
         ):
             raise Invalid("仍有库存或未还借单，不能停用", 409)
         if kind == "items" and any(before[k] != fields[k] for k in ("unit", "kind")):
-            if db.execute("SELECT 1 FROM asset_events WHERE item_id=? AND action<>'catalog'", (identity,)).fetchone():
+            has_history = db.execute("SELECT 1 FROM asset_events WHERE item_id=? AND action<>'catalog'", (identity,)).fetchone()
+            if has_history and (before["kind"] != fields["kind"] or current_user()["role"] != "admin" or not data.get("reason")):
                 raise Invalid("已有历史记录，不能改变单位或借还类型", 409)
             if before["kind"] != fields["kind"]:
                 fields["tracking"] = "unit" if fields["kind"] == "returnable" else "quantity"
@@ -267,7 +296,7 @@ def save_catalog(db, data, kind):
             raise Invalid('供应商编号已关联其他物料', 409)
         db.execute('INSERT OR IGNORE INTO asset_identifiers(item_id,supplier,code) VALUES(?,?,?)',
                    (identity, parsed['supplier'], parsed['code']))
-    event(db, "catalog", "目录维护", item_id=identity if kind == "items" else None,
+    event(db, "catalog", text(data, "reason", maximum=500) if data.get("reason") else "目录维护", item_id=identity if kind == "items" else None,
           campus_id=identity if kind == "campuses" else None,
           details={"kind": kind, "id": identity, "before": before, "after": fields})
     return {"id": identity}
@@ -286,6 +315,10 @@ def stock_change(db, item_id, campus_id, delta):
 @bp.post("/api/assets/operations")
 @mutation
 def operate(db, data):
+    return operate_record(db, data)
+
+
+def operate_record(db, data):
     action = text(data, "action")
     reason = text(data, "reason", True, 500)
     occurred_at = data.get("occurred_at")

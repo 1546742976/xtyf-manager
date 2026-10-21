@@ -45,9 +45,31 @@ async function main(){
     const supply=(await post('/api/assets/catalog/items',{request_id:crypto.randomUUID(),name:'合成电阻 '+label,kind:'consumable',unit:'颗',supplier_code:label==='chromium'?'C10001':'C10002'})).id;
     await page.locator('#asset-scan').click();await page.locator('#asset-scan-mode').selectOption('query');
     await page.locator('#asset-scan-raw').fill(`{on:TEST-${label},pc:${label==='chromium'?'C10001':'C10002'},pm:SYNTHETIC,qty:100,mc:,pdi:unknown}`);await page.locator('#asset-scan-raw').press('Enter');await page.locator('#scan-receive').click();
+    assert.equal(await page.getByLabel('实收数量',{exact:true}).inputValue(),'100');
     await page.getByLabel('实收数量',{exact:true}).fill('70');await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成开封包装');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     const stock=(await(await api.get('/api/assets/items/'+supply)).json()).campuses;assert.equal(stock.find(c=>c.id===campus).available,70);
     await page.locator(`[data-action=print-item][data-id="${supply}"]`).click();await page.locator('#asset-label-download').waitFor();assert((await page.locator('#asset-label-download').getAttribute('href')).includes('kind=item'));await page.locator('#asset-label-close').click();
+    await page.locator(`[data-action=edit-item][data-id="${supply}"]`).click();
+    await page.getByLabel('调整后的在库数量',{exact:true}).fill('80');await page.getByLabel('原因（必填）',{exact:true}).fill('合成盘点更正');
+    await page.locator('#asset-save').click();await page.locator('#asset-form-status').filter({hasText:'请选择校区或填写新校区'}).waitFor();
+    assert.equal(await page.getByLabel('调整后的在库数量',{exact:true}).inputValue(),'80');
+    await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));
+    assert.equal(await page.getByLabel('调整后的在库数量',{exact:true}).inputValue(),'70');
+    await page.getByLabel('调整后的在库数量',{exact:true}).fill('80');await page.getByLabel('原因（必填）',{exact:true}).fill('合成盘点更正');
+    await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    assert.equal((await(await api.get('/api/assets/items/'+supply)).json()).campuses.find(c=>c.id===campus).available,80);
+    for(const [suffix,kind,qty] of [['1','consumable','6'],['2','returnable','2']]){
+      await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill(`{on:TEST-NEW-${label},pc:C${label==='chromium'?'31':'32'}${suffix},pm:SYNTHETIC,qty:${qty},mc:}`);
+      await page.locator('#asset-scan-raw').press('Enter');await page.locator('#scan-create').click();
+      assert.equal(await page.getByLabel('实收数量',{exact:true}).inputValue(),qty);
+      await page.getByLabel('名称',{exact:true}).fill('新扫码 '+label+kind);await page.locator('#asset-form [name=kind]').selectOption(kind);
+      if(kind==='consumable')await page.locator('#asset-form [name=new_campus]').fill('扫码新校区 '+label);
+      else await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));
+      await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成扫码建档入库');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+      const created=(await(await api.get('/api/assets/items?q='+encodeURIComponent('新扫码 '+label+kind))).json()).items[0];assert.equal(created.total,Number(qty));
+    }
+    await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill('{pc:C999999,qty:bad}');await page.locator('#asset-scan-raw').press('Enter');await page.locator('#scan-create').click();
+    assert.equal(await page.getByLabel('实收数量',{exact:true}).inputValue(),'');await page.locator('#asset-close').click();
     await page.locator('#asset-objects').click();await page.getByRole('button',{name:'新增使用对象',exact:true}).click();await page.getByLabel('名称',{exact:true}).fill('合成机器人 '+label);await page.getByLabel('原因（必填）',{exact:true}).fill('合成建档');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});await page.getByRole('heading',{name:'合成机器人 '+label,exact:true}).waitFor();await page.locator('#asset-lifecycle-close').click();
     await page.locator('#asset-takes').click();await page.getByRole('button',{name:'开始盘点',exact:true}).click();await page.locator(`#asset-form [name=items][value="${item.id}"]`).check();await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));await page.getByLabel('原因（必填）',{exact:true}).fill('合成盘点');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});await page.getByRole('button',{name:'查看盘点',exact:true}).first().click();await page.getByRole('button',{name:'核对差异并解冻',exact:true}).click();await page.getByLabel('原因（必填）',{exact:true}).fill('未扫描只记待核实');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});await page.locator('#asset-take-detail h4').filter({hasText:'closed'}).waitFor();await page.locator('#asset-lifecycle-close').click();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
