@@ -102,6 +102,20 @@ def receipt_history(db, raw):
     ]
 
 
+def attach_receipts(db, events):
+    """One batched query exposes source evidence without rewriting immutable events."""
+    if not events:
+        return
+    marks = ",".join("?" for _ in events)
+    receipts = {}
+    for r in db.execute(f"SELECT * FROM asset_receipts WHERE event_id IN ({marks})", [e["id"] for e in events]):
+        value = dict(r)
+        value["parsed"] = json.loads(value["parsed"])
+        receipts[value["event_id"]] = value
+    for e in events:
+        e["receipt"] = receipts.get(e["id"])
+
+
 @bp.post("/api/assets/scan/resolve")
 @read
 def resolve():
@@ -113,6 +127,7 @@ def resolve():
     if parsed["type"] == "unit":
         unit = row(db, "asset_units", parsed["id"])
         item = row(db, "asset_items", unit["item_id"])
+        unit["item_name"] = item["name"]
     elif parsed["type"] == "item":
         item = row(db, "asset_items", parsed["id"])
     else:

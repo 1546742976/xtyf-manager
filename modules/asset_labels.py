@@ -46,6 +46,12 @@ def labels():
                 )
             )
         pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+
+        def fit(value, points, width):
+            while value and pdfmetrics.stringWidth(value, "STSong-Light", points) > width:
+                value = value[:-1]
+            return value
+
         output = BytesIO()
         page_w, page_h = (210, 297) if a4 else (w, h)
         doc = canvas.Canvas(output, pagesize=(page_w * mm, page_h * mm))
@@ -64,11 +70,11 @@ def labels():
             doc.translate((w - 60 * scale) * mm / 2, (h - 35 * scale) * mm / 2)
             doc.scale(scale, scale)
             doc.setFont("STSong-Light", 8)
-            doc.drawString(2 * mm, 31 * mm, name[:26])
+            doc.drawString(2 * mm, 31 * mm, fit(name, 8, 56 * mm))
             doc.setFont("Helvetica", 8)
             doc.drawString(2 * mm, 26 * mm, code)
             doc.setFont("STSong-Light", 6)
-            doc.drawString(2 * mm, 22 * mm, serial[:30])
+            doc.drawString(2 * mm, 22 * mm, fit(serial, 6, 35 * mm))
             widget = qr.QrCodeWidget(code)
             bounds = widget.getBounds()
             size = 19 * mm

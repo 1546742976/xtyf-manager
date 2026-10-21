@@ -70,6 +70,7 @@
         <p>${esc(e.actor_name)} · 提交：${esc(e.created_at)}${e.member_name?' · 相关成员：'+esc(e.member_name):''}</p>
         ${e.details.occurred_at?`<p>登记时间：${esc(e.details.occurred_at)}（北京时间）</p>`:''}
         <p>${movements}</p><p>${esc(e.reason)||'未填写用途'}${e.corrects_id?' · 纠正 #'+e.corrects_id:''}${e.correction_id?' · 已由 #'+e.correction_id+' 纠正':''}</p>
+        ${e.receipt?`<details><summary>包装入库来源 · 标签 ${e.receipt.label_quantity??'未知'} / 实收 ${e.receipt.actual_quantity}</summary><pre>${esc(JSON.stringify(e.receipt,null,2))}</pre></details>`:''}
         ${catalog.can_manage&&!e.correction_id&&['receive','adjust','transfer','consume','borrow','return'].includes(e.action)?button('correct','登记纠错',e.id):''}</li>`;
     }).join('')}</ol>${data.total?'':'<p class="asset-empty">暂无记录。</p>'}${pager('events',data.page,data.total)}`;
   }
@@ -89,7 +90,7 @@
         if(own!==generation)return; detail=d;
         $('asset-title').textContent=d.item.name;
         $('asset-content').innerHTML=`<p>${esc(d.item.specification)} · ${esc(d.item.category||'未分类')} · ${d.item.kind==='returnable'?'可借用品':'耗材'}${d.item.active?'':' · 已停用'}</p>
-          ${c.can_manage?button('edit-item','编辑物品',itemId):''}${window.AssetUnits&&d.item.kind==='returnable'?button('units',d.item.tracking==='unit'?'管理单件':'实物核对迁移',itemId):''}
+          ${c.can_manage?button('edit-item','编辑物品',itemId):''}${window.AssetLabels?button('print-item','打印物料标签',itemId):''}${window.AssetUnits&&d.item.kind==='returnable'?button('units',d.item.tracking==='unit'?'管理单件':'实物核对迁移',itemId):''}
           <div class="asset-grid asset-section">${d.campuses.map(s=>`<article class="asset-card"><h2>${esc(s.name)}${s.active?'':'（停用）'}</h2>
           <span class="asset-count">${d.item.kind==='returnable'?s.available+s.borrowed:s.available} <small>${esc(d.item.unit)}</small></span>
           <p>${d.item.kind==='returnable'?`总量 · 在库 ${s.available} / 借出 ${s.borrowed}`:`剩余库存 · 累计领用 ${s.consumed}`}</p>
@@ -113,7 +114,7 @@
           <span class="asset-count">${i.kind==='returnable'?i.total:i.available} <small>${esc(i.unit)}</small></span>
           <p>${i.kind==='returnable'?`总量 · 在库 ${i.available} / 借出 ${i.borrowed}`:`剩余库存 · 累计领用 ${i.consumed}`}</p>
           <div class="asset-actions">${i.active?button('register',i.tracking==='unit'?'管理单件':i.kind==='returnable'?'登记借用':'登记领用',i.id)+(i.tracking==='unit'?'':button('quantity','调整数量',i.id)):''}
-          ${c.can_manage?button('edit-item','编辑物品',i.id):''}</div></article>`).join('')}</div>${pager('items',data.page,data.total)}`:
+          ${c.can_manage?button('edit-item','编辑物品',i.id):''}${window.AssetLabels?button('print-item','打印物料标签',i.id):''}</div></article>`).join('')}</div>${pager('items',data.page,data.total)}`:
           '<p class="asset-empty">暂无符合条件的物品。管理员可先配置校区，再新增物品并登记入库。</p>';
       }
       status('数据已更新。');document.dispatchEvent(new CustomEvent('assets-loaded'));return true;
@@ -171,6 +172,7 @@
     if(action==='new-campus'||action==='edit-campus'){dialog.close();catalogEditor('campuses',catalog.campuses.find(c=>c.id===id)||{});return;}
     if(action==='new-category'||action==='edit-category'){dialog.close();catalogEditor('categories',catalog.categories.find(c=>c.id===id)||{});return;}
     if(action==='units'){await window.AssetUnits.show(id);return;}
+    if(action==='print-item'){window.AssetLabels.open([detail?.item||listing.find(i=>i.id===id)]);return;}
     if(action==='edit-item'){catalogEditor('items',detail?.item||listing.find(i=>i.id===id));return;}
     if((action==='register'||action==='quantity')&&listing.find(i=>i.id===id)?.tracking==='unit'){await window.AssetUnits.show(id);return;}
     if(action==='register'||action==='quantity'){

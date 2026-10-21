@@ -51,19 +51,20 @@
       (item.tracking==='legacy'?btn('migrate-start','冻结并开始核对'):btn('migrate-add','登记核对实物')+btn('migrate-finish','确认全部对应并切换')+btn('migrate-cancel','取消核对并解冻'));
     status(item.tracking==='migrating'?'型号已冻结；误录可取消本次核对后重新登记。':'尚未分配任何单件身份。');
   }
-  async function act(action,id){
+  async function act(action,id,historyPage=1){
     if(action==='prev'||action==='next'){page+=action==='next'?1:-1;return refresh();}
     if(action==='clear'){selected.clear();return refresh();}
     if(action==='history'){
-      const h=await api(`units/${id}/history`);
-      $('asset-unit-history').innerHTML=`<h3>U:${id} 历史（最近 100 条）</h3><ol>${h.events.map(e=>`<li>#${e.id} ${esc(actions[e.action.replace('unit_','')]||e.action)} · ${esc(e.actor_name)} · ${esc(e.created_at)}<p>${esc(e.reason)}</p><details><summary>前后状态与来源</summary><pre>${esc(JSON.stringify(e.details,null,2))}</pre></details></li>`).join('')}</ol>`;return;
+      const h=await api(`units/${id}/history?page=${historyPage}`);
+      $('asset-unit-history').innerHTML=`<h3>U:${id} 历史 · 第 ${h.page} 页 / 共 ${h.total} 条</h3><ol>${h.events.map(e=>`<li>#${e.id} ${esc(actions[e.action.replace('unit_','')]||e.action)} · ${esc(e.actor_name)} · ${esc(e.created_at)}<p>${esc(e.reason)}</p><details><summary>前后状态与来源</summary><pre>${esc(JSON.stringify({details:e.details,receipt:e.receipt},null,2))}</pre></details></li>`).join('')}</ol>`;
+      for(const [label,p] of [['上一页',h.page-1],['下一页',h.page+1]])if(p>0&&(p-1)*100<h.total){const b=document.createElement('button');b.className='btn';b.textContent=label;b.onclick=()=>act('history',id,p).catch(e=>status(e.message));$('asset-unit-history').append(b);}return;
     }
     if(action==='print'){if(!selected.size)throw Error('请先选择需要打印的实物');return window.AssetLabels?.open([...selected.values()]);}
     if(action.startsWith('migrate-')){
       const mode=action.slice(8);let fields='';
       if(mode==='add'){
         const d=await api('units/migration/'+item.id);
-        fields=campus()+select('loan_id','归属（必须与实物核对一致）',[{id:0,name:'仓库在库'},...d.loans.map(l=>({id:l.id,name:`借单 #${l.id} ${l.member_name} 未还 ${l.outstanding}`}))],0,'')+input('quantity','核对件数',1,'type="number" min="1" max="100" required');
+        fields=campus()+select('loan_id','归属（必须与实物核对一致）',[{id:0,name:'仓库在库'},...d.loans.map(l=>({id:l.id,name:`借单 #${l.id} ${l.member_name} 未还 ${l.outstanding}`}))],0,'')+input('quantity','核对件数',1,'type="number" min="1" max="100" required')+'<label>厂家 SN（选填，一件一行）<textarea name="serials" rows="3"></textarea></label>';
       }
       core.open('旧库存迁移 · '+mode,fields+reason(true),'units/migrate',{item_id:item.id,action:mode,version:item.version},['campus_id','quantity','loan_id']);return;
     }

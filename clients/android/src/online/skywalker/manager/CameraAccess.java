@@ -19,8 +19,7 @@ final class CameraAccess {
         cancel(null);
         String document = view.getUrl();
         BooleanSupplier check = () -> document != null && document.equals(view.getUrl())
-            && origin.startsWith("https://") && WebsitePolicy.trusted(origin, document)
-            && WebsitePolicy.trusted(origin, request.getOrigin().toString());
+            && WebsitePolicy.camera(origin, document, request.getOrigin().toString());
         String[] resources = request.getResources();
         if (resources.length != 1 || !PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resources[0]) || !check.getAsBoolean()) {
             request.deny(); return;

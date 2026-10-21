@@ -61,6 +61,11 @@ class ScanTest(unittest.TestCase):
         self.post(self.member, "/api/assets/scan/receive", next_data)
         detail = self.member.get(f"/api/assets/items/{self.screw}").get_json()
         self.assertEqual(next(c["available"] for c in detail["campuses"] if c["id"] == self.campus), 140)
+        records = self.member.get(f"/api/assets/events?item_id={self.screw}").get_json()["events"]
+        source = next(e["receipt"] for e in records if e.get("receipt"))
+        self.assertEqual(source["raw"], data["raw"])
+        self.assertEqual(source["actual_quantity"], 70)
+        self.assertEqual(source["parsed"]["fields"]["mc"], "")
 
     def test_concurrent_same_label_requires_recheck(self):
         self.bind()

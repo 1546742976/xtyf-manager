@@ -523,4 +523,6 @@ def events():
         clause + " ORDER BY e.id DESC LIMIT 20 OFFSET ?", (*args, (page_number-1)*20))]
     for value in values:
         value["details"] = json.loads(value["details"])
+    from modules.asset_scan import attach_receipts
+    attach_receipts(db, values)
     return jsonify(ok=True, events=values, total=count, page=page_number)

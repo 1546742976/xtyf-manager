@@ -9,7 +9,7 @@
   <nav class="asset-tabs" aria-label="资产导航">
     <a class="btn" href="/assets">全部物品</a><a class="btn" href="/assets?view=mine">我的借用</a>
     <button class="btn" id="asset-scan" type="button" {% if not asset_units_enabled %}hidden{% endif %}>扫码登记</button>
-    
+    <button class="btn" id="asset-objects" type="button" hidden>使用对象</button><button class="btn" id="asset-takes" type="button" hidden>单件盘点</button>
     <button class="btn" id="asset-unit-mine" type="button" {% if not asset_units_enabled %}hidden{% endif %}>我的单件／待接收</button>
     <button class="btn" id="asset-campuses" type="button" hidden>校区管理</button>
     <button class="btn" id="asset-categories" type="button" hidden>类别管理</button>
@@ -47,10 +47,11 @@
   <form id="asset-scan-form" class="asset-fields"><label>标签原文或商品编号<textarea id="asset-scan-raw" rows="3" maxlength="4096" required></textarea></label><button class="btn" type="submit">识别</button></form>
   <label>连续扫码<select id="asset-scan-mode"><option value="query">查询／单包装预览</option><option value="units">收集单件（借还／装拆）</option><option value="receipts">收集包装（批量入库）</option></select></label><label>扫码枪结束规则<select id="asset-scan-end"><option value="Enter">Enter</option><option value="Tab">Tab</option><option value="manual">手动点击识别</option></select></label><div id="asset-scan-queue"></div><div id="asset-scan-camera"></div><p id="asset-scan-status" role="status"></p><div id="asset-scan-preview"></div>
 </dialog>
+<dialog id="asset-lifecycle-dialog" class="asset-dialog"><header class="asset-heading"><h2>实物管理</h2><button class="btn" id="asset-lifecycle-close">关闭</button></header><p id="asset-lifecycle-status" role="status"></p><div id="asset-lifecycle-content"></div></dialog>
 <dialog id="asset-label-dialog" class="asset-dialog" aria-labelledby="asset-label-title">
 <header class="asset-heading"><h2 id="asset-label-title">标签打印预览</h2><button class="btn" id="asset-label-close">关闭</button></header>
 <form id="asset-label-form" class="asset-fields"><label>纸张<select name="paper"><option value="a4">A4 标签纸</option><option value="thermal">热敏纸</option></select></label><label>标签宽度（mm）<input name="width" type="number" min="40" max="190" value="60" required></label><label>标签高度（mm）<input name="height" type="number" min="25" max="270" value="35" required></label><button class="btn" type="submit">更新预览／PDF</button></form>
 <p id="asset-label-status" role="status"></p><a id="asset-label-download" class="btn" download="asset-labels.pdf" hidden>下载打印 PDF</a><div id="asset-label-preview"></div>
 </dialog>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='assets.js') }}"></script>{% if asset_units_enabled %}<script src="{{ url_for('static', filename='vendor/asset-tools/zxing.js') }}"></script><script src="{{ url_for('static', filename='vendor/asset-tools/barcode.js') }}"></script>{% for script in ['asset-units.js','asset-scan.js','asset-camera.js','asset-labels.js'] %}<script src="{{ url_for('static', filename=script) }}"></script>{% endfor %}{% endif %}{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='assets.js') }}"></script>{% if asset_units_enabled %}<script src="{{ url_for('static', filename='vendor/asset-tools/zxing.js') }}"></script><script src="{{ url_for('static', filename='vendor/asset-tools/barcode.js') }}"></script>{% for script in ['asset-units.js','asset-scan.js','asset-camera.js','asset-labels.js','asset-lifecycle.js'] %}<script src="{{ url_for('static', filename=script) }}"></script>{% endfor %}{% endif %}{% endblock %}

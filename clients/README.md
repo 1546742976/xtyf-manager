@@ -142,6 +142,10 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 
 ## 验证边界
 
+- 资产单件页面通过 bootstrap 的 `asset_units_enabled` 开关启用。扫码组件位于 `static/vendor/asset-tools`，锁定 @zxing/library 0.21.3 和 JsBarcode 3.12.1 的版本与 SHA-256；维护脚本为 `clients/vendor_asset_tools.py`，构建器原样复制第三方代码。
+- Android 相机仅授予可信 HTTPS 网站或本地安全页面的视频采集权限，不授予音频；外域、异常端口、HTTP 请求拒绝。HTTP 网站模式使用相册或手动输入。需要新版 APK 才具有原生权限处理，本次只验证源码，不生成安装包。
+- 单件／物料标签 PDF 经现有认证下载通道保存。手机相机、实体扫码枪和打印机必须另记实机结果，编译和浏览器模拟不能替代。
+
 - 页面更新协议可用 `python -m unittest discover -s tests -p "test_client_u*.py"` 验证。跨语言测试先运行 `python tests/client_update_fixture.py .build-tools/client-update-fixture`，该命令仅使用临时签名密钥生成公共测试资源，不发布或生成安装包。
 - Android 原生存储与 HTTP 生命周期使用 `python clients/android/test_ui_updates.py --fixture .build-tools/client-update-fixture`；需要现有 JDK、Android SDK 以及固定 SHA-256 的测试用 `org.json:json:20240303` JAR（默认在 `.build-tools/client-ui-updates/android-tests/`）。该检查执行 JVM 断言并编译 Activity，不生成 APK。
 - 桌面原生检查为 `cargo test --manifest-path clients/desktop/Cargo.toml --locked`；本机回环 HTTP 测试应设置 `NO_PROXY=127.0.0.1,localhost`，避免系统代理介入隔离测试服务器。

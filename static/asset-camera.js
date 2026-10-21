@@ -15,13 +15,14 @@
     stop();last='';const own=generation;
     if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){status('当前页面不能打开相机，请使用 HTTPS、相册图片或手动输入。');return;}
     try{
-      stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'}}});
-      if(own!==generation){stream.getTracks().forEach(t=>t.stop());stream=null;return;}
+      const openedStream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'}}});
+      if(own!==generation){openedStream.getTracks().forEach(t=>t.stop());return;}
+      stream=openedStream;
       const video=$('asset-camera-video');video.hidden=false;
       reader=new ZXing.BrowserMultiFormatReader();
       await reader.decodeFromStream(stream,video,result=>{if(result&&own===generation)found(result.getText());});
       status('相机已打开；关闭窗口或切到后台会停止相机。');
-    }catch(e){stop();status('无法打开相机：'+e.message+'。可从相册识别或手动输入。');}
+    }catch(e){if(own!==generation)return;stop();status('无法打开相机：'+e.message+'。可从相册识别或手动输入。');}
   };
   $('asset-camera-stop').onclick=()=>{stop();status('相机已停止');};
   $('asset-camera-photo').onchange=async e=>{

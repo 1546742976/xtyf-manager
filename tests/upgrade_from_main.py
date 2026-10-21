@@ -85,6 +85,11 @@ try:
     )
     db.execute(
         "INSERT INTO daily_owners(project_id,stage,member_id) VALUES(101,'vision',2)")
+    # PR #45 quantity stock must not be assigned physical identities implicitly.
+    db.execute("INSERT INTO asset_campuses(id,name) VALUES(7001,'Synthetic old campus')")
+    db.execute("INSERT INTO asset_items(id,name,unit,kind) VALUES(7001,'Synthetic old motor','piece','returnable')")
+    db.execute("INSERT INTO asset_stock(item_id,campus_id,available) VALUES(7001,7001,4)")
+    db.execute("INSERT INTO asset_loans(item_id,campus_id,member_id,member_name,quantity,outstanding,created_at) VALUES(7001,7001,2,'Existing Member 2',2,2,'2026-01-01')")
     db.commit()
     assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 finally:
@@ -105,6 +110,10 @@ connection = sqlite3.connect(os.environ["PROGRESS_DB"])
 connection.row_factory = sqlite3.Row
 try:
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert connection.execute("SELECT tracking FROM asset_items WHERE id=7001").fetchone()[0] == "legacy"
+    assert connection.execute("SELECT available FROM asset_stock WHERE item_id=7001").fetchone()[0] == 4
+    assert connection.execute("SELECT outstanding FROM asset_loans WHERE item_id=7001").fetchone()[0] == 2
+    assert connection.execute("SELECT COUNT(*) FROM asset_units").fetchone()[0] == 0
     assert "verify_attempts" in {c[1] for c in connection.execute("PRAGMA table_info(member_email)")}
     assert connection.execute("SELECT COUNT(*) FROM members").fetchone()[0] == 3
     verified = connection.execute("SELECT * FROM member_email WHERE member_id=1").fetchone()
@@ -170,6 +179,10 @@ try:
     assert current["verified"] == 1 and current["token_hash"] is None
     assert connection.execute("SELECT COUNT(*) FROM mail_jobs WHERE dedupe_key='daily:2026-10-16:1' AND state='sent'").fetchone()[0] == 1
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert connection.execute("SELECT tracking FROM asset_items WHERE id=7001").fetchone()[0] == "legacy"
+    assert connection.execute("SELECT available FROM asset_stock WHERE item_id=7001").fetchone()[0] == 4
+    assert connection.execute("SELECT outstanding FROM asset_loans WHERE item_id=7001").fetchone()[0] == 2
+    assert connection.execute("SELECT COUNT(*) FROM asset_units").fetchone()[0] == 0
 finally:
     connection.close()
 """
