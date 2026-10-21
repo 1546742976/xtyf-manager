@@ -155,6 +155,7 @@
     if(frame)frame.remove();
     frame=document.createElement('iframe');frame.title='巡天御风工作空间';
     frame.setAttribute('referrerpolicy','no-referrer');
+    frame.setAttribute('allow',"camera 'self'");
     // Both template and scripts are packaged. All server strings were escaped by the compiler.
     frame.srcdoc=html.replace('<head>','<head><base href="'+localBase+'/"><script src="/page-runtime.js"></script>');
     host.replaceChildren(frame);document.title='巡天御风管理系统';

@@ -16,3 +16,6 @@
 
 # Locked third-party resources must match vendor-lock.json on every platform.
 clients/frontend/vendor/** -text
+
+# Barcode decoding resources are verified byte-for-byte by their lock.
+static/vendor/asset-tools/** -text

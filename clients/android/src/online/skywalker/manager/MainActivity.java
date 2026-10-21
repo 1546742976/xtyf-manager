@@ -21,6 +21,7 @@ public class MainActivity extends Activity {
     private static final String LOCAL_ORIGIN = "https://appassets.androidplatform.net";
     private static final int PICK_FILE = 10, SAVE_FILE = 11, SAVE_WEBSITE_FILE = 12;
     private WebView web, externalWeb;
+    private final CameraAccess camera = new CameraAccess(this);
     private Dialog externalDialog;
     private volatile WebMessagePort port;
     private volatile NativeHttpClient client;
@@ -93,7 +94,7 @@ public class MainActivity extends Activity {
                 if (isLocal(request.getUrl())) return false;
                 if (request.isForMainFrame()) openExternal(request.getUrl().toString()); return true;
             }
-            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { if (view == web) closePort(); }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) { camera.cancel(view); if (view == web) closePort(); }
             @Override public void onPageFinished(WebView view, String url) { if (view == web && isRoot(url) && port == null) attachPort(); }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) { if (request.isForMainFrame()) message("本地页面无法打开：" + error.getDescription()); }
         });
@@ -338,6 +339,8 @@ public class MainActivity extends Activity {
     }
     private WebChromeClient chrome(boolean local) {
         return new WebChromeClient() {
+            @Override public void onPermissionRequest(PermissionRequest request) { if (local) camera.request(web, request, LOCAL_ORIGIN); else request.deny(); }
+            @Override public void onPermissionRequestCanceled(PermissionRequest request) { camera.cancelled(request); }
             @Override public boolean onJsAlert(WebView view, String url, String text, JsResult result) {
                 new AlertDialog.Builder(MainActivity.this).setMessage(text).setPositiveButton("确定", (d,w) -> result.confirm()).setOnCancelListener(d -> result.cancel()).show(); return true;
             }
@@ -357,6 +360,7 @@ public class MainActivity extends Activity {
         catch (ActivityNotFoundException error) { legacyPicker = null; pickerView = null; callback.onReceiveValue(null); } return true;
     }
     private void cancelFileOperations() {
+        camera.cancel(null);
         if (legacyPicker != null) legacyPicker.onReceiveValue(null); legacyPicker = null; pickerView = null;
         if (picker != null) reply(picker, null, new IOException("服务器已切换，文件选择已取消")); picker = null;
         if (download != null) reply(download, null, new IOException("服务器已切换，下载已取消")); download = null;
@@ -366,6 +370,9 @@ public class MainActivity extends Activity {
         if (website != null) website.close();
         website = new WebsiteView(this, new WebsiteView.Host() {
             public void configure(WebView view) { MainActivity.this.configure(view); }
+            public void camera(WebView view, PermissionRequest request, String origin) { camera.request(view, request, origin); }
+            public void cancelCamera(WebView view) { camera.cancel(view); }
+            public void cancelledCamera(PermissionRequest request) { camera.cancelled(request); }
             public void external(String url) { openExternal(url); }
             public void local(String intent) { returnLocal(intent); }
             public void message(String text) { MainActivity.this.message(text); }
@@ -420,6 +427,10 @@ public class MainActivity extends Activity {
         web.evaluateJavascript("Boolean(window.XTYFClient && window.XTYFClient.back && window.XTYFClient.back())", handled -> {
             if (!"true".equals(handled)) new AlertDialog.Builder(this).setMessage("退出巡天御风管理系统？").setPositiveButton("退出", (d,w) -> finish()).setNegativeButton("取消", null).show();
         });
+    }
+    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code == CameraAccess.REQUEST) camera.finish(results.length == 1 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED);
     }
     @Override protected void onPause() {
         super.onPause(); if (web != null) { web.evaluateJavascript("window.dispatchEvent(new CustomEvent('xtyf-foreground',{detail:{active:false}}))", null); web.onPause(); }

@@ -34,3 +34,7 @@
 .asset-pending { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:14px; border:1px solid var(--ux-stroke); border-radius:9px; margin:12px 0; }
 
 .asset-unit-drawer{width:min(960px,96vw);max-width:96vw;max-height:94vh}.asset-unit-drawer .asset-actions{margin-block:1rem}.asset-unit-drawer input[type=checkbox]{width:auto}.asset-unit-drawer pre{white-space:pre-wrap;overflow-wrap:anywhere}.asset-unit-drawer .asset-card{min-width:0}
+
+#asset-camera-video{width:100%;max-height:45vh;object-fit:contain}#asset-label-preview canvas{display:block;margin:1rem auto;border:1px solid #888}
+
+.asset-workspace [hidden],.asset-dialog [hidden]{display:none!important}

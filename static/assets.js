@@ -89,11 +89,11 @@
         if(own!==generation)return; detail=d;
         $('asset-title').textContent=d.item.name;
         $('asset-content').innerHTML=`<p>${esc(d.item.specification)} · ${esc(d.item.category||'未分类')} · ${d.item.kind==='returnable'?'可借用品':'耗材'}${d.item.active?'':' · 已停用'}</p>
-          ${c.can_manage?button('edit-item','编辑物品',itemId):''}${d.item.kind==='returnable'?button('units',d.item.tracking==='unit'?'管理单件':'实物核对迁移',itemId):''}
+          ${c.can_manage?button('edit-item','编辑物品',itemId):''}${window.AssetUnits&&d.item.kind==='returnable'?button('units',d.item.tracking==='unit'?'管理单件':'实物核对迁移',itemId):''}
           <div class="asset-grid asset-section">${d.campuses.map(s=>`<article class="asset-card"><h2>${esc(s.name)}${s.active?'':'（停用）'}</h2>
           <span class="asset-count">${d.item.kind==='returnable'?s.available+s.borrowed:s.available} <small>${esc(d.item.unit)}</small></span>
           <p>${d.item.kind==='returnable'?`总量 · 在库 ${s.available} / 借出 ${s.borrowed}`:`剩余库存 · 累计领用 ${s.consumed}`}</p>
-          <div class="asset-actions">${d.item.kind==='returnable'&&d.item.tracking!=='legacy'?button('units','管理单件',itemId):s.active&&d.item.active?
+          <div class="asset-actions">${['unit','migrating'].includes(d.item.tracking)?button('units','管理单件',itemId):s.active&&d.item.active?
             button(d.item.kind==='returnable'?'borrow':'consume',d.item.kind==='returnable'?'借用':'领用',s.id)+
             ['receive','adjust'].map(a=>button(a,names[a],s.id)).join('')+
             (c.can_manage?button('transfer',names.transfer,s.id):''):''}</div></article>`).join('')}</div>
@@ -144,9 +144,9 @@
     $('asset-save').textContent='重试原请求';
     $('asset-save').hidden=false;dialog.showModal();
   }
-  function open(title,fields,path,base,numberKeys=[]){
+  function open(title,fields,path,base,numberKeys=[],buildBody=null){
     if(unresolved){recoverPending();return;}
-    opener=document.activeElement;operation={path,base,numberKeys};
+    opener=document.activeElement;operation={path,base,numberKeys,buildBody};
     $('asset-dialog-title').textContent=title;$('asset-fields').innerHTML=fields;$('asset-form-status').textContent='';
     $('asset-save').textContent='确认保存';
     $('asset-save').hidden=false;dialog.showModal();
@@ -225,10 +225,11 @@
   form.addEventListener('submit',async e=>{
     e.preventDefault();if(pending||!operation)return;
     const recovery=!!operation.recovery;
-    const body=recovery?unresolved?.body:{...operation.base};
+    let body=recovery?unresolved?.body:{...operation.base};
     if(!body)return;
     if(!recovery){
-      for(const [key,value] of new FormData(form))body[key]=operation.numberKeys.includes(key)?Number(value):['active','detached','destroyed'].includes(key)?value==='true':key==='serials'?value.split('\n').map(s=>s.trim()):value;
+      for(const [key,value] of new FormData(form))body[key]=operation.numberKeys.includes(key)?Number(value):['active','detached','destroyed'].includes(key)?value==='true':key==='serials'?(value.trim()?value.split('\n').map(s=>s.trim()):undefined):value;
+      if(operation.buildBody)body=operation.buildBody(new FormData(form));
       if(operation.campuses&&body.action==='adjust')body.version=operation.campuses.find(c=>c.id===body.campus_id)?.stock_version;
     }
     if(unresolved&&(unresolved.actor_id!==catalog?.member_id||

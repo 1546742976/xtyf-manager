@@ -4,14 +4,39 @@
   const core=window.AssetLedger,$=id=>document.getElementById(id),dialog=$('asset-scan-dialog');
   const {esc,input,reason,options}=core;let resolved=null,sequence=0,opener;
   const status=message=>$('asset-scan-status').textContent=message;
+  const packages=new Map();
+  function queue(){
+    $('asset-scan-queue').innerHTML=`<p>待登记包装 ${packages.size} 个 · 已选单件 ${window.AssetUnits.selection.length} 件</p><button class="btn" id="scan-queue-submit">核对包装批量入库</button><button class="btn" id="scan-queue-units">打开单件操作</button><button class="btn" id="scan-queue-clear">清空包装清单</button>`;
+    $('scan-queue-units').onclick=()=>{close();window.AssetUnits.show();};
+    $('scan-queue-clear').onclick=()=>{packages.clear();queue();};
+    $('scan-queue-submit').onclick=()=>{
+      if(!packages.size){status('包装清单为空');return;}
+      const values=[...packages.values()];
+      const fields=values.map((v,i)=>`<fieldset><legend>${esc(v.item.name)} · 标签数量 ${v.parsed.label_quantity??'未知'}</legend>`+input('q'+i,'实收数量',v.parsed.label_quantity??'','type="number" min="1" step="1" required')+`<label>校区<select name="c${i}" required>${options(core.catalog.campuses.filter(c=>c.active),'','请选择')}</select></label>`+(v.history.length?`<label>重复登记核对原因<textarea name="d${i}" required maxlength="500"></textarea></label>`:'')+'</fieldset>').join('');
+      close();core.open('核对整批包装',fields+reason(false),'scan/batch',{},[],form=>({receipts:values.map((v,i)=>({raw:v.parsed.raw,item_id:v.item.id,quantity:Number(form.get('q'+i)),campus_id:Number(form.get('c'+i)),receipt_version:v.receipt_version,duplicate_reason:form.get('d'+i)||'',reason:form.get('reason')}))}));
+    };
+  }
   function close(){dialog.close();opener?.focus();}
-  $('asset-scan').onclick=()=>{opener=document.activeElement;dialog.showModal();$('asset-scan-raw').focus();};
+  $('asset-scan').onclick=()=>{opener=document.activeElement;dialog.showModal();queue();if(!matchMedia('(pointer:coarse)').matches)$('asset-scan-raw').focus();};
   $('asset-scan-close').onclick=close;
   async function resolve(raw){
     const own=++sequence;resolved=null;$('asset-scan-preview').replaceChildren();status('正在识别…');
     try{
       const value=await core.api('scan/resolve',{raw});if(own!==sequence)return;
       resolved=value;const p=value.parsed;
+      const mode=$('asset-scan-mode').value;
+      if(mode==='units'){
+        if(p.type!=='unit')throw Error('请扫描具体设备标签；物料编号不能替代单件身份');
+        await window.AssetUnits.select(value.unit);queue();status('单件已加入清单，尚未执行操作。');$('asset-scan-raw').value='';return;
+      }
+      if(mode==='receipts'){
+        if(p.type!=='package')throw Error('请扫描采购包装标签');
+        if(value.item){
+          if(packages.has(p.raw))throw Error('本清单已包含同一标签，不自动累计数量');
+          if(packages.size>=20)throw Error('每批最多 20 个包装');
+          packages.set(p.raw,value);queue();status(value.history.length?'此包装曾登记，提交前需明确填写重复收货原因':'已加入包装清单；确认前不入库');$('asset-scan-raw').value='';return;
+        }
+      }
       if(p.type==='unit'){
         status('已找到单件；识别不会改变库存。');
         $('asset-scan-preview').innerHTML=`<p>${esc(value.item.name)} · 单件 #${value.unit.id}</p><button class="btn" id="scan-unit-open">打开单件抽屉</button>`;
@@ -45,6 +70,7 @@
     }catch(e){if(own===sequence)status(e.message);}
   }
   $('asset-scan-form').onsubmit=e=>{e.preventDefault();resolve($('asset-scan-raw').value);};
-  $('asset-scan-raw').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();resolve(e.target.value);}};
+  $('asset-scan-raw').onkeydown=e=>{if(e.key===$('asset-scan-end').value&&!e.shiftKey&&!e.isComposing){e.preventDefault();resolve(e.target.value);}};
+  document.addEventListener('asset-operation-saved',e=>{if(e.detail.path==='scan/batch'){packages.clear();queue();}});
   window.AssetScan={resolve,dialog,get resolved(){return resolved;}};
 })();

@@ -20,7 +20,7 @@
     if(unitId){const u=rows.find(r=>r.id===unitId)||(await api('scan/resolve',{raw:'U:'+unitId})).unit;selected.set(u.id,u);selectedSummary();}
   }
   async function refresh(){
-    const seq=++sequence;status('正在读取实物记录…');
+    const seq=++sequence;drawer.setAttribute('aria-busy','true');status('正在读取实物记录…');$('asset-unit-content').inert=true;$('asset-unit-actions').inert=true;
     try{
       meta=await api('units/catalog');
       if(seq!==sequence)return;
@@ -37,7 +37,7 @@
         `<div class="asset-pager">${page>1?btn('prev','上一页'):''}<span>第 ${page} 页 · ${data.total} 件</span>${page*20<data.total?btn('next','下一页'):''}</div>`;
       $('asset-unit-actions').innerHTML=Object.entries(actions).filter(([a])=>data.can_manage||!['repair','healthy','retire','lost','recover','correct'].includes(a)).map(([a,l])=>btn(a,l)).join('')+btn('clear','清空选择')+btn('print','打印标签');
       selectedSummary();status('扫码只选择单件，执行操作前须核对并确认。');
-    }catch(e){status(e.message);}
+    }catch(e){status(e.message);}finally{if(seq===sequence){drawer.setAttribute('aria-busy','false');$('asset-unit-content').inert=false;$('asset-unit-actions').inert=false;}}
   }
   async function migration(){
     $('asset-unit-actions').replaceChildren();
@@ -68,7 +68,7 @@
       core.open('旧库存迁移 · '+mode,fields+reason(true),'units/migrate',{item_id:item.id,action:mode,version:item.version},['campus_id','quantity','loan_id']);return;
     }
     if(action==='receive'){
-      core.open('非耗材批量建档',campus()+input('quantity','实收件数',1,'type="number" min="1" max="100" required')+reason(true),'units/receive',{item_id:item.id},['quantity','campus_id']);return;
+      core.open('非耗材批量建档',campus()+input('quantity','实收件数',1,'type="number" min="1" max="100" required')+'<label>厂家 SN（选填，一件一行，行数须等于件数）<textarea name="serials" rows="3"></textarea></label>'+reason(true),'units/receive',{item_id:item.id},['quantity','campus_id']);return;
     }
     if(!selected.size)throw Error('请先选择单件；跨页选择会保留');
     let fields=`<p>本批 ${selected.size} 件：${[...selected.keys()].map(v=>'U:'+v).join('、')}。整批成功或失败；不会自动移除失败选择。</p>`;
@@ -91,6 +91,6 @@
   $('asset-unit-mine').onclick=()=>show(null,null,true);
   document.addEventListener('click',e=>{const a=e.target.closest('[data-unit-model]');if(a){e.preventDefault();show(Number(a.dataset.unitModel));}});
   document.addEventListener('assets-loaded',()=>{if(drawer.open)refresh();});
-  document.addEventListener('asset-operation-saved',e=>{if(e.detail.path==='units/operate'){selected.clear();selectedSummary();}});
+  document.addEventListener('asset-operation-saved',e=>{if(e.detail.path==='units/operate'){selected.clear();selectedSummary();refresh();}});
   window.AssetUnits={show,refresh,select:async unit=>{if(selected.has(unit.id))throw Error('此单件已在待提交清单中');selected.set(unit.id,unit);selectedSummary();},get selection(){return [...selected.values()];}};
 })();
