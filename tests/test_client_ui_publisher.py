@@ -33,7 +33,8 @@ class TestClientUIPublisher(unittest.TestCase):
                 path.write_text('synthetic source', encoding='utf-8')
             (target / 'data.db').write_bytes(b'existing business data')
             (target / 'secret.key').write_bytes(b'existing session key')
-            subprocess.run(['rsync', *arguments[:-2], str(source) + '/', str(target) + '/'], check=True)
+            # Relative paths also work with Windows MSYS rsync, where C: is remote syntax.
+            subprocess.run(['rsync', *arguments[:-2], 'source/', 'target/'], cwd=temporary, check=True)
             for name in excluded:
                 self.assertFalse((target / name).exists(), name)
             for name in included:
