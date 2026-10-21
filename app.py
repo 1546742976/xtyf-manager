@@ -129,7 +129,9 @@ from modules.assets import bp as assets_bp, migrate_assets
 app.register_blueprint(assets_bp)
 from modules.asset_scan import bp as asset_scan_bp
 app.register_blueprint(asset_scan_bp)
-app.context_processor(lambda: {"assets_enabled": True})
+from modules.asset_units import bp as asset_units_bp
+app.register_blueprint(asset_units_bp)
+app.context_processor(lambda: {"assets_enabled": True, "asset_units_enabled": True})
 app.register_blueprint(funds_bp, url_prefix="/funds")
 app.register_blueprint(invoices_bp, url_prefix="/invoices")
 app.register_blueprint(task_api_bp)

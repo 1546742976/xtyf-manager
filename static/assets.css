@@ -32,3 +32,5 @@
 @media(max-width:650px) { .asset-filters { grid-template-columns:1fr; } .asset-grid { grid-template-columns:1fr; } .asset-dialog { padding:18px; } }
 
 .asset-pending { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:14px; border:1px solid var(--ux-stroke); border-radius:9px; margin:12px 0; }
+
+.asset-unit-drawer{width:min(960px,96vw);max-width:96vw;max-height:94vh}.asset-unit-drawer .asset-actions{margin-block:1rem}.asset-unit-drawer input[type=checkbox]{width:auto}.asset-unit-drawer pre{white-space:pre-wrap;overflow-wrap:anywhere}.asset-unit-drawer .asset-card{min-width:0}

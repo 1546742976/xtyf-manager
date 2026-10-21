@@ -70,7 +70,7 @@
         <p>${esc(e.actor_name)} · 提交：${esc(e.created_at)}${e.member_name?' · 相关成员：'+esc(e.member_name):''}</p>
         ${e.details.occurred_at?`<p>登记时间：${esc(e.details.occurred_at)}（北京时间）</p>`:''}
         <p>${movements}</p><p>${esc(e.reason)||'未填写用途'}${e.corrects_id?' · 纠正 #'+e.corrects_id:''}${e.correction_id?' · 已由 #'+e.correction_id+' 纠正':''}</p>
-        ${catalog.can_manage&&!e.correction_id&&e.action!=='catalog'&&e.action!=='correct'?button('correct','登记纠错',e.id):''}</li>`;
+        ${catalog.can_manage&&!e.correction_id&&['receive','adjust','transfer','consume','borrow','return'].includes(e.action)?button('correct','登记纠错',e.id):''}</li>`;
     }).join('')}</ol>${data.total?'':'<p class="asset-empty">暂无记录。</p>'}${pager('events',data.page,data.total)}`;
   }
   async function load(){
@@ -89,11 +89,11 @@
         if(own!==generation)return; detail=d;
         $('asset-title').textContent=d.item.name;
         $('asset-content').innerHTML=`<p>${esc(d.item.specification)} · ${esc(d.item.category||'未分类')} · ${d.item.kind==='returnable'?'可借用品':'耗材'}${d.item.active?'':' · 已停用'}</p>
-          ${c.can_manage?button('edit-item','编辑物品',itemId):''}
+          ${c.can_manage?button('edit-item','编辑物品',itemId):''}${d.item.kind==='returnable'?button('units',d.item.tracking==='unit'?'管理单件':'实物核对迁移',itemId):''}
           <div class="asset-grid asset-section">${d.campuses.map(s=>`<article class="asset-card"><h2>${esc(s.name)}${s.active?'':'（停用）'}</h2>
           <span class="asset-count">${d.item.kind==='returnable'?s.available+s.borrowed:s.available} <small>${esc(d.item.unit)}</small></span>
           <p>${d.item.kind==='returnable'?`总量 · 在库 ${s.available} / 借出 ${s.borrowed}`:`剩余库存 · 累计领用 ${s.consumed}`}</p>
-          <div class="asset-actions">${s.active&&d.item.active?
+          <div class="asset-actions">${d.item.kind==='returnable'&&d.item.tracking!=='legacy'?button('units','管理单件',itemId):s.active&&d.item.active?
             button(d.item.kind==='returnable'?'borrow':'consume',d.item.kind==='returnable'?'借用':'领用',s.id)+
             ['receive','adjust'].map(a=>button(a,names[a],s.id)).join('')+
             (c.can_manage?button('transfer',names.transfer,s.id):''):''}</div></article>`).join('')}</div>
@@ -109,10 +109,10 @@
         filter.elements.category.innerHTML=options(data.categories.map(v=>({id:v,name:v})),category,'全部类别');
         $('asset-content').innerHTML=data.items.length?`<div class="asset-grid">${data.items.map(i=>`<article class="asset-card"${i.active?` data-register="${i.id}"`:''}>
           <span class="asset-tag">${i.kind==='returnable'?'可借用品':'耗材'}${i.active?'':' · 停用'}</span>
-          <h2><a href="/assets/detail?id=${i.id}">${esc(i.name)}</a></h2><p>${esc(i.specification)||'未填写规格'} · ${esc(i.category)||'未分类'}</p>
+          <h2><a ${i.tracking==='unit'?'data-unit-model="'+i.id+'"':''} href="/assets/detail?id=${i.id}">${esc(i.name)}</a></h2><p>${esc(i.specification)||'未填写规格'} · ${esc(i.category)||'未分类'}</p>
           <span class="asset-count">${i.kind==='returnable'?i.total:i.available} <small>${esc(i.unit)}</small></span>
           <p>${i.kind==='returnable'?`总量 · 在库 ${i.available} / 借出 ${i.borrowed}`:`剩余库存 · 累计领用 ${i.consumed}`}</p>
-          <div class="asset-actions">${i.active?button('register',i.kind==='returnable'?'登记借用':'登记领用',i.id)+button('quantity','调整数量',i.id):''}
+          <div class="asset-actions">${i.active?button('register',i.tracking==='unit'?'管理单件':i.kind==='returnable'?'登记借用':'登记领用',i.id)+(i.tracking==='unit'?'':button('quantity','调整数量',i.id)):''}
           ${c.can_manage?button('edit-item','编辑物品',i.id):''}</div></article>`).join('')}</div>${pager('items',data.page,data.total)}`:
           '<p class="asset-empty">暂无符合条件的物品。管理员可先配置校区，再新增物品并登记入库。</p>';
       }
@@ -154,7 +154,7 @@
   function catalogEditor(kind,value={}){
     const isItem=kind==='items',label={items:'物品',campuses:'校区',categories:'类别'}[kind],base=value.id?{id:value.id,version:value.version}:{};
     const fields=input('name','名称',value.name||'','required maxlength="120"')+(isItem?
-      input('specification','型号／规格',value.specification||'','maxlength="120"')+
+      input('specification','型号／规格',value.specification||'','maxlength="120"')+input('supplier_code','新增嘉立创 C 编号（选填）','','maxlength="40"')+
       `<label>类别<select name="category">${options((catalog.categories||[]).filter(c=>c.active).map(c=>({id:c.name,name:c.name})),value.category||'','未分类')}</select></label>`+
       input('unit','计量单位',value.unit||'个','required maxlength="12"')+
       `<label>物品类型<select name="kind">${options([{id:'returnable',name:'可借用品（需归还）'},{id:'consumable',name:'耗材（领用消耗）'}],value.kind||'returnable')}</select></label>`:'')+
@@ -170,7 +170,9 @@
   async function act(action,id){
     if(action==='new-campus'||action==='edit-campus'){dialog.close();catalogEditor('campuses',catalog.campuses.find(c=>c.id===id)||{});return;}
     if(action==='new-category'||action==='edit-category'){dialog.close();catalogEditor('categories',catalog.categories.find(c=>c.id===id)||{});return;}
+    if(action==='units'){await window.AssetUnits.show(id);return;}
     if(action==='edit-item'){catalogEditor('items',detail?.item||listing.find(i=>i.id===id));return;}
+    if((action==='register'||action==='quantity')&&listing.find(i=>i.id===id)?.tracking==='unit'){await window.AssetUnits.show(id);return;}
     if(action==='register'||action==='quantity'){
       pending=true;const trigger=document.activeElement;status('正在读取校区库存…');
       try{
@@ -226,7 +228,7 @@
     const body=recovery?unresolved?.body:{...operation.base};
     if(!body)return;
     if(!recovery){
-      for(const [key,value] of new FormData(form))body[key]=operation.numberKeys.includes(key)?Number(value):key==='active'?value==='true':value;
+      for(const [key,value] of new FormData(form))body[key]=operation.numberKeys.includes(key)?Number(value):['active','detached','destroyed'].includes(key)?value==='true':key==='serials'?value.split('\n').map(s=>s.trim()):value;
       if(operation.campuses&&body.action==='adjust')body.version=operation.campuses.find(c=>c.id===body.campus_id)?.stock_version;
     }
     if(unresolved&&(unresolved.actor_id!==catalog?.member_id||
@@ -248,6 +250,7 @@
     try{
       await api(saved.path,{...saved.body,request_id:saved.request_id});
       forgetPending();
+      document.dispatchEvent(new CustomEvent("asset-operation-saved",{detail:saved}));
       dialog.close();opener?.focus();const refreshed=await load();if(refreshed)status('已保存。');
     }catch(error){
       const unknown=!error.status||error.status>=500;
@@ -277,6 +280,6 @@
   filter.addEventListener('change',e=>{
     if(e.target.name==='campus_id'||e.target.name==='category'){listPage=1;load();}
   });
-  window.AssetLedger={api,load,open,input,reason,options,esc,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;}};
+  window.AssetLedger={api,load,open,input,reason,options,esc,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
   load();
 })();

@@ -73,6 +73,8 @@ def migrate_assets(db):
     """)
     from modules.asset_scan import migrate as migrate_scan
     migrate_scan(db)
+    from modules.asset_units import migrate as migrate_units
+    migrate_units(db)
     db.commit()
 
 
@@ -216,6 +218,8 @@ def save_catalog(db, data, kind):
             if not category:
                 db.execute("INSERT INTO asset_categories(name) VALUES(?)", (fields["category"],))
     identity = data.get("id")
+    if kind == 'items' and identity is None:
+        fields['tracking'] = 'unit' if fields['kind'] == 'returnable' else 'quantity'
     before = None
     if identity is not None:
         identity = integer(data, "id")
@@ -237,13 +241,16 @@ def save_catalog(db, data, kind):
                 db.execute("UPDATE asset_items SET category=?,version=version+1 WHERE category=?",
                            (fields["name"], before["name"]))
         elif not active and (
-            db.execute(f"SELECT 1 FROM asset_stock WHERE {column}=? AND available>0", (identity,)).fetchone()
-            or db.execute(f"SELECT 1 FROM asset_loans WHERE {column}=? AND outstanding>0", (identity,)).fetchone()
+            db.execute(f"SELECT 1 FROM asset_stock s JOIN asset_items i ON i.id=s.item_id WHERE s.{column}=? AND available>0 AND i.tracking<>'unit'", (identity,)).fetchone()
+            or db.execute(f"SELECT 1 FROM asset_loans s JOIN asset_items i ON i.id=s.item_id WHERE s.{column}=? AND outstanding>0 AND i.tracking<>'unit'", (identity,)).fetchone()
+            or db.execute(f"SELECT 1 FROM asset_units WHERE {column}=? AND lifecycle='active'", (identity,)).fetchone()
         ):
             raise Invalid("仍有库存或未还借单，不能停用", 409)
         if kind == "items" and any(before[k] != fields[k] for k in ("unit", "kind")):
             if db.execute("SELECT 1 FROM asset_events WHERE item_id=? AND action<>'catalog'", (identity,)).fetchone():
                 raise Invalid("已有历史记录，不能改变单位或借还类型", 409)
+            if before["kind"] != fields["kind"]:
+                fields["tracking"] = "unit" if fields["kind"] == "returnable" else "quantity"
         db.execute(f"UPDATE {table} SET " + ",".join(f"{k}=?" for k in fields) +
                    ",version=version+1 WHERE id=?", (*fields.values(), identity))
     else:
@@ -300,6 +307,8 @@ def operate(db, data):
             raise Invalid("该记录已经纠正", 409)
         details = json.loads(original["details"])
         item_id, campus_id = original["item_id"], original["campus_id"]
+        if row(db,'asset_items',item_id)['tracking'] in ('unit','migrating'):
+            raise Invalid('单件或迁移中的型号不能撤销旧数量流水，请核对当前实物',409)
         deltas = [(c, -d) for c, d in details["deltas"]]
         if not row(db, "asset_items", item_id)["active"]:
             raise Invalid("纠错涉及已停用物品，请先启用后核对", 409)
@@ -376,6 +385,8 @@ def operate(db, data):
                 ).lastrowid
         else:
             raise Invalid("操作类型无效")
+    if row(db,'asset_items',item_id)['tracking'] in ('unit','migrating'):
+        raise Invalid('此型号采用单件管理或正在迁移，请选择具体实物操作',409)
     for campus, delta in deltas:
         stock_change(db, item_id, campus, delta)
     return {"event_id": event(db, action, reason, item_id=item_id, campus_id=campus_id, quantity=quantity,
@@ -399,12 +410,17 @@ def totals(db):
     if own_snapshot:
         db.execute("BEGIN")
     try:
-        balances = {(r["item_id"], r["campus_id"]): dict(r) for r in db.execute("SELECT * FROM asset_stock")}
-        for r in db.execute("SELECT item_id,campus_id,SUM(outstanding) borrowed FROM asset_loans GROUP BY item_id,campus_id"):
+        balances = {(r["item_id"], r["campus_id"]): dict(r) for r in db.execute("SELECT s.* FROM asset_stock s JOIN asset_items i ON i.id=s.item_id WHERE i.tracking<>'unit'")}
+        for r in db.execute("SELECT item_id,campus_id,SUM(outstanding) borrowed FROM asset_loans JOIN asset_items i ON i.id=item_id WHERE i.tracking<>'unit' GROUP BY item_id,campus_id"):
             balances.setdefault((r["item_id"], r["campus_id"]), {"available": 0, "version": 0})["borrowed"] = r["borrowed"]
         for r in db.execute("SELECT item_id,campus_id,SUM(consumed_delta) consumed FROM asset_events "
                             "WHERE item_id IS NOT NULL AND campus_id IS NOT NULL GROUP BY item_id,campus_id"):
             balances.setdefault((r["item_id"], r["campus_id"]), {"available": 0, "version": 0})["consumed"] = r["consumed"]
+        for r in db.execute("SELECT item_id,campus_id,COUNT(*) in_register,"
+                            "SUM(keeper_id IS NULL) available,SUM(keeper_id IS NOT NULL) borrowed,"
+                            "SUM(keeper_id IS NULL AND health='normal' AND object_id IS NULL) lendable,"
+                            "SUM(health<>'normal') unavailable FROM asset_units WHERE lifecycle='active' GROUP BY item_id,campus_id"):
+            balances[(r['item_id'],r['campus_id'])]=dict(r)
         return balances
     finally:
         if own_snapshot:
@@ -421,7 +437,7 @@ def items():
     grouped = {}
     for (identity, location), stock in balances.items():
         if not campus or str(location) == campus:
-            summary = grouped.setdefault(identity, {"available": 0, "borrowed": 0, "consumed": 0})
+            summary = grouped.setdefault(identity, {"available": 0, "borrowed": 0, "consumed": 0, "lendable":0,"unavailable":0})
             for key in summary:
                 summary[key] += stock.get(key, 0)
     values = []
@@ -433,7 +449,7 @@ def items():
             continue
         if campus and item["id"] not in grouped:
             continue
-        for k in ("available", "borrowed", "consumed"):
+        for k in ("available", "borrowed", "consumed", "lendable", "unavailable"):
             item[k] = grouped.get(item["id"], {}).get(k, 0)
         item["total"] = item["available"] + item["borrowed"]
         values.append(item)
@@ -465,7 +481,7 @@ def detail(item_id):
 @bp.get("/api/assets/loans")
 @login_required
 def loans():
-    where, args = ["l.outstanding>0"], []
+    where, args = ["l.outstanding>0", "l.item_id IN (SELECT id FROM asset_items WHERE tracking<>'unit')"], []
     if request.args.get("mine") == "1":
         where.append("l.member_id=?")
         args.append(current_user()["id"])

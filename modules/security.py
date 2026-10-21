@@ -164,7 +164,7 @@ def init_security(app):
     def protect_request():
         # Bound asset writes before the shared audit logger parses their JSON.
         # Support Flask 3.0 too (per-request max_content_length became writable in 3.1).
-        if request.endpoint in ("assets.operate", "assets.save_catalog"):
+        if request.path.startswith('/api/assets/') and request.method not in SAFE_METHODS:
             limit = 16 * 1024
             if request.content_length is not None and request.content_length > limit:
                 return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
