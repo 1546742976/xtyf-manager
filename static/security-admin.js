@@ -2,6 +2,7 @@
 
 document.addEventListener("DOMContentLoaded", () => {
   let members = [];
+  let permissionNames = {};
   let nextBefore = null;
   const memberHost = document.getElementById("permission-members");
   const result = document.getElementById("permission-result");
@@ -19,16 +20,18 @@ document.addEventListener("DOMContentLoaded", () => {
     memberHost.innerHTML = members.filter((m) => `${m.id} ${m.name} ${m.username}`.toLowerCase().includes(query)).map((m) => {
       const inactive = !m.is_active || m.deleted_at;
       const checkbox = (permission) => {
+        if (!Object.hasOwn(permissionNames, permission)) return "服务器暂不支持";
         const checked = m.permissions.includes(permission);
         const disabled = !checked && (inactive || (permission === "funds.review" && m.role === "member"));
-        return `<input type="checkbox" data-permission="${permission}" aria-label="${escape(m.name)} ${permission === "funds.review" ? "资金审核" : "发票管理"}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}>`;
+        return `<input type="checkbox" data-permission="${permission}" aria-label="${escape(m.name)} ${escape(permissionNames[permission])}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}>`;
       };
-      return `<tr data-member-id="${Number(m.id)}"><td>${escape(m.name)}<br><small>ID ${Number(m.id)} · ${escape(m.username)}</small></td><td>${escape({admin: "管理员", manager: "项管", member: "成员"}[m.role])} / ${inactive ? "停用或删除" : "启用"}</td><td>${checkbox("funds.review")}</td><td>${checkbox("invoices.manage")}</td><td><button type="button" class="btn sm" data-save-permissions>保存权限</button></td></tr>`;
-    }).join("") || '<tr><td colspan="5">没有匹配成员</td></tr>';
+      return `<tr data-member-id="${Number(m.id)}"><td>${escape(m.name)}<br><small>ID ${Number(m.id)} · ${escape(m.username)}</small></td><td>${escape({admin: "管理员", manager: "项管", member: "成员"}[m.role])} / ${inactive ? "停用或删除" : "启用"}</td><td>${checkbox("funds.review")}</td><td>${checkbox("invoices.manage")}</td><td>${checkbox("assets.manage")}${["admin","manager"].includes(m.role)?"<small>该角色默认拥有</small>":""}</td><td><button type="button" class="btn sm" data-save-permissions>保存权限</button></td></tr>`;
+    }).join("") || '<tr><td colspan="6">没有匹配成员</td></tr>';
   }
   async function loadMembers() {
     const data = await api("/api/admin/permissions");
     members = data.members;
+    permissionNames = data.permissions;
     renderMembers();
   }
   document.getElementById("permission-search").addEventListener("input", renderMembers);
@@ -40,6 +43,8 @@ document.addEventListener("DOMContentLoaded", () => {
     result.textContent = "正在保存…";
     try {
       const permissions = [...row.querySelectorAll("[data-permission]:checked")].map((el) => el.dataset.permission);
+      const displayed = new Set([...row.querySelectorAll("[data-permission]")].map(el=>el.dataset.permission));
+      permissions.push(...(members.find(m=>String(m.id)===row.dataset.memberId)?.permissions||[]).filter(p=>!displayed.has(p)));
       await api(`/api/admin/permissions/${row.dataset.memberId}`, { permissions });
       result.textContent = "权限已保存，后续请求立即生效";
       await loadMembers();

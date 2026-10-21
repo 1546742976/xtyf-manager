@@ -21,6 +21,8 @@
 
 ## 验证
 
+资产页面通过既有认证请求通道访问后端库存，支持 `/assets`、`/assets?view=mine` 和 `/assets/detail?id=<ID>`。bootstrap 的 `assets_enabled` 缺失时隐藏入口，并在直接访问时提示服务器尚未启用。离线不提交、不排队保存库存变更；重试复用请求标识。运行 `node tests/browser/assets.cjs` 可验证网页与模拟原生桥的本地页面（Playwright 1.57.0），不生成安装包。
+
 ```powershell
 python clients/frontend/test_frontend.py
 # 使用安装有项目依赖及 Python Playwright/Chromium 的解释器
