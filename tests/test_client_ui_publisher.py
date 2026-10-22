@@ -86,6 +86,28 @@ class TestClientUIPublisher(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "build failed"):
                     build_ui_from_head({"clients/ui_release.py": b""}, "b" * 40, Path(temporary) / "key")
 
+    def test_website_pdf_assets_are_locked_public_files_from_the_head_build(self):
+        import hashlib
+        import json
+        public = b'locked synthetic PDF module'
+        lock = json.dumps({'files': {'pdfjs/pdf.mjs': hashlib.sha256(public).hexdigest()}}).encode()
+
+        def build(command, cwd, check):
+            (cwd / 'client-ui-release').mkdir()
+            target = cwd / 'clients/frontend/vendor/pdfjs'
+            target.mkdir(parents=True)
+            (target / 'pdf.mjs').write_bytes(public)
+            (target / 'unlisted-secret').write_bytes(b'never publish')
+
+        files = {'clients/ui_release.py': b'', 'clients/frontend/vendor-lock.json': lock}
+        with patch('deploy.package_release.subprocess.run', side_effect=build):
+            generated = build_ui_from_head(files, 'a' * 40, Path('test-only-key'))
+        self.assertEqual(generated, {'clients/frontend/vendor/pdfjs/pdf.mjs': public})
+        files['clients/frontend/vendor-lock.json'] = lock.replace(hashlib.sha256(public).hexdigest().encode(), b'0' * 64)
+        with patch('deploy.package_release.subprocess.run', side_effect=build):
+            with self.assertRaisesRegex(RuntimeError, 'PDF resource'):
+                build_ui_from_head(files, 'a' * 40, Path('test-only-key'))
+
     def test_source_path_cannot_escape_staging(self):
         with patch("deploy.package_release.subprocess.run") as run:
             with self.assertRaisesRegex(RuntimeError, "Unsafe source archive path"):

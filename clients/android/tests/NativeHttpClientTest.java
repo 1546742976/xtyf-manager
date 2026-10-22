@@ -26,6 +26,11 @@ public final class NativeHttpClientTest {
     }
     interface RunnableIO { void run() throws Exception; }
     public static void main(String[] args) throws Exception {
+        byte[] pdf = "%PDF-1.7\nsynthetic\n%%EOF".getBytes(StandardCharsets.UTF_8);
+        check(Arrays.equals(PdfSave.decode(Base64.getEncoder().encodeToString(pdf)), pdf), "Save exact authenticated PDF bytes");
+        fails(() -> PdfSave.decode("?"), "Reject invalid Base64");
+        fails(() -> PdfSave.decode(Base64.getEncoder().encodeToString("<html>".getBytes(StandardCharsets.UTF_8))), "Reject non PDF");
+        fails(() -> PdfSave.decode(new String(new char[28 * 1024 * 1024 + 1]).replace('\0', 'A')), "Bound PDF memory");
         check("http://localhost:1234".equals(NativeHttpClient.normalize(" HTTP://LOCALHOST:1234/ ")), "Normalize scheme and host");
         for (String server : Arrays.asList("http://manager.skywalker-rm.online", " HTTP://MANAGER.SKYWALKER-RM.ONLINE/ "))
             check("http://manager.skywalker-rm.online".equals(NativeHttpClient.normalize(server)), "Preserve the built-in HTTP server: " + server);

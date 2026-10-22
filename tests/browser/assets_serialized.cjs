@@ -42,7 +42,8 @@ async function main(){
     await page.waitForFunction(()=>document.querySelector('#asset-unit-selected').textContent.includes('0 件'));
     await page.waitForFunction(()=>document.querySelector('#asset-unit-drawer').getAttribute('aria-busy')==='false'&&![...document.querySelectorAll('[data-unit-select]')].some(x=>x.checked));
     await checkboxes.nth(0).check();await page.locator('[data-unit-action=print]').click();
-    await page.locator('#asset-label-download').waitFor();const pdf=await api.get(await page.locator('#asset-label-download').getAttribute('href'));assert.equal(pdf.headers()['content-type'],'application/pdf');assert((await pdf.body()).subarray(0,4).equals(Buffer.from('%PDF')));
+    await page.locator('#asset-label-download').waitFor();await page.locator('#asset-label-form [name=paper]').selectOption('thermal');await page.locator('#asset-label-download').waitFor();
+    const pdf=await page.locator('#asset-label-download').evaluate(async a=>Array.from(new Uint8Array(await(await fetch(a.href)).arrayBuffer())));assert(Buffer.from(pdf).subarray(0,4).equals(Buffer.from('%PDF')));
     const image=await page.locator('#asset-label-preview canvas').first().evaluate(c=>c.toDataURL('image/png').split(',')[1]);
     await page.locator('#asset-label-close').click();await page.locator('[data-unit-action=clear]').click();await page.locator('#asset-unit-close').click();
     await page.locator('#asset-create').click();await page.locator('#asset-scan').click();
@@ -59,7 +60,7 @@ async function main(){
     assert.equal(await page.getByLabel('实收数量',{exact:true}).inputValue(),'100');
     await page.getByLabel('实收数量',{exact:true}).fill('70');await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成开封包装');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     const stock=(await(await api.get('/api/assets/items/'+supply)).json()).campuses;assert.equal(stock.find(c=>c.id===campus).available,70);
-    await page.locator(`[data-action=print-item][data-id="${supply}"]`).click();await page.locator('#asset-label-download').waitFor();assert((await page.locator('#asset-label-download').getAttribute('href')).includes('kind=item'));await page.locator('#asset-label-close').click();
+    await page.locator(`[data-action=print-item][data-id="${supply}"]`).click();await page.locator('#asset-label-download').waitFor();assert((await page.locator('#asset-label-download').getAttribute('href')).startsWith('blob:'));await page.locator('#asset-label-close').click();
     await page.locator(`[data-action=edit-item][data-id="${supply}"]`).click();
     await page.getByLabel('调整后的在库数量',{exact:true}).fill('80');await page.getByLabel('原因（必填）',{exact:true}).fill('合成盘点更正');
     await page.locator('#asset-save').click();await page.locator('#asset-form-status').filter({hasText:'请选择校区或填写新校区'}).waitFor();
@@ -100,6 +101,7 @@ async function main(){
     await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.waitForFunction(n=>document.querySelectorAll('#asset-mine-units [data-unit-select]').length===n,own.length-1);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+    await require('./asset_pdf_checks.cjs')({page,api,post,campus,label});
     await page.screenshot({path:path.join(output,label+'.png'),fullPage:true});passed.push(label+': serialized drawer, lost response retry, camera denial fallback, QR photo decode, HID repeat, receipt actual quantity, unit/material PDF, object editor, stocktake closure, mobile layout');await browser.close();browser=null;
   }
   assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:true,passed,nativeHardware:false},null,2));console.log(JSON.stringify({ok:true,passed}));

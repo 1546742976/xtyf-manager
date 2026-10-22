@@ -1,27 +1,73 @@
-/* Print immutable identity, never a newly assigned number. Chinese text is rasterized locally. */
+/* Preview and save the same authenticated PDF bytes. */
 (() => {
   'use strict';
-  const $=id=>document.getElementById(id);let records=[];
-  function label(unit){
-    const code=(unit.item_id?'U:':'M:')+unit.id,canvas=document.createElement('canvas');canvas.width=900;canvas.height=500;
-    const c=canvas.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,900,500);c.fillStyle='#000';c.font='bold 40px sans-serif';
-    c.fillText(unit.item_name||unit.name,30,55,840);c.font='30px sans-serif';c.fillText(code,30,105);
-    c.fillText(unit.serial||unit.specification||'',30,150,500);c.fillText(unit.campus_name||'',30,190,500);
-    const matrix=new ZXing.QRCodeWriter().encode(code,ZXing.BarcodeFormat.QR_CODE,260,260,new Map());
-    for(let y=0;y<260;y++)for(let x=0;x<260;x++)if(matrix.get(x,y))c.fillRect(610+x,80+y,1,1);
-    const barcode=document.createElement('canvas');JsBarcode(barcode,code,{format:'CODE128',width:4,height:110,margin:20,displayValue:true,fontSize:30});
-    c.drawImage(barcode,30,270,Math.min(530,barcode.width),190);return canvas;
+  const $=id=>document.getElementById(id),form=$('asset-label-form'),link=$('asset-label-download');
+  let records=[],generation=0,controller=null,task=null,documentPdf=null,renderTask=null,url=null,bytes=null,page=1,pdfjs=null;
+  const status=text=>$('asset-label-status').textContent=text;
+  function clear(){
+    generation++;controller?.abort();controller=null;renderTask?.cancel();renderTask=null;
+    if(task)task.destroy().catch(()=>{});task=null;documentPdf=null;bytes=null;
+    if(url)URL.revokeObjectURL(url);url=null;link.hidden=true;link.removeAttribute('href');
+    $('asset-label-preview').replaceChildren();$('asset-label-pages').hidden=true;
+  }
+  async function showPage(own){
+    renderTask?.cancel();const current=page,doc=documentPdf,pdfPage=await doc.getPage(current);
+    if(own!==generation||doc!==documentPdf||current!==page)return;
+    const natural=pdfPage.getViewport({scale:1}),width=Math.min(800,$('asset-label-preview').clientWidth||600);
+    const scale=width/natural.width,ratio=Math.min(devicePixelRatio||1,2),viewport=pdfPage.getViewport({scale:scale*ratio});
+    const canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
+    canvas.style.width='100%';canvas.style.height='auto';canvas.setAttribute('aria-label',`PDF 第 ${current} 页`);
+    const rendering=pdfPage.render({canvasContext:canvas.getContext('2d'),viewport});renderTask=rendering;
+    try{await rendering.promise;}catch(e){if(e.name==='RenderingCancelledException')return;throw e;}
+    if(own!==generation||doc!==documentPdf||current!==page)return;
+    $('asset-label-preview').replaceChildren(canvas);$('asset-label-pages').hidden=false;
+    $('asset-label-page').textContent=`第 ${current} / ${doc.numPages} 页`;
+    $('asset-label-prev').disabled=current===1;$('asset-label-next').disabled=current===doc.numPages;
   }
   async function render(){
-    const form=$('asset-label-form'),w=Number(form.elements.width.value),h=Number(form.elements.height.value),a4=form.elements.paper.value==='a4';
-    if(!Number.isFinite(w)||!Number.isFinite(h)||w<40||w>190||h<25||h>270)throw Error('标签宽度 40–190 mm，高度 25–270 mm');
-    const preview=$('asset-label-preview');preview.replaceChildren();
-    for(const unit of records){const canvas=label(unit);canvas.style.width='min(100%,450px)';canvas.style.height='auto';preview.append(canvas);}
-    $('asset-label-download').href='/api/assets/labels.pdf?'+new URLSearchParams({ids:records.map(u=>u.id).join(','),kind:records[0].item_id?'unit':'item',width:w,height:h,paper:a4?'a4':'thermal'});
-    $('asset-label-download').hidden=false;
-    $('asset-label-status').textContent=`已生成 ${records.length} 张标签。下载 PDF 后按实际尺寸打印，不缩放。补打使用原身份。`;
+    clear();const own=generation;status('正在生成并读取 PDF…');
+    try{
+      const w=Number(form.elements.width.value),h=Number(form.elements.height.value);
+      if(!Number.isFinite(w)||!Number.isFinite(h)||w<40||w>190||h<25||h>270)throw Error('标签宽度 40–190 mm，高度 25–270 mm');
+      const path='/api/assets/labels.pdf?'+new URLSearchParams({ids:records.map(u=>u.id).join(','),kind:records[0].item_id?'unit':'item',width:w,height:h,paper:form.elements.paper.value});
+      let content;
+      if(window.XTYF){
+        const response=await window.XTYF.readResource(path);
+        if(response.status!==200)throw Error('PDF 读取失败，请检查登录状态');
+        content=Uint8Array.from(atob(response.body),c=>c.charCodeAt(0));
+      }else{
+        controller=new AbortController();const response=await fetch(path,{credentials:'same-origin',signal:controller.signal});
+        if(!response.ok)throw Error('PDF 生成失败（'+response.status+'）');
+        content=new Uint8Array(await response.arrayBuffer());
+      }
+      if(own!==generation)return;
+      if(content.length>20*1024*1024||new TextDecoder().decode(content.subarray(0,5))!=='%PDF-')throw Error('服务器没有返回有效 PDF');
+      pdfjs??=await import('/vendor/pdfjs/pdf.mjs');if(own!==generation)return;
+      const vendor=new URL('/vendor/pdfjs/',location.href).href;
+      pdfjs.GlobalWorkerOptions.workerSrc=vendor+'pdf.worker.mjs';
+      // Fetch fonts in the local worker, not the business frame's native API adapter.
+      const loading=pdfjs.getDocument({data:content.slice(),isEvalSupported:false,enableXfa:false,useSystemFonts:true,useWorkerFetch:true,
+        cMapUrl:vendor+'cmaps/',cMapPacked:true,standardFontDataUrl:vendor+'standard_fonts/',wasmUrl:vendor+'wasm/'});
+      task=loading;const doc=await loading.promise;if(own!==generation){await loading.destroy();return;}
+      documentPdf=doc;page=1;await showPage(own);if(own!==generation)return;
+      bytes=content;url=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));link.href=url;link.hidden=false;
+      status(`共 ${doc.numPages} 页 · ${records.length} 张标签。预览与下载为同一份 PDF，请按实际尺寸打印。`);
+      if(window.XTYF&&!window.XTYF.config?.capabilities?.includes('pdf_save')){link.hidden=true;status('PDF 预览已生成；请升级客户端以保存同一份 PDF，或在浏览器下载。');}
+    }catch(e){if(own!==generation)return;clear();status('PDF 预览失败：'+e.message);}
   }
-  $('asset-label-form').onsubmit=e=>{e.preventDefault();render().catch(e=>$('asset-label-status').textContent=e.message);};
+  form.onsubmit=e=>{e.preventDefault();render();};
+  form.onchange=()=>render();
+  for(const [id,delta] of [['asset-label-prev',-1],['asset-label-next',1]])$(id).onclick=()=>{
+    if(!documentPdf)return;page=Math.max(1,Math.min(documentPdf.numPages,page+delta));
+    showPage(generation).catch(e=>{clear();status('PDF 预览失败：'+e.message);});
+  };
+  link.onclick=async e=>{
+    if(!window.XTYF)return;e.preventDefault();if(!bytes)return;
+    const own=generation;let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
+    try{await window.XTYF.invoke('download',{filename:'asset-labels.pdf',pdfBody:btoa(binary)});}
+    catch(error){if(own===generation)status('PDF 保存失败：'+error.message);}
+  };
   $('asset-label-close').onclick=()=>$('asset-label-dialog').close();
-  window.AssetLabels={open(values){records=values;$('asset-label-dialog').showModal();render().catch(e=>$('asset-label-status').textContent=e.message);},label};
+  $('asset-label-dialog').addEventListener('close',()=>{if(!$('asset-label-dialog').open)clear();});window.addEventListener('pagehide',clear);
+  window.AssetLabels={open(values){records=values;$('asset-label-dialog').showModal();return render();}};
 })();

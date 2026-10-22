@@ -36,8 +36,24 @@ def build_ui_from_head(files, commit, private_key, installers=None):
         if installers:
             command.extend(['--installers', str(installers.resolve())])
         subprocess.run(command, cwd=source, check=True)
-        return {path.relative_to(source).as_posix(): path.read_bytes()
-                for path in (source / 'client-ui-release').rglob('*') if path.is_file()}
+        generated = {path.relative_to(source).as_posix(): path.read_bytes()
+                     for path in (source / 'client-ui-release').rglob('*') if path.is_file()}
+        # The website serves the same pinned PDF.js resources as the local UI.
+        # Copy only entries in HEAD's lock, not the build environment or cache.
+        lock = source / 'clients/frontend/vendor-lock.json'
+        if lock.is_file():
+            vendor = source / 'clients/frontend/vendor'
+            for name, digest in json.loads(lock.read_text(encoding='utf-8'))['files'].items():
+                if not name.startswith('pdfjs/'):
+                    continue
+                resource = (vendor / name).resolve()
+                if not resource.is_relative_to((vendor / 'pdfjs').resolve()) or not resource.is_file():
+                    raise RuntimeError('Missing or unsafe PDF resource: ' + name)
+                content = resource.read_bytes()
+                if hashlib.sha256(content).hexdigest() != digest:
+                    raise RuntimeError('Invalid PDF resource checksum: ' + name)
+                generated['clients/frontend/vendor/' + name] = content
+        return generated
 
 
 def main():

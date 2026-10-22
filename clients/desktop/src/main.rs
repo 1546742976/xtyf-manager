@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 mod updates;
 mod native_updates;
 mod website;
+mod pdf_save;
 
 struct Session {
     client: Client,
@@ -195,11 +196,22 @@ async fn pick_files(state: &AppState, args: &Value) -> Result<Value, String> {
     Ok(json!(result))
 }
 async fn download(state: &AppState, args: &Value) -> Result<Value, String> {
+    let pdf = args.get("pdfBody").map(|value| pdf_save::decode(value.as_str().unwrap_or(""))).transpose()?;
     let expected_hash=args.get("expectedSha256").and_then(Value::as_str);
     if expected_hash.is_some_and(|value|value.len()!=64 || !value.bytes().all(|b|b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {return Err("下载校验值无效".into());}
     let name = PathBuf::from(text(args,"filename"));
     let name = name.file_name().and_then(|n|n.to_str()).filter(|n|!n.is_empty()).unwrap_or("download");
     let Some(target) = rfd::AsyncFileDialog::new().set_title("保存文件").set_file_name(name).save_file().await else {return Ok(json!({"cancelled":true}));};
+    if let Some(bytes) = pdf {
+        let temporary = target.path().with_extension(format!("{}.part",uuid::Uuid::new_v4()));
+        let result = (|| {
+            fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
+            fs::rename(&temporary, target.path()).map_err(|e| e.to_string())?;
+            Ok(json!({"cancelled":false}))
+        })();
+        if result.is_err() { let _ = fs::remove_file(&temporary); }
+        return result;
+    }
     let response = send_request(state, args).await?;
     if !response.status().is_success() || response.headers().get(header::CONTENT_TYPE).and_then(|h|h.to_str().ok()).is_some_and(|t|t.contains("text/html") || t.contains("application/json")) {
         return Err(format!("下载失败，请检查登录状态和权限（{}）", response.status()));
