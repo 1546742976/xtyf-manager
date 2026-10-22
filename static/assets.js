@@ -55,8 +55,14 @@
     const response=await fetch('/api/assets/'+path, body?{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
     }:{});
-    const data=await response.json().catch(()=>({error:'服务器返回了无法识别的内容'}));
-    if(!response.ok||!data.ok){const error=new Error(data.error||'请求失败');error.status=response.status;throw error;}
+    let data;
+    try{data=await response.json();}catch(_){throw new Error('服务器返回了无法识别的内容');}
+    if(!response.ok||data?.ok!==true){
+      const error=new Error(typeof data?.error==='string'?data.error:'服务器返回了无法识别的内容');
+      // Only a structured business rejection proves the write did not succeed.
+      error.businessRejected=response.status>=400&&response.status<500&&data?.ok===false&&typeof data.error==='string';
+      throw error;
+    }
     return data;
   }
   const button=(action,label,id)=>`<button type="button" class="btn" data-action="${action}" data-id="${id}">${label}</button>`;
@@ -292,7 +298,7 @@
       document.dispatchEvent(new CustomEvent("asset-operation-saved",{detail:saved}));
       dialog.close();opener?.focus();const refreshed=await load();if(refreshed)status('已保存。');
     }catch(error){
-      const unknown=!error.status||error.status>=500;
+      const unknown=!error.businessRejected;
       if(!unknown)forgetPending();
       $('asset-form-status').textContent=error.message+(unknown?'；结果尚未确认，可重试原请求；刷新或重新打开页面后仍会保留该请求。':'');
       $('asset-form-status').focus();

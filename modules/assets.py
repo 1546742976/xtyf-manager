@@ -542,8 +542,10 @@ def events():
             # A transfer belongs to both campuses.
             if key == "campus_id":
                 where.append("(e.campus_id=? OR EXISTS (SELECT 1 FROM json_each(e.details,'$.deltas') d "
-                             "WHERE json_extract(d.value,'$[0]')=CAST(? AS INTEGER)))")
-                args.extend([request.args[key], request.args[key]])
+                             "WHERE json_extract(d.value,'$[0]')=CAST(? AS INTEGER)) "
+                             "OR json_extract(e.details,'$.before.campus_id')=CAST(? AS INTEGER) "
+                             "OR json_extract(e.details,'$.after.campus_id')=CAST(? AS INTEGER))")
+                args.extend([request.args[key]] * 4)
             else:
                 where.append("e.item_id=?")
                 args.append(request.args[key])
