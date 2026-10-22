@@ -649,19 +649,28 @@ def migrate_item(db, data):
     item = row(db, "asset_items", integer(data, "item_id"))
     reason = text(data, "reason", maximum=500)
     action = text(data, "action")
-    if item["kind"] != "returnable" or item["tracking"] == "unit":
+    if item["kind"] != "returnable" or item["tracking"] not in ("legacy", "quantity", "migrating"):
         raise Invalid("此型号不需要迁移", 409)
     if item["version"] != integer(data, "version"):
         raise Invalid("核对内容已变化，请刷新后重试", 409)
+    details = dict(data)
     if action == "start":
-        if item["tracking"] != "legacy" or item["version"] != integer(data, "version"):
+        if item["tracking"] not in ("legacy", "quantity"):
             raise Invalid("型号状态已变化", 409)
+        if db.execute("SELECT 1 FROM asset_units WHERE item_id=?", (item["id"],)).fetchone():
+            raise Invalid("此型号已有单件身份，请先核对管理方式", 409)
+        details["tracking_before"] = item["tracking"]
         db.execute("UPDATE asset_items SET tracking='migrating',version=version+1 WHERE id=?", (item["id"],))
     elif item["tracking"] != "migrating":
         raise Invalid("请先冻结此型号并开始核对", 409)
     elif action == "cancel":
+        started = db.execute("SELECT details FROM asset_events WHERE item_id=? AND action='migration_start' ORDER BY id DESC LIMIT 1",
+                             (item["id"],)).fetchone()
+        original_mode = json.loads(started["details"]).get("tracking_before", "legacy") if started else "legacy"
+        if original_mode not in ("legacy", "quantity"):
+            original_mode = "legacy"
         db.execute("DELETE FROM asset_migration_entries WHERE item_id=?", (item["id"],))
-        db.execute("UPDATE asset_items SET tracking='legacy',version=version+1 WHERE id=?", (item["id"],))
+        db.execute("UPDATE asset_items SET tracking=?,version=version+1 WHERE id=?", (original_mode, item["id"]))
     elif action == "add":
         campus = integer(data, "campus_id")
         active_campus(db, campus)
@@ -729,7 +738,7 @@ def migrate_item(db, data):
         }
     else:
         raise Invalid("迁移操作无效")
-    return {"event_id": event(db, "migration_" + action, reason, item_id=item["id"], details=data)}
+    return {"event_id": event(db, "migration_" + action, reason, item_id=item["id"], details=details)}
 
 
 @bp.get("/api/assets/units/migration/<int:item_id>")

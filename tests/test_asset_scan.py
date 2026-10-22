@@ -1,6 +1,7 @@
 """Synthetic purchase labels; no user order numbers or real inventory."""
 
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 import test_assets as fixture
@@ -40,12 +41,19 @@ class ScanTest(unittest.TestCase):
                 parse_label(raw)
 
     def test_resolve_and_permissions(self):
-        r = self.member.post("/api/assets/scan/resolve", json={"raw": self.receipt()["raw"]}).get_json()
+        with patch("modules.asset_scan.lookup_lcsc", return_value={
+            "configured": True, "status": "unavailable", "product": None,
+        }):
+            r = self.member.post("/api/assets/scan/resolve", json={"raw": self.receipt()["raw"]}).get_json()
         self.assertIsNone(r["item"])
-        self.assertFalse(r["supplier_lookup"]["configured"])
+        self.assertTrue(r["supplier_lookup"]["configured"])
+        self.assertEqual(r["supplier_lookup"]["status"], "unavailable")
         self.post(self.member, "/api/assets/identifiers", dict(item_id=self.screw, code="C12345", reason="测试"), 403)
         self.bind()
-        r = self.member.post("/api/assets/scan/resolve", json={"raw": "C12345"}).get_json()
+        with patch("modules.asset_scan.lookup_lcsc", return_value={
+            "configured": True, "status": "unavailable", "product": None,
+        }):
+            r = self.member.post("/api/assets/scan/resolve", json={"raw": "C12345"}).get_json()
         self.assertEqual(r["item"]["id"], self.screw)
 
     def test_receipt_idempotency_and_history(self):

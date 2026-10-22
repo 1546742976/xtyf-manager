@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-palette="rm-light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>扫码工作台 · 物料管理交互预览</title>
+  <link rel="stylesheet" href="../../static/style.css">
+  <link rel="stylesheet" href="../../static/ui.css">
+  <link rel="stylesheet" href="../../static/workspace.css">
+  <link rel="stylesheet" href="../../static/apple.css">
+  <link rel="stylesheet" href="../../static/themes.css">
+  <link rel="stylesheet" href="../../static/assets.css">
+  <style>
+    * { box-sizing:border-box; }
+    body { margin:0; }
+    [hidden] { display:none !important; }
+    .scan-shell { max-width:1320px; margin:auto; padding:24px 32px 48px; }
+    .scan-shell .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; margin:0; padding:10px 16px; white-space:normal; line-height:1.4; }
+    .scan-shell p { line-height:1.7; }
+    .scan-top,.scan-banner,.scan-heading,.scan-panel-heading,.scan-row,.scan-form-footer { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    .scan-top { margin-bottom:22px; color:var(--ux-muted); font-size:12px; }
+    .scan-top a { display:inline-flex; gap:8px; align-items:center; font-size:13px; }
+    .scan-top .btn { min-height:34px; padding:6px 12px; font-size:12px; }
+    .scan-banner { padding:12px 16px; border:1px solid var(--ux-stroke); border-radius:10px; background:var(--surface-inset); font-size:12px; color:var(--ux-muted); margin-bottom:28px; }
+    .scan-banner strong { color:var(--ux-text); margin-right:10px; }
+    .scan-heading { align-items:flex-start; margin-bottom:24px; }
+    .scan-heading h1 { font-size:32px; letter-spacing:-.04em; margin:8px 0 10px; }
+    .scan-heading p { margin:0; color:var(--ux-muted); max-width:760px; }
+    .scan-eyebrow { font-size:11px; letter-spacing:.12em; font-weight:650; color:var(--ux-muted); }
+    .scan-context { padding:9px 12px; border-radius:8px; font-size:12px; color:var(--brand-text); background:var(--ux-brand-soft); font-weight:600; margin-top:8px; }
+    .scan-preview-nav { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 24px; }
+    .scan-preview-nav > span { font-size:12px; color:var(--ux-muted); margin-right:4px; }
+    .scan-preview-nav a { padding:8px 12px; border:1px solid var(--ux-stroke); border-radius:8px; color:var(--ux-muted); font-size:12px; background:var(--ux-surface); }
+    .scan-preview-nav a[aria-current="page"] { color:var(--brand-text); border-color:var(--brand-text); background:var(--ux-brand-soft); font-weight:650; }
+    .scan-layout { display:grid; grid-template-columns:minmax(300px,.92fr) minmax(360px,1.08fr); gap:24px; align-items:start; }
+    .scan-panel { background:var(--ux-surface); border:1px solid var(--ux-stroke); border-radius:16px; overflow:hidden; }
+    .scan-panel-heading { padding:20px 22px; border-bottom:1px solid var(--ux-stroke); }
+    .scan-panel-heading h2 { font-size:16px; margin:0; }
+    .scan-step { width:24px; height:24px; display:inline-grid; place-items:center; border:1px solid var(--ux-stroke); border-radius:7px; font-size:12px; margin-right:8px; color:var(--ux-muted); }
+    .scan-micro { font-size:11px; color:var(--ux-muted); }
+    .scan-panel-body { padding:22px; }
+    .scan-input-tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; background:var(--surface-inset); border:1px solid var(--ux-stroke); border-radius:10px; padding:4px; margin-bottom:20px; }
+    .scan-input-tabs .btn { padding:10px 6px; border:1px solid transparent; background:transparent; font-size:12px; min-height:40px; color:var(--ux-muted); border-radius:7px; }
+    .scan-input-tabs .btn[aria-selected="true"] { background:var(--ux-surface); border-color:var(--ux-stroke); color:var(--ux-text); box-shadow:0 2px 4px rgba(0,0,0,.04); font-weight:650; }
+    .scan-camera { min-height:274px; border:1px solid var(--ux-stroke); border-radius:12px; position:relative; display:grid; place-items:center; text-align:center; background:var(--surface-inset); overflow:hidden; }
+    .scan-camera-label { position:absolute; top:14px; left:14px; font-size:11px; padding:5px 8px; border:1px solid var(--ux-stroke); border-radius:6px; background:var(--ux-surface); color:var(--ux-muted); }
+    .scan-frame { position:relative; width:182px; height:150px; display:grid; place-content:center; gap:12px; color:var(--ux-muted); }
+    .scan-frame > i { position:absolute; width:24px; height:24px; border-color:var(--brand-text); border-style:solid; border-width:0; }
+    .scan-frame > i:nth-child(1) { top:0; left:0; border-top-width:2px; border-left-width:2px; border-top-left-radius:8px; }
+    .scan-frame > i:nth-child(2) { top:0; right:0; border-top-width:2px; border-right-width:2px; border-top-right-radius:8px; }
+    .scan-frame > i:nth-child(3) { bottom:0; left:0; border-bottom-width:2px; border-left-width:2px; border-bottom-left-radius:8px; }
+    .scan-frame > i:nth-child(4) { bottom:0; right:0; border-bottom-width:2px; border-right-width:2px; border-bottom-right-radius:8px; }
+    .scan-camera svg { width:42px; height:42px; margin:auto; fill:none; stroke:currentColor; stroke-width:1.3; }
+    .scan-frame span { font-size:12px; }
+    .scan-helper { margin:12px 0 16px; font-size:12px; color:var(--ux-muted); }
+    .scan-buttons { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .scan-buttons .btn { flex:1 1 150px; font-size:13px; }
+    .scan-label { font-size:13px; font-weight:600; }
+    .scan-shell textarea,.scan-shell input,.scan-shell select { display:block; width:100%; min-height:44px; border:1px solid var(--control-border); border-radius:9px; padding:11px 12px; color:var(--ux-text); background:var(--ux-surface); font:inherit; }
+    .scan-shell textarea { margin-top:10px; line-height:1.6; min-height:132px; resize:vertical; font-size:12px; overflow-wrap:anywhere; }
+    .scan-scanner-icon { display:grid; place-items:center; width:52px; height:52px; border:1px solid var(--ux-stroke); border-radius:12px; background:var(--surface-inset); margin-bottom:16px; font-size:24px; }
+    .scan-detail { margin-top:18px; border-top:1px solid var(--ux-stroke); padding-top:16px; font-size:12px; color:var(--ux-muted); }
+    .scan-detail summary { cursor:pointer; line-height:1.6; color:var(--ux-text); }
+    .scan-detail code { display:block; padding:12px; margin-top:12px; border-radius:8px; background:var(--surface-inset); overflow-wrap:anywhere; white-space:pre-wrap; font-size:11px; line-height:1.7; }
+    .scan-note { display:flex; align-items:flex-start; gap:10px; border-top:1px solid var(--ux-stroke); padding:16px 22px; color:var(--ux-muted); font-size:12px; background:var(--surface-inset); line-height:1.7; }
+    .scan-note strong { white-space:nowrap; font-size:11px; color:var(--ux-text); }
+    .scan-error { color:var(--red-text,var(--ux-danger)); margin:12px 0 0; font-size:12px; }
+    .scan-error:empty { display:none; }
+    .scan-empty { padding:56px 24px; text-align:center; color:var(--ux-muted); }
+    .scan-empty-icon { width:64px; height:64px; display:grid; place-items:center; margin:0 auto 22px; border:1px solid var(--ux-stroke); border-radius:18px; background:var(--surface-inset); font-size:26px; }
+    .scan-empty h3 { color:var(--ux-text); font-size:18px; margin:0 0 10px; }
+    .scan-empty p { font-size:13px; margin:0 auto; max-width:340px; }
+    .scan-empty-flow { display:flex; justify-content:center; flex-wrap:wrap; gap:12px; margin:28px 0 0; font-size:11px; }
+    .scan-result-top { display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding-bottom:16px; margin-bottom:18px; border-bottom:1px solid var(--ux-stroke); }
+    .scan-pill { display:inline-flex; gap:6px; align-items:center; border-radius:6px; padding:5px 8px; font-size:11px; color:var(--green-text,var(--green)); background:var(--green-soft,var(--surface-inset)); }
+    .scan-pill.neutral { background:var(--surface-inset); color:var(--ux-muted); }
+    .scan-product h3 { font-size:23px; margin:4px 0 8px; letter-spacing:-.025em; overflow-wrap:anywhere; }
+    .scan-product p { font-size:12px; color:var(--ux-muted); margin:0; }
+    .scan-product-code { color:var(--brand-text); font-size:12px; font-weight:650; }
+    .scan-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin:20px 0; }
+    .scan-facts > div { min-width:0; }
+    .scan-facts dt { font-size:11px; color:var(--ux-muted); margin-bottom:6px; }
+    .scan-facts dd { margin:0; font-size:13px; overflow-wrap:anywhere; }
+    .scan-source { padding-top:14px; border-top:1px solid var(--ux-stroke); font-size:11px; color:var(--ux-muted); line-height:1.8; }
+    .scan-source a { text-decoration:underline; text-underline-offset:3px; }
+    .scan-stock { margin-top:20px; border:1px solid var(--ux-stroke); border-radius:10px; overflow:hidden; }
+    .scan-stock-head { padding:12px 14px; display:flex; justify-content:space-between; gap:12px; align-items:center; background:var(--surface-inset); }
+    .scan-stock-head strong { font-size:13px; }
+    .scan-stock-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px; border-top:1px solid var(--ux-stroke); }
+    .scan-stock-row > span { display:grid; gap:5px; font-size:12px; }
+    .scan-stock-row small { color:var(--ux-muted); font-size:11px; }
+    .scan-stock-row strong { font-size:23px; font-variant-numeric:tabular-nums; white-space:nowrap; font-weight:650; }
+    .scan-stock-row strong small { font-weight:400; }
+    .scan-result-actions { border-top:1px solid var(--ux-stroke); margin-top:22px; padding-top:20px; }
+    .scan-result-actions h3 { margin:0 0 12px; font-size:13px; }
+    .scan-action-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .scan-action-grid .btn { display:grid; justify-items:start; justify-content:stretch; padding:14px; text-align:left; font-size:13px; }
+    .scan-action-grid .btn small { color:var(--ux-muted); font-size:11px; font-weight:400; }
+    .scan-operation { margin-top:20px; border:1px solid var(--brand-text); border-radius:12px; overflow:hidden; }
+    .scan-operation-title { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; padding:16px 18px; background:var(--ux-brand-soft); }
+    .scan-operation-title h3 { margin:0; font-size:15px; }
+    .scan-operation-title span { font-size:11px; color:var(--brand-text); }
+    .scan-form { padding:18px; }
+    .scan-form > p:first-child { margin-top:0; }
+    .scan-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+    .scan-form label { display:grid; gap:8px; color:var(--ux-text); font-size:12px; font-weight:600; }
+    .scan-form label small { font-size:11px; font-weight:400; color:var(--ux-muted); line-height:1.6; }
+    .scan-form .wide { grid-column:1 / -1; }
+    .scan-impact { margin:18px 0; padding:12px 14px; border-radius:8px; background:var(--surface-inset); line-height:1.8; font-size:12px; color:var(--ux-muted); }
+    .scan-impact strong { color:var(--ux-text); }
+    .scan-form-footer { margin-top:18px; padding-top:16px; border-top:1px solid var(--ux-stroke); align-items:center; }
+    .scan-form-footer > span { color:var(--ux-muted); font-size:11px; }
+    .scan-form-footer > div { display:flex; flex-wrap:wrap; gap:10px; }
+    .scan-form-footer .btn { font-size:12px; }
+    .scan-notice { border:1px solid var(--ux-stroke); background:var(--surface-inset); border-radius:10px; padding:16px; margin-top:20px; font-size:12px; color:var(--ux-muted); }
+    .scan-notice p { margin:0 0 12px; }
+    .scan-success { padding:16px; margin-top:20px; border:1px solid var(--green-text,var(--green)); border-radius:10px; background:var(--green-soft,var(--surface-inset)); color:var(--green-text,var(--green)); font-size:13px; line-height:1.8; }
+    .scan-status { margin:18px 0 0; min-height:20px; color:var(--ux-muted); font-size:12px; }
+    @media(max-width:850px) { .scan-layout { grid-template-columns:1fr; } .scan-shell { max-width:680px; padding:20px; } .scan-camera { min-height:240px; } }
+    @media(max-width:480px) { .scan-shell { padding:16px 12px 32px; } .scan-heading h1 { font-size:28px; } .scan-panel-heading,.scan-panel-body { padding:18px; } .scan-context { margin-top:0; } .scan-banner { align-items:flex-start; } .scan-form-grid { grid-template-columns:1fr; } .scan-form-footer > div { width:100%; } .scan-form-footer .btn { flex:1; } .scan-preview-nav { gap:6px; } .scan-preview-nav > span { width:100%; } .scan-preview-nav a { padding:8px 10px; } .scan-action-grid { grid-template-columns:1fr; } }
+    @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+  </style>
+</head>
+<body>
+  <a href="#main-content" class="ux-skip-link">跳至主内容</a>
+  <main class="scan-shell" id="main-content">
+    <div class="scan-top"><a href="materials-preview.html">← 返回物料管理</a><div class="scan-buttons"><span>物料管理 / 扫码工作台</span><button class="btn" type="button" id="theme-toggle" aria-pressed="false">切换深色</button></div></div>
+    <div class="scan-banner"><span><strong>交互设计预览</strong>摄像头为示意画面，库存为示例。提交仅修改本页数据，刷新重置。</span><span>商品资料使用官方页面快照，不是实时查询</span></div>
+    <header class="scan-heading"><div><div class="scan-eyebrow">INVENTORY / SCAN WORKSPACE</div><h1 id="page-title">扫一扫</h1><p id="page-description">先识别物料，再选择要做的事。扫描本身不会改变库存。</p></div><span class="scan-context" id="entry-context">通用入口 · 扫描后选任务</span></header>
+    <nav class="scan-preview-nav" aria-label="切换扫码入口预览"><span>预览入口</span><a href="?task=general" data-task-link="general">通用扫一扫</a><a href="?task=search" data-task-link="search">扫码搜索</a><a href="?task=receive" data-task-link="receive">采购入库</a><a href="?task=borrow" data-task-link="borrow">设备借用</a><a href="?task=return" data-task-link="return">设备归还</a><a href="?task=count" data-task-link="count">库存盘点</a><a href="?task=move" data-task-link="move">移动 / 调拨</a></nav>
+    <div class="scan-layout">
+      <section class="scan-panel" aria-labelledby="scanner-title">
+        <div class="scan-panel-heading"><h2 id="scanner-title"><span class="scan-step">1</span>识别物料</h2><span class="scan-micro">原厂码 / 系统码</span></div>
+        <div class="scan-panel-body">
+          <div class="scan-input-tabs" role="tablist" aria-label="选择扫码方式"><button class="btn" id="tab-phone" role="tab" aria-selected="true" aria-controls="camera-panel" data-input="phone" type="button">手机摄像头</button><button class="btn" id="tab-scanner" role="tab" aria-selected="false" aria-controls="scanner-panel" tabindex="-1" data-input="scanner" type="button">电脑扫码枪</button><button class="btn" id="tab-camera" role="tab" aria-selected="false" aria-controls="camera-panel" tabindex="-1" data-input="camera" type="button">电脑摄像头</button></div>
+          <div id="camera-panel" role="tabpanel" aria-labelledby="tab-phone">
+            <div class="scan-camera"><span class="scan-camera-label" id="camera-label">手机后置摄像头 · 预览画面</span><div class="scan-frame"><i></i><i></i><i></i><i></i><svg aria-hidden="true" viewBox="0 0 48 48"><path d="M16 12l3-5h10l3 5h8v27H8V12z"/><circle cx="24" cy="25" r="8"/></svg><span>将二维码放入框内</span></div></div>
+            <p class="scan-helper">此处展示扫码界面布局，不会调用摄像头。点击下方示例标签，体验识别后的流程。</p>
+            <div class="scan-buttons"><button class="btn primary" type="button" data-sample="supplier">使用嘉立创示例标签</button><button class="btn" type="button" data-sample="equipment">使用设备示例码</button></div>
+          </div>
+          <div id="scanner-panel" role="tabpanel" aria-labelledby="tab-scanner" hidden>
+            <div class="scan-scanner-icon" aria-hidden="true">⌁</div>
+            <form id="scanner-form"><label class="scan-label" for="scan-input">扫码枪输入 / 粘贴标签内容</label><textarea id="scan-input" name="label" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="点击这里后使用扫码枪，或粘贴二维码原始内容…"></textarea><p class="scan-helper">扫码枪回车后识别；也可以输入立创编号 C233939。Shift + Enter 换行。</p><div class="scan-buttons"><button class="btn primary" type="submit">识别内容</button><button class="btn" type="button" id="fill-sample">填入嘉立创示例</button></div></form>
+          </div>
+          <p class="scan-error" id="scan-error" role="alert"></p>
+          <details class="scan-detail"><summary>没有码，或者设备不方便贴码？</summary><p>贴码不是借还的前提。在实际物料列表搜索型号后，可按单件或数量管理。本预览提供两种设备记录体验。</p><div class="scan-buttons"><button class="btn" type="button" data-sample="equipment">选择单件设备示例</button><button class="btn" type="button" data-sample="quantity-equipment">选择数量设备示例</button></div></details>
+        </div>
+        <div class="scan-note"><strong>识别规则</strong><span>立创格式 → 提取商品编号 → 商品资料与本地库存分开展示。设备原厂码或系统码 → 查找已关联的设备。</span></div>
+      </section>
+      <section class="scan-panel" aria-labelledby="result-title">
+        <div class="scan-panel-heading"><h2 id="result-title"><span class="scan-step">2</span>识别结果</h2><span class="scan-micro" id="result-context">等待输入</span></div>
+        <div id="result-body" aria-live="polite"><div class="scan-empty"><div class="scan-empty-icon" aria-hidden="true">⌕</div><h3>从一张标签开始</h3><p>识别立创包装上的商品编号，查看商品资料和本地库存；设备码会定位到对应设备。</p><div class="scan-empty-flow"><span>① 识别标签</span><span>→</span><span>② 核对物料</span><span>→</span><span>③ 按需操作</span></div></div></div>
+      </section>
+    </div>
+    <p class="scan-status" id="page-status" role="status"></p>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const supplierLabel = '{on:SO26101525028,pc:C233939,pm:GMI6050P-36db,qty:5,mc:,cc:1,pdi:242510035,hp:null}';
+    const taskInfo = {
+      general: ['扫一扫', '先识别物料，再选择要做的事。扫描本身不会改变库存。'],
+      search: ['扫码搜索', '扫描立创包装或设备标签，直接查看商品资料、库存和存放位置。'],
+      receive: ['采购入库 · 扫码', '识别收到的物料，核对标签数量和入库位置，再确认入库。'],
+      borrow: ['设备借用 · 扫码', '找到具体设备或按数量管理的设备，核对借用信息后提交。'],
+      return: ['设备归还 · 扫码', '找到设备和对应借用记录，核对本次归还数量与存放位置。'],
+      count: ['库存盘点 · 扫码', '定位物料，填写现场实盘数量。标签上的出厂数量仅作参考。'],
+      move: ['移动 / 调拨 · 扫码', '找到物料，核对来源与去向，再确认实际移动数量。']
+    };
+    const requestedTask = new URLSearchParams(location.search).get('task');
+    const task = Object.hasOwn(taskInfo, requestedTask) ? requestedTask : 'general';
+    const records = {
+      C233939: { kind:'consumable', name:'GMI6050P-36db 麦克风', mode:'数量耗材', unit:'个', south:18, north:4, location:'元件柜 A-03', borrowed:0 },
+      'U:101': { kind:'unit', name:'M3508 电机 · 001', mode:'单件设备', unit:'台', south:1, north:0, location:'动力柜 B-02', borrowed:0 },
+      'U:102': { kind:'unit', name:'M3508 电机 · 002', mode:'单件设备', unit:'台', south:0, north:0, location:'动力柜 B-02', borrowed:1 },
+      'M:201': { kind:'equipment', name:'数字万用表', mode:'数量设备', unit:'台', south:6, north:2, location:'工具柜 C-01', borrowed:2 }
+    };
+    const $ = (selector) => document.querySelector(selector);
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[character]));
+    let current = null;
+    let operation = null;
+    let success = '';
+    const actionLabels = { search:'查看库存', receive:'采购入库', borrow:'设备借用', return:'设备归还', count:'库存盘点', move:'移动 / 调拨' };
+    $('#page-title').textContent = taskInfo[task][0];
+    $('#page-description').textContent = taskInfo[task][1];
+    $('#entry-context').textContent = task === 'general' ? '通用入口 · 扫描后选任务' : '任务入口 · ' + actionLabels[task];
+    document.querySelectorAll('[data-task-link]').forEach((link) => {
+      if (link.dataset.taskLink === task) link.setAttribute('aria-current', 'page');
+    });
+    $('#theme-toggle').addEventListener('click', () => {
+      const dark = document.documentElement.dataset.theme !== 'dark';
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      document.documentElement.dataset.palette = dark ? 'rm-dark' : 'rm-light';
+      $('#theme-toggle').setAttribute('aria-pressed', String(dark));
+      $('#theme-toggle').textContent = dark ? '切换浅色' : '切换深色';
+    });
+    function selectInput(mode) {
+      document.querySelectorAll('[data-input]').forEach((button) => {
+        const selected = button.dataset.input === mode;
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+      });
+      $('#camera-panel').hidden = mode === 'scanner';
+      $('#scanner-panel').hidden = mode !== 'scanner';
+      $('#camera-panel').setAttribute('aria-labelledby', mode === 'camera' ? 'tab-camera' : 'tab-phone');
+      $('#camera-label').textContent = mode === 'camera' ? '电脑摄像头 · 预览画面' : '手机后置摄像头 · 预览画面';
+      if (mode === 'scanner') $('#scan-input').focus();
+    }
+    document.querySelectorAll('[data-input]').forEach((button, index, buttons) => {
+      button.addEventListener('click', () => selectInput(button.dataset.input));
+      button.addEventListener('keydown', (event) => {
+        if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+        selectInput(buttons[next].dataset.input);
+        buttons[next].focus();
+      });
+    });
+    function parseLabel(raw) {
+      const text = raw.trim();
+      if (!text || text.length > 4096) throw new Error('请输入标签内容，长度不超过 4096 字符。');
+      if (/^C\d+$/i.test(text)) return { type:'supplier', code:text.toUpperCase(), model:'', quantity:null, raw:text, origin:'手动输入商品编号' };
+      const deviceCode = text === 'SN-DEMO-101' ? 'U:101' : text.toUpperCase();
+      if (Object.hasOwn(records, deviceCode)) return { type:'device', code:deviceCode, raw:text, origin:text === 'SN-DEMO-101' ? '原厂序列号码 · 示例关联' : '系统设备码 · 示例' };
+      if (!text.startsWith('{') || !text.endsWith('}')) throw new Error('暂未识别此标签。请使用完整的立创包装内容、商品编号 C233939，或设备示例码 U:101。');
+      const fields = Object.create(null);
+      for (const part of text.slice(1, -1).split(',')) {
+        const delimiter = part.indexOf(':');
+        if (delimiter < 1) throw new Error('标签格式不完整，请重新扫描完整二维码。');
+        const key = part.slice(0, delimiter).trim();
+        if (Object.hasOwn(fields, key)) throw new Error('标签包含重复字段，请重新扫描完整二维码。');
+        fields[key] = part.slice(delimiter + 1).trim();
+      }
+      if (!['on','pc','pm','qty'].every((key) => Object.hasOwn(fields, key)) || !/^C\d+$/i.test(fields.pc)) throw new Error('未识别为立创包装格式，需要包含 on、pc、pm、qty 字段和有效商品编号。');
+      const quantity = Number(fields.qty);
+      if (!/^\d+$/.test(fields.qty) || !Number.isSafeInteger(quantity) || quantity < 1) throw new Error('包装数量无效，请核对标签中的 qty 字段。');
+      return { type:'supplier', code:fields.pc.toUpperCase(), model:fields.pm, quantity, raw:text, origin:'立创包装格式' };
+    }
+    function scan(raw) {
+      try {
+        const parsed = parseLabel(raw);
+        current = parsed;
+        operation = ['general','search'].includes(task) ? null : task;
+        success = '';
+        $('#scan-error').textContent = '';
+        $('#page-status').textContent = '已识别 ' + parsed.code + '。目前尚未改变任何示例库存。';
+        renderResult();
+      } catch (error) {
+        $('#scan-error').textContent = error.message;
+      }
+    }
+    function sample(kind) {
+      const returning = operation === 'return' || task === 'return';
+      scan(kind === 'supplier' ? supplierLabel : kind === 'quantity-equipment' ? 'M:201' : returning ? 'U:102' : 'U:101');
+    }
+    document.querySelectorAll('[data-sample]').forEach((button) => button.addEventListener('click', () => sample(button.dataset.sample)));
+    $('#fill-sample').addEventListener('click', () => { $('#scan-input').value = supplierLabel; $('#scan-input').focus(); });
+    $('#scanner-form').addEventListener('submit', (event) => { event.preventDefault(); scan($('#scan-input').value); });
+    $('#scan-input').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('#scanner-form').requestSubmit(); }
+    });
+    function stockHtml(record) {
+      if (!record) return '<div class="scan-notice"><strong>本地尚未建档 · 示例状态</strong><p>此预览仅内置 C233939 和三条设备记录。实际系统应支持继续获取商品资料，再选择关联已有物料或新建档案。</p></div>';
+      return `<div class="scan-stock"><div class="scan-stock-head"><strong>本地库存</strong><span class="scan-pill neutral">示例数据 · ${escapeHtml(record.mode)}</span></div><div class="scan-stock-row"><span>南校区<small>${escapeHtml(record.location)}</small></span><strong>${record.south} <small>${escapeHtml(record.unit)}可用</small></strong></div><div class="scan-stock-row"><span>北校区<small>本校区库存</small></span><strong>${record.north} <small>${escapeHtml(record.unit)}可用</small></strong></div>${record.kind !== 'consumable' ? `<div class="scan-stock-row"><span>借出中<small>示例借用人：李同学</small></span><strong>${record.borrowed} <small>${escapeHtml(record.unit)}</small></strong></div>` : ''}</div>`;
+    }
+    function productHtml() {
+      if (current.type === 'device') {
+        const record = records[current.code];
+        return `<div class="scan-product"><span class="scan-product-code">${escapeHtml(current.code)}</span><h3>${escapeHtml(record.name)}</h3><p>${escapeHtml(record.mode)} · 此设备资料为交互示例</p><dl class="scan-facts"><div><dt>识别依据</dt><dd>${escapeHtml(current.origin)}</dd></div><div><dt>管理方式</dt><dd>${escapeHtml(record.mode)}</dd></div></dl><div class="scan-source">也可输入示例原厂序列号 SN-DEMO-101，关联到单件设备 U:101。设备是否贴码与管理方式分别决定。</div></div>`;
+      }
+      const known = current.code === 'C233939';
+      return `<div class="scan-product"><span class="scan-product-code">${escapeHtml(current.code)} · 商品资料</span><h3>${known ? 'GMI6050P-36db' : escapeHtml(current.model || current.code)}</h3><p>${known ? '全指向驻极体麦克风' : '已提取商品编号，当前预览没有此商品的资料快照'}</p><dl class="scan-facts"><div><dt>品牌</dt><dd>${known ? 'INGHAi（赢海）' : '待查询'}</dd></div><div><dt>封装</dt><dd>${known ? '插件 · 直径 6 mm' : '待查询'}</dd></div><div><dt>包装标注数量</dt><dd>${current.quantity === null ? '未提供' : `${current.quantity} 个`} <span class="scan-micro">不是本地库存</span></dd></div><div><dt>标签型号</dt><dd>${escapeHtml(current.model || '未提供')}</dd></div></dl><div class="scan-source">${known ? '商品资料来源：<a href="https://www.lcsc.com/product-detail/C233939.html" target="_blank" rel="noopener noreferrer">LCSC 官方商品页（预览快照）</a>。<br>实际目标流程：识别固定格式后查询商城资料，并按商品编号匹配本地物料。' : '预览没有连接实时商城查询；请使用 C233939 查看完整交互。'}</div></div>`;
+    }
+    function actionHtml() {
+      if (task !== 'general') return task === 'search' ? '<div class="scan-notice">搜索完成。商品资料和库存分别显示，查询不会生成入库记录。</div>' : '';
+      return '<div class="scan-result-actions"><h3>接下来要做什么？</h3><div class="scan-action-grid">' + [
+        ['search','查看库存','已在上方展示库存与位置'], ['receive','采购入库','核对包装数量后登记'], ['borrow','设备借还','设备记录支持借用 / 归还'], ['count','库存盘点','填写现场实际清点数量'], ['move','移动 / 调拨','核对来源、去向与数量']
+      ].map(([key, title, subtitle]) => `<button class="btn" type="button" data-operation="${key}"><span>${title}</span><small>${subtitle}</small></button>`).join('') + '</div></div>';
+    }
+    function renderResult() {
+      if (!current) return;
+      const record = records[current.code];
+      $('#result-context').textContent = task === 'general' ? '选择后续任务' : actionLabels[task];
+      $('#result-body').innerHTML = `<div class="scan-panel-body"><div class="scan-result-top"><span class="scan-pill">✓ ${escapeHtml(current.origin)}</span><span class="scan-micro">${record ? '已匹配本地示例记录' : '暂无本地示例记录'}</span></div>${productHtml()}${stockHtml(record)}<details class="scan-detail"><summary>查看二维码原始内容</summary><code>${escapeHtml(current.raw)}</code></details>${success ? `<div class="scan-success" role="status">${escapeHtml(success)}</div>` : ''}${actionHtml()}<div id="operation-container"></div></div>`;
+      document.querySelectorAll('[data-operation]').forEach((button) => button.addEventListener('click', () => {
+        operation = button.dataset.operation;
+        success = '';
+        if (operation === 'search') { operation = null; $('#page-status').textContent = '库存与位置已在结果中展示。查询没有改变库存。'; }
+        renderResult();
+      }));
+      renderOperation();
+    }
+    function options(selected) { return `<option value="south"${selected === 'south' ? ' selected' : ''}>南校区</option><option value="north"${selected === 'north' ? ' selected' : ''}>北校区</option>`; }
+    function renderOperation() {
+      if (!operation) return;
+      const host = $('#operation-container');
+      const record = records[current.code];
+      if (!record) {
+        host.innerHTML = '<div class="scan-notice"><p>当前预览尚无对应本地档案。请先使用嘉立创示例标签，体验核对和提交步骤。</p><button class="btn" type="button" data-demo-supplier>使用嘉立创示例标签</button></div>';
+        host.querySelector('[data-demo-supplier]').addEventListener('click', () => { const intended = operation; sample('supplier'); operation = intended; renderResult(); });
+        return;
+      }
+      if (['borrow','return'].includes(operation) && record.kind === 'consumable') {
+        host.innerHTML = '<div class="scan-notice"><p><strong>这条记录是元件耗材，不能按设备借还。</strong><br>换用设备示例，继续体验单件或数量借还。</p><div class="scan-buttons"><button class="btn" type="button" data-demo-equipment="equipment">单件设备</button><button class="btn" type="button" data-demo-equipment="quantity-equipment">数量设备</button></div></div>';
+        host.querySelectorAll('[data-demo-equipment]').forEach((button) => button.addEventListener('click', () => { const intended = operation; sample(button.dataset.demoEquipment); operation = intended; renderResult(); }));
+        return;
+      }
+      if (operation === 'receive' && record.kind === 'unit') {
+        host.innerHTML = '<div class="scan-notice"><p>已建档的单件设备不能作为新的采购数量重复入库。请使用数量设备或嘉立创包装示例，体验本次到货登记。</p><button class="btn" type="button" data-receive-supplier>使用嘉立创包装示例</button></div>';
+        host.querySelector('[data-receive-supplier]').addEventListener('click', () => { sample('supplier'); operation = 'receive'; renderResult(); });
+        return;
+      }
+      const initialQuantity = operation === 'receive' ? current.quantity ?? 1 : operation === 'count' ? record.south : 1;
+      const isDevice = record.kind !== 'consumable';
+      const isUnit = record.kind === 'unit';
+      const quantityTitle = operation === 'receive' ? '本次入库数量' : operation === 'count' ? '现场实盘数量' : operation === 'move' ? '本次移动数量' : operation === 'return' ? '本次归还数量' : '本次借用数量';
+      const placeTitle = operation === 'receive' ? '入库校区' : operation === 'return' ? '归还校区' : operation === 'count' ? '盘点校区' : '来源校区';
+      const place = operation !== 'return' && record.south === 0 && record.north > 0 ? 'north' : 'south';
+      host.innerHTML = `<section class="scan-operation"><div class="scan-operation-title"><h3>${actionLabels[operation]}</h3><span>核对后提交</span></div><form class="scan-form" id="operation-form"><p class="scan-helper">${escapeHtml(record.name)}${isUnit ? ' · 已定位到此单件' : ''}</p>${isDevice && ['borrow','return'].includes(operation) ? `<div class="scan-buttons" style="margin-bottom:18px"><button class="btn${operation === 'borrow' ? ' primary' : ''}" type="button" data-loan-mode="borrow">借用</button><button class="btn${operation === 'return' ? ' primary' : ''}" type="button" data-loan-mode="return">归还</button></div>` : ''}<div class="scan-form-grid"><label>${quantityTitle}<input name="quantity" type="number" min="${operation === 'count' ? '0' : '1'}" max="${isUnit ? '1' : '999999999'}" step="1" required value="${operation === 'count' ? record[place] : initialQuantity}"${isUnit && operation !== 'count' ? ' readonly' : ''}><small>${operation === 'receive' && current.quantity !== null && current.quantity !== undefined ? `已预填包装数量 ${current.quantity}，可改为实际到货数量。` : operation === 'count' ? '预填账面数量，请按实际清点结果修改。' : isUnit ? '单件设备每次操作 1 台。' : '填写本次实际数量。'}</small></label><label>${placeTitle}<select name="campus">${options(place)}</select></label>${operation === 'move' ? `<label>目标校区<select name="destination">${options(place === 'south' ? 'north' : 'south')}</select></label><label>目标存放位置<input name="location" required maxlength="80" placeholder="例如：元件柜 A-05"></label>` : ''}${['borrow','return'].includes(operation) ? '<label class="wide">借用人<input name="person" value="李同学（示例）" readonly><small>此处使用固定示例记录，实际流程应根据当前账号与权限选择借用人。</small></label>' : ''}<label class="wide">${operation === 'receive' ? '入库备注' : '操作备注'}<input name="reason" maxlength="200" placeholder="${operation === 'receive' ? '例如：采购到货，已核对包装' : operation === 'move' ? '例如：交接给北校区项目组' : '补充说明（选填）'}"></label></div><div class="scan-impact" id="operation-impact"></div><p class="scan-error" id="operation-error" role="alert"></p><div class="scan-form-footer"><span>仅更新当前预览的示例记录</span><div><button class="btn" type="button" id="cancel-operation">取消</button><button class="btn primary" type="submit">确认${operation === 'receive' ? '入库' : operation === 'borrow' ? '借用' : operation === 'return' ? '归还' : operation === 'count' ? '盘点' : '移动'}</button></div></div></form></section>`;
+      host.querySelectorAll('[data-loan-mode]').forEach((button) => button.addEventListener('click', () => { operation = button.dataset.loanMode; renderOperation(); }));
+      $('#cancel-operation').addEventListener('click', () => {
+        operation = null;
+        $('#page-status').textContent = '已取消本次操作，示例库存没有变化。';
+        renderResult();
+        if (!['general','search'].includes(task)) {
+          $('#operation-container').innerHTML = '<div class="scan-notice"><p>已取消。可以重新扫描，或继续核对当前物料。</p><button class="btn" type="button" id="resume-operation">继续当前任务</button> <a href="materials-preview.html">返回物料管理</a></div>';
+          $('#resume-operation').addEventListener('click', () => { operation = task; renderResult(); });
+        }
+      });
+      const form = $('#operation-form');
+      form.addEventListener('input', updateImpact);
+      form.addEventListener('change', (event) => {
+        if (operation === 'count' && event.target.name === 'campus') form.elements.quantity.value = record[form.elements.campus.value];
+        updateImpact();
+      });
+      form.addEventListener('submit', confirmOperation);
+      updateImpact();
+    }
+    function updateImpact() {
+      const form = $('#operation-form');
+      if (!form) return;
+      const record = records[current.code];
+      const campus = form.elements.campus.value;
+      const quantity = Number(form.elements.quantity.value);
+      const valid = Number.isSafeInteger(quantity) && quantity >= (operation === 'count' ? 0 : 1);
+      const change = valid ? quantity : 0;
+      const before = record[campus];
+      const after = operation === 'count' ? change : ['borrow','move'].includes(operation) ? before - change : before + change;
+      let detail = `${campus === 'south' ? '南校区' : '北校区'}可用库存：<strong>${before} → ${valid ? after : '—'} ${escapeHtml(record.unit)}</strong>`;
+      if (operation === 'move') detail += `<br>总库存不变；目标校区：${form.elements.destination.value === 'south' ? '南校区' : '北校区'}。同校区移动时只更新位置。`;
+      if (operation === 'count') detail += '<br>此示例在确认后更新账面数量；标签包装数量不参与盘点计算。';
+      if (operation === 'borrow') detail += `<br>当前借出：${record.borrowed} ${escapeHtml(record.unit)}，本次将登记给李同学（示例）。`;
+      if (operation === 'return') detail += `<br>李同学（示例）当前借用：${record.borrowed} ${escapeHtml(record.unit)}。`;
+      if (operation === 'move' && form.elements.destination.value === campus) detail = `同校区移动：<strong>${before} → ${before} ${escapeHtml(record.unit)}</strong><br>本预览支持整条校区库存记录换位置；跨校区调拨可以填写部分数量。`;
+      $('#operation-impact').innerHTML = detail;
+    }
+    function confirmOperation(event) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const record = records[current.code];
+      const campus = form.elements.campus.value;
+      const quantity = Number(form.elements.quantity.value);
+      const fail = (message) => { $('#operation-error').textContent = message; };
+      if (!Number.isSafeInteger(quantity) || quantity < (operation === 'count' ? 0 : 1) || quantity > 999999999) return fail('请输入有效的整数数量。');
+      if (record.kind === 'unit' && quantity > 1) return fail('这是单件设备，数量不能超过 1。');
+      if (['borrow','move'].includes(operation) && quantity > record[campus]) return fail('本次数量超过来源校区可用库存，请核对数量或切换校区。');
+      if (operation === 'return' && quantity > record.borrowed) return fail('本次归还数量超过这条示例借用记录的未归还数量。');
+      if (operation === 'count' && record.kind === 'unit' && quantity > 0 && (record.borrowed > 0 || record[campus === 'south' ? 'north' : 'south'] > 0)) return fail('此单件设备在借出中或已登记于另一校区。请先处理归还或移动，避免重复计入库存。');
+      if (operation === 'move') {
+        const destination = form.elements.destination.value;
+        const place = form.elements.location.value.trim();
+        if (!place) return fail('请填写目标存放位置。');
+        if (destination === campus && quantity !== record[campus]) return fail('同校区部分移位需要拆分库位记录，本预览暂不提供；可改为全部数量或跨校区调拨。');
+        if (destination !== campus) { record[campus] -= quantity; record[destination] += quantity; }
+        record.location = place;
+      } else if (operation === 'count') record[campus] = quantity;
+      else if (operation === 'borrow') { record[campus] -= quantity; record.borrowed += quantity; }
+      else if (operation === 'return') { record[campus] += quantity; record.borrowed -= quantity; }
+      else record[campus] += quantity;
+      success = `已完成${actionLabels[operation]}示例。${operation === 'count' ? '实盘数量' : '本次数量'}：${quantity} ${record.unit}。上方示例库存已更新，实际业务数据未改变。`;
+      operation = null;
+      $('#page-status').textContent = success;
+      renderResult();
+    }
+  })();
+  </script>
+</body>
+</html>

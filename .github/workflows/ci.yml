@@ -133,40 +133,120 @@ jobs:
       - name: Run browser logic unit tests
         run: node --test tests/js/*.test.cjs
 
+  browser-image:
+    name: Prepare reusable browser container (GHCR)
+    # Never publish untrusted code from forks; they use the vendor image fallback.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve CI image tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=$(sha256sum .github/ci/browser.Dockerfile requirements.txt requirements-dev.txt | sha256sum | cut -c1-16)
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}-ci-browser:ci-${TAG}"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "CI image: $IMAGE"
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check existing published image
+        id: existing
+        shell: bash
+        run: |
+          if docker manifest inspect "${{ steps.tag.outputs.image }}" > /dev/null 2>&1; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            echo "Reusing prebuilt CI image"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo "Image missing, one build is needed"
+          fi
+      - uses: docker/setup-buildx-action@v3
+        if: steps.existing.outputs.present != 'true'
+      - name: Build and publish the missing image
+        if: steps.existing.outputs.present != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .github/ci/browser.Dockerfile
+          push: true
+          tags: ${{ steps.tag.outputs.image }}
+          cache-from: type=gha,scope=xtyf-browser-ci
+          cache-to: type=gha,mode=max,scope=xtyf-browser-ci
+
   browser:
     name: Browser end-to-end (${{ matrix.group }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - group: foundation
-            suites: 'review_fixes pr22_merge action_failures login_mobile'
-          - group: tasks
-            suites: 'task_center task_schedule daily_mail seven_repairs seven_repairs_review'
-          - group: ui-and-clients
-            suites: 'palette_workspace local_collaboration account_avatar account_invoice_ui client_updates_avatar client_connection'
-          - group: assets
-            suites: 'assets assets_serialized'
+          - group: foundation-core
+            suites: 'review_fixes pr22_merge'
+          - group: foundation-login
+            suites: 'action_failures login_mobile'
+          - group: tasks-core
+            suites: 'task_center task_schedule'
+          - group: tasks-mail
+            suites: 'daily_mail'
+          - group: tasks-repairs
+            suites: 'seven_repairs seven_repairs_review'
+          - group: ui-core
+            suites: 'palette_workspace local_collaboration account_avatar'
+          - group: ui-clients
+            suites: 'account_invoice_ui client_updates_avatar client_connection'
+          - group: assets-ledger
+            suites: 'assets'
+          - group: assets-serialized
+            suites: 'assets_serialized'
+    needs: browser-image
+    # A missing image for a fork should not prevent the read-only fallback path.
+    if: ${{ always() && (needs.browser-image.result == 'success' || needs.browser-image.result == 'skipped') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 18
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.browser-image.outputs.image || 'mcr.microsoft.com/playwright:v1.56.1-noble' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - name: Use preinstalled browser and Python dependencies
+        if: needs.browser-image.result == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ln -s /opt/xtyf-node/node_modules node_modules
+          python --version
+          node --version
+          node -e "require('playwright')"
       - uses: actions/setup-python@v5
+        if: needs.browser-image.result == 'skipped'
         with:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
-      - name: Install Python test dependencies
-        run: python -m pip install -r requirements-dev.txt
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install pinned Playwright and browser engines
+      - name: Fallback project dependencies for external PRs
+        if: needs.browser-image.result == 'skipped'
+        shell: bash
         run: |
+          python -m pip install -r requirements-dev.txt
           npm install --no-save --package-lock=false playwright@1.56.1 bootstrap@5.3.3 bootstrap-icons@1.11.3
-          npx playwright install --with-deps chromium webkit
       - name: Run browser integration and mobile checks
         shell: bash
         env:

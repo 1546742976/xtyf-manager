@@ -79,6 +79,14 @@ def run():
             if page.evaluate('()=>('+expression+')'):return
             page.wait_for_timeout(100)
         raise AssertionError('Condition timed out: '+expression)
+    def wait_theme_initialized(page):
+        # An iframe's heading can render before deferred theme.js binds its
+        # handlers. Clicking before DOMContentLoaded silently drops the action.
+        wait_until(page, """(
+            window.XTYF.route==='/account' &&
+            document.querySelector('#page-host iframe')?.contentDocument
+              ?.querySelector('[data-theme-toggle]')?.title?.startsWith('切换为')
+        )""")
     with sync_playwright() as p:
         print('Launching Chromium...',flush=True)
         browser=p.chromium.launch(headless=True)
@@ -119,17 +127,18 @@ def run():
             page.get_by_role('heading',name='本地页面不存在').wait_for()
             results.append('removed legacy email-link template uses the local unavailable-page message')
             page.evaluate("XTYF.navigate('/account')")
-            frame.locator('h1').first.wait_for()
+            wait_theme_initialized(page)
             frame.locator('[data-theme-toggle]').first.click()
             wait_until(page,"window.XTYF.bootstrap.me.theme_mode==='dark'")
+            assert frame.locator('html').get_attribute('data-theme')=='dark'
             page.evaluate("XTYF.navigate('/tasks')")
             frame.locator('h1').first.wait_for()
             assert frame.locator('html').get_attribute('data-theme')=='dark'
             assert page.evaluate('()=>XTYFClient.back()')
-            wait_until(page,"window.XTYF.route==='/account'")
-            frame.locator('h1').first.wait_for()
+            wait_theme_initialized(page)
             frame.locator('[data-theme-toggle]').first.click()
             wait_until(page,"window.XTYF.bootstrap.me.theme_mode==='light'")
+            assert frame.locator('html').get_attribute('data-theme')=='light'
             results.append('theme persists across local routes and native back restores previous page')
             page.evaluate("XTYF.navigate('/invoices/')")
             frame.locator('#fileInput').wait_for(state='attached')

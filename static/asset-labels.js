@@ -22,6 +22,7 @@
     $('asset-label-status').textContent=`已生成 ${records.length} 张标签。下载 PDF 后按实际尺寸打印，不缩放。补打使用原身份。`;
   }
   $('asset-label-form').onsubmit=e=>{e.preventDefault();render().catch(e=>$('asset-label-status').textContent=e.message);};
+  $('asset-label-form').oninput=()=>{$('asset-label-download').hidden=true;$('asset-label-status').textContent='尺寸或纸张已修改，请先更新打印预览。';};
   $('asset-label-close').onclick=()=>$('asset-label-dialog').close();
-  window.AssetLabels={open(values){records=values;$('asset-label-dialog').showModal();render().catch(e=>$('asset-label-status').textContent=e.message);},label};
+  window.AssetLabels={open(values){records=values;$('asset-label-summary').textContent=`本次打印 ${values.length} 张标签 · ${values[0]?.item_name||values[0]?.name||''}。补打沿用原编号。`;window.AssetLedger.showDialog($('asset-label-dialog'));render().catch(e=>$('asset-label-status').textContent=e.message);},label};
 })();

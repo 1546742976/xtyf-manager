@@ -72,6 +72,29 @@ class AssetsTest(unittest.TestCase):
         data = self.member.get(f"/api/assets/items/{item or self.item}").get_json()
         return next(c for c in data["campuses"] if c["id"] == (campus or self.campus))
 
+    def test_inventory_views_are_server_filtered_before_pagination(self):
+        supply = self.save("items", {"name": "合成自由取用耗材", "unit": "盒",
+                                     "kind": "consumable", "consumable_mode": "status"})
+        base = "/api/assets/items?q=合成"
+        all_items = self.member.get(base).get_json()
+        self.assertTrue(all_items["ok"])
+        summary = all_items["summary"]
+        self.assertGreaterEqual(summary["equipment"], 1)
+        self.assertGreaterEqual(summary["quantity"], 1)
+        self.assertGreaterEqual(summary["supply"], 1)
+        self.assertEqual(summary["all"], sum(summary[key] for key in ("equipment", "quantity", "supply")))
+        self.assertGreaterEqual(summary["attention"], 1)
+        for view, expected in (("equipment", self.item), ("quantity", self.screw), ("supply", supply)):
+            result = self.member.get(base + "&view=" + view).get_json()
+            self.assertEqual(result["total"], summary[view])
+            self.assertIn(expected, [i["id"] for i in result["items"]])
+            self.assertEqual(result["summary"], summary)
+        attention = self.member.get(base + "&view=attention").get_json()
+        self.assertEqual(attention["total"], summary["attention"])
+        self.assertIn(supply, [i["id"] for i in attention["items"]])
+        self.assertIn(self.screw, [i["id"] for i in attention["items"]])
+        self.assertEqual(self.member.get(base + "&view=all").get_json()["total"], summary["all"])
+
     def test_borrow_partial_return_and_totals(self):
         self.op("receive", 10)
         loan = self.op("borrow", 6, self.member)["loan_id"]

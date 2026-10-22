@@ -8,6 +8,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 from common import current_user, get_db, login_required
 from modules.assets import Invalid, event, integer, manager, mutation, require_manager, row, stamp, text
+from modules.asset_supplier import lookup_lcsc
 
 bp = Blueprint("asset_scan", __name__)
 
@@ -124,6 +125,7 @@ def resolve():
         raise Invalid("请提交标签原文")
     parsed = parse_label(data["raw"])
     db, item, unit = get_db(), None, None
+    supplier_lookup, candidates = None, []
     if parsed["type"] == "unit":
         unit = row(db, "asset_units", parsed["id"])
         item = row(db, "asset_items", unit["item_id"])
@@ -131,11 +133,20 @@ def resolve():
     elif parsed["type"] == "item":
         item = row(db, "asset_items", parsed["id"])
     else:
+        supplier_lookup = lookup_lcsc(parsed["code"])
         identifier = db.execute(
             "SELECT item_id FROM asset_identifiers WHERE supplier=? AND code=?", (parsed["supplier"], parsed["code"])
         ).fetchone()
         if identifier:
             item = row(db, "asset_items", identifier[0])
+        else:
+            product = supplier_lookup.get("product") or {}
+            models = {model.strip().casefold() for model in (product.get("model"), parsed.get("model"))
+                      if isinstance(model, str) and model.strip()}
+            if models:
+                candidates = [dict(candidate) for candidate in db.execute(
+                    "SELECT * FROM asset_items WHERE active=1 ORDER BY name,id"
+                ) if candidate["specification"].strip().casefold() in models][:20]
     history = receipt_history(db, parsed["raw"]) if parsed["type"] == "package" else []
     return {
         "parsed": parsed,
@@ -144,7 +155,8 @@ def resolve():
         "history": history,
         "receipt_version": history[0]["id"] if history else 0,
         "can_manage": manager(),
-        "supplier_lookup": {"configured": False, "message": "国内商品查询尚未配置，包装码解析可正常使用"},
+        "supplier_lookup": supplier_lookup,
+        "candidates": candidates,
     }
 
 
@@ -180,7 +192,7 @@ def receive(db, data):
 
 @bp.post("/api/assets/scan/create-receive")
 @write("raw", "name", "specification", "unit", "kind", "category", "campus_id", "new_campus",
-       "quantity", "reason", "receipt_version", "duplicate_reason")
+       "quantity", "reason", "receipt_version", "duplicate_reason", "returnable_mode")
 def create_receive(db, data):
     from modules.assets import inventory_campus, save_catalog_record
 
@@ -222,7 +234,7 @@ def receive_one(db, data):
         event_id = result["event_id"]
     elif item.get("tracking") == "migrating":
         raise Invalid("此型号正在核对迁移", 409)
-    elif item["kind"] == "returnable":
+    elif item["kind"] == "returnable" and item.get("tracking") != "quantity":
         raise Invalid("非耗材请先完成单件迁移", 409)
     else:
         stock_change(db, item_id, campus_id, quantity)

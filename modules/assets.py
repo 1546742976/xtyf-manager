@@ -133,7 +133,7 @@ def mutation(view):
             if not isinstance(data, dict):
                 raise Invalid("请求必须是 JSON 对象")
             catalog_fields = {"request_id", "name", "specification", "category", "unit",
-                              "kind", "id", "version", "active", "supplier_code", "inventory", "reason", "consumable_mode"}
+                              "kind", "id", "version", "active", "supplier_code", "inventory", "reason", "consumable_mode", "returnable_mode"}
             operation_fields = {"request_id", "action", "reason", "occurred_at", "quantity",
                                 "loan_id", "item_id", "campus_id", "target_campus_id",
                                 "version", "event_id"}
@@ -261,6 +261,11 @@ def save_catalog_record(db, data, kind):
             raise Invalid("仅耗材可选择充足／不足管理")
         if fields["kind"] == "consumable":
             fields["tracking"] = mode
+    if kind == "items" and "returnable_mode" in data:
+        mode = text(data, "returnable_mode")
+        if fields["kind"] != "returnable" or mode not in ("unit", "quantity"):
+            raise Invalid("可借用品请选择逐件或按数量管理")
+        fields["tracking"] = mode
     if identity is not None:
         identity = integer(data, "id")
         before = row(db, table, identity)
@@ -294,6 +299,17 @@ def save_catalog_record(db, data, kind):
                 fields.setdefault("tracking", "unit" if fields["kind"] == "returnable" else "quantity")
         if kind == "items" and fields.get("tracking", before["tracking"]) != before["tracking"]:
             target = fields["tracking"]
+            if before["tracking"] == "migrating":
+                raise Invalid("此物料正在核对实物，请先完成或取消核对", 409)
+            if before["tracking"] == "unit":
+                raise Invalid("已采用逐件管理，不能通过编辑资料取消单件身份", 409)
+            if before["kind"] == "returnable" and target == "unit":
+                raise Invalid("请从物料详情的“切换为逐件管理”核对现有库存与借单", 409)
+            if before["kind"] == "returnable" and target == "quantity":
+                if (db.execute("SELECT 1 FROM asset_units WHERE item_id=?", (identity,)).fetchone()
+                        or db.execute("SELECT 1 FROM asset_migration_entries WHERE item_id=?", (identity,)).fetchone()):
+                    raise Invalid("存在单件身份或未完成核对，不能直接改为按数量管理", 409)
+                text(data, "reason", maximum=500)
             if target == "status" and db.execute("SELECT 1 FROM asset_identifiers WHERE item_id=?", (identity,)).fetchone():
                 raise Invalid("嘉立创物料继续按数量管理", 409)
             if target == "status" or before["tracking"] == "status":
@@ -552,8 +568,34 @@ def items():
                                      stock_version=balances.get((item["id"], c["id"]), {}).get("version", 0))
                                 for c in campuses if not campus or str(c["id"]) == campus]
         values.append(item)
+    # Classify after campus/search/category filtering but before page slicing:
+    # counts and pagination must never be computed from only one page of cards.
+    def needs_attention(item):
+        if not item["active"]:
+            return False
+        if item["tracking"] == "status":
+            return any(c["supply_status"] == "low" for c in item["supplies"])
+        return item["kind"] == "consumable" and item["available"] == 0
+
+    summary = {"all": len(values), "equipment": 0, "quantity": 0, "supply": 0, "attention": 0}
+    for item in values:
+        group = ("equipment" if item["kind"] == "returnable" else
+                 "supply" if item["tracking"] == "status" else "quantity")
+        summary[group] += 1
+        if needs_attention(item):
+            summary["attention"] += 1
+    view = request.args.get("view", "all")
+    if view == "equipment":
+        values = [item for item in values if item["kind"] == "returnable"]
+    elif view == "quantity":
+        values = [item for item in values if item["kind"] == "consumable" and item["tracking"] != "status"]
+    elif view == "supply":
+        values = [item for item in values if item["kind"] == "consumable" and item["tracking"] == "status"]
+    elif view == "attention":
+        values = [item for item in values if needs_attention(item)]
     page_number = paging()
     return jsonify(ok=True, items=values[(page_number-1)*20:page_number*20], total=len(values), page=page_number,
+                   summary=summary,
                    categories=[r[0] for r in db.execute("SELECT DISTINCT category FROM asset_items WHERE category<>'' ORDER BY category")])
 
 
