@@ -5,7 +5,7 @@ from time import time as epoch_now
 from datetime import datetime
 
 from flask import Blueprint, jsonify, redirect, render_template, request
-from common import current_user, get_db, login_required, ROLE_NAMES
+from common import error_response, current_user, get_db, login_required, ROLE_NAMES
 from modules.daily_projects import failure, TZ
 from modules.mail_service import configured, settings, verification_code, verification_digest, queue
 
@@ -95,7 +95,7 @@ def verify():
 @login_required
 def admin_page():
     if not admin():
-        return failure('仅管理员可查看', 403)
+        return error_response(403, '无权限，仅管理员可查看')
     return render_template('mail_admin.html', me=current_user(), role_names=ROLE_NAMES, page='mail')
 
 
@@ -103,7 +103,7 @@ def admin_page():
 @login_required
 def admin_status():
     if not admin():
-        return failure('仅管理员可查看', 403)
+        return error_response(403, '无权限，仅管理员可查看')
     db = get_db()
     try:
         page = max(1, min(int(request.args.get('page', '1')), 100000))

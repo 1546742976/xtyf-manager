@@ -5,6 +5,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from common import now_str
+from modules.input_validation import clean_text
 from modules.task_dates import apply_start_date_request
 from modules.task_types import Actor, JsonObject
 from modules.task_state import BLOCKER_FIELDS, COMPLETION_FIELDS, blocker_values, completion_values, record_blocker_event
@@ -137,6 +138,11 @@ def create_task(
         if manage_transaction:
             db.rollback()
 
+    try:
+        title = clean_text(data.get('title'), '任务标题', 200, allow_newlines=False)
+        detail = clean_text(data.get('detail', ''), '任务详情', 10000, required=False)
+    except ValueError as exc:
+        rollback_owned(); return None, None, str(exc), 400
     if "schedule_locked" in data and type(data["schedule_locked"]) is not bool:
         rollback_owned(); return None, None, "自动排期固定日期必须为布尔值", 400
     owner_id = parse_id(data.get("owner_id"), "owner_id")
@@ -146,7 +152,7 @@ def create_task(
         if "project_id" in data and project_id != legacy_id:
             rollback_owned(); return None, None, "project 与 project_id 冲突", 400
         project_id = legacy_id
-    values = {"title": str(data.get("title") or "").strip(), "detail": str(data.get("detail") or "").strip(),
+    values = {"title": title, "detail": detail,
               "owner_id": owner_id, "project_id": project_id,
               "parent_id": parse_id(data.get("parent_id"), "parent_id"),
               "priority": data.get("priority", "中"), "status": data.get("status", "未开始"),
@@ -221,8 +227,13 @@ def update_task(
             db.rollback(); return None, "project 与 project_id 冲突", 400
         values["project_id"] = legacy_id
         touched.add("project_id")
-    for key in ("title", "detail", "start_date", "due_date"):
-        values[key] = str(values[key] or "").strip()
+    try:
+        values['title'] = clean_text(values['title'], '任务标题', 200, allow_newlines=False)
+        values['detail'] = clean_text(values['detail'], '任务详情', 10000, required=False)
+    except ValueError as exc:
+        db.rollback(); return None, str(exc), 400
+    for key in ('start_date', 'due_date'):
+        values[key] = str(values[key] or '').strip()
     date_error = apply_start_date_request(db, data, values, prior)
     if date_error:
         db.rollback(); return None, date_error, 400

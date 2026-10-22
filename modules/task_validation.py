@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from modules.task_types import JsonValue
+from modules.input_validation import parse_int_text
 
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
@@ -30,7 +31,7 @@ def normalize_ids(value: JsonValue, label: str) -> tuple[list[int] | None, str |
         if not isinstance(raw, (int, str)) or (isinstance(raw, str) and not raw.isdigit()):
             return None, f"{label}包含非法 ID"
         try:
-            item = int(raw)
+            item = parse_int_text(raw, label)
         except (TypeError, ValueError):
             return None, f"{label}包含非法 ID"
         if item <= 0 or item > MAX_SQLITE_INTEGER or item in result:
@@ -46,7 +47,10 @@ def parse_id(value: JsonValue, label: str, nullable: bool = True) -> int | None:
         return None
     if not isinstance(value, (int, str)) or (isinstance(value, str) and not value.isdigit()):
         raise InvalidIdError(label)
-    parsed = int(value)
+    try:
+        parsed = parse_int_text(value, label)
+    except ValueError as exc:
+        raise InvalidIdError(label) from exc
     if parsed <= 0 or parsed > MAX_SQLITE_INTEGER:
         raise InvalidIdError(label)
     return parsed

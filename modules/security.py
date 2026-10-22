@@ -13,7 +13,7 @@ from functools import wraps
 from flask import (Blueprint, current_app, g, jsonify, redirect, render_template,
                    request, session, url_for)
 
-from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str
+from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str, error_response
 
 bp = Blueprint("security", __name__)
 PERMISSIONS = {"funds.review": "资金审核", "invoices.manage": "发票管理", "assets.manage": "资产管理"}
@@ -159,7 +159,7 @@ def admin_required(view):
     @login_required
     def wrapped(*args, **kwargs):
         if current_user()["role"] != "admin":
-            return jsonify(ok=False, error="仅管理员可访问"), 403
+            return error_response(403, "无权限，仅管理员可访问")
         return view(*args, **kwargs)
     return wrapped
 
@@ -233,7 +233,9 @@ def init_security(app):
             if request.content_length is not None and request.content_length > limit:
                 return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
             if request.content_length is None:
-                raw = request.stream.read(limit + 1)
+                # Read at most one sentinel byte beyond the cap. The limited
+                # stream itself can stop at the cap and hide this extra byte.
+                raw = request.input_stream.read(limit + 1)
                 if len(raw) > limit:
                     return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
                 request._cached_data = raw  # Retain the bounded body for get_json/audit.
@@ -261,7 +263,7 @@ def init_security(app):
         }:
             return _error("未登录", "authentication_required", 401)
         if user and user["must_change_password"] and request.endpoint not in {
-            "static", "account", "api_password", "logout", "security.get_csrf",
+            "static", "web_vendor", "favicon", "account", "api_password", "logout", "security.get_csrf",
             "client_api.bootstrap", "client_api.logout",
             "client_updates.updates", "client_updates.bundle_download",
         }:
@@ -271,7 +273,7 @@ def init_security(app):
 
     @app.after_request
     def finish_request(response):
-        if request.endpoint != "static":
+        if request.endpoint not in {"static", "web_vendor"}:
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-CSRF-Token"] = csrf_token()
             # Inline handlers are still used by the finance pages, so this policy
@@ -283,6 +285,12 @@ def init_security(app):
                 "Content-Security-Policy",
                 "frame-ancestors 'self'; object-src 'none'; base-uri 'self'",
             )
+        # An earlier body-limit hook may return before protect_request runs.
+        # Preserve authenticated rejected writes without touching their bodies.
+        if request.method not in SAFE_METHODS and not getattr(g, 'audit_id', None):
+            user = current_user()
+            if user:
+                _start_request_audit(user)
         if (request.method not in SAFE_METHODS and request.endpoint in LOGIN_ENDPOINTS
                 and not getattr(g, 'audit_id', None)):
             payload = response.get_json(silent=True) if response.is_json else None

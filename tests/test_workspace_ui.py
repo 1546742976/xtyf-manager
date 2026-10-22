@@ -54,7 +54,7 @@ class TestWorkspaceNavigation(unittest.TestCase):
         }).get_json()['ok'])
         for url in ('/manage','/members','/funds/'):
             with self.subTest(url=url):
-                self.assertEqual(member.get(url).status_code,302)
+                self.assertEqual(member.get(url).status_code,403)
         text = member.get('/invoices/').get_data(as_text=True)
         self.assertIn('我的发票',text)
         self.assertNotIn('href="/members"',text)

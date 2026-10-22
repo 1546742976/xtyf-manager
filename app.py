@@ -25,12 +25,12 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from flask import (Flask, Response, g, jsonify, redirect, render_template,
-                   request, session, url_for)
+                   request, session, url_for, abort, send_from_directory)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---- 本项目的公共模块与子模块（子模块的蓝图注册见下方 app.register_blueprint）----
 from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
-                    manager_required, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
+                    manager_required, error_response, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
 from modules.funds import funds_bp, can_review
 from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
 from modules.invoice_jobs import migrate as migrate_invoice_jobs
@@ -119,9 +119,62 @@ app.json.ensure_ascii = False
 app.permanent_session_lifetime = timedelta(days=30)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.config.setdefault("TASK_ATTACHMENTS_DIR", os.environ.get("TASK_ATTACHMENTS_DIR", os.path.join(BASE_DIR, "data", "task_attachments")))
 configure_mail(app)
+
+@app.before_request
+def request_body_limit():
+    # Run before CSRF/audit hooks: both may parse form or JSON bodies.
+    if request.method in {'GET', 'HEAD', 'OPTIONS'}:
+        return None
+    limits = {
+        'invoices.api_upload': 200, 'invoices.api_upload_batch': 200,
+        'discussions.create_topic': 70, 'discussions.create_message': 70,
+        'task_attachments.upload_attachments': 55,
+        'task_progress.update_progress': 55, 'daily_projects.progress': 55,
+        'member_avatars.account_avatar': 12,
+    }
+    limit = limits.get(request.endpoint, 16) * 1024 * 1024
+    if request.path.startswith('/api/assets/'):
+        limit = 16 * 1024
+    request.max_content_length = limit
+    if request.content_length is not None and request.content_length > limit:
+        return error_response(413, '请求内容过大，请减少文件或内容后重试')
+    return None
+
+
+@app.errorhandler(403)
+@app.errorhandler(404)
+@app.errorhandler(405)
+@app.errorhandler(413)
+@app.errorhandler(500)
+def friendly_error(error):
+    messages = {403: '无权限访问此页面', 404: '页面或资源不存在', 405: '不支持此请求方式',
+                413: '请求内容过大，请减少文件或内容后重试', 500: '服务暂时不可用，请稍后重试'}
+    if error.code == 500:
+        app.logger.error('请求处理失败: %s', request.path, exc_info=error.original_exception)
+    return error_response(error.code, messages[error.code])
+
+
+_WEB_VENDOR_FILES = {
+    'bootstrap/LICENSE', 'bootstrap/bootstrap.min.css', 'bootstrap/bootstrap.bundle.min.js',
+    'bootstrap-icons/LICENSE', 'bootstrap-icons/bootstrap-icons.min.css',
+    'bootstrap-icons/fonts/bootstrap-icons.woff', 'bootstrap-icons/fonts/bootstrap-icons.woff2',
+}
+
+
+@app.get('/vendor/<path:rel>')
+def web_vendor(rel):
+    if rel not in _WEB_VENDOR_FILES:
+        abort(404)
+    return send_from_directory(os.path.join(BASE_DIR, 'static', 'vendor'), rel, max_age=604800)
+
+
+@app.get('/favicon.ico')
+def favicon():
+    return redirect(url_for('static', filename='brand/app-icon-256.png'))
+
 
 # ---- 注册子模块蓝图（三个系统共用同一登录会话与页面风格）----
 from modules.assets import bp as assets_bp, migrate_assets
@@ -279,6 +332,8 @@ def add_no_cache(resp):
 # ==================== 登录 / 登出 ====================
 _LOGIN_WINDOW = 15 * 60
 _LOGIN_FAILURE_LIMIT = 6
+_LOGIN_IP_LIMIT = int(os.environ.get("LOGIN_IP_FAILURE_LIMIT", "40"))
+_LOGIN_GLOBAL_LIMIT = int(os.environ.get("LOGIN_GLOBAL_FAILURE_LIMIT", "500"))
 
 
 def _login_attempt_key(username):
@@ -287,24 +342,64 @@ def _login_attempt_key(username):
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
 
-def _failed_login(db, attempt_key, row, now):
-    if row and now - row['first_failed_at'] < _LOGIN_WINDOW:
-        failures = row['failures'] + 1
-        first = row['first_failed_at']
-    else:
-        failures, first = 1, now
-    locked_until = now + _LOGIN_WINDOW if failures >= _LOGIN_FAILURE_LIMIT else 0
-    db.execute(
-        "INSERT INTO login_attempts (attempt_key, failures, first_failed_at, locked_until) "
-        "VALUES (?, ?, ?, ?) ON CONFLICT(attempt_key) DO UPDATE SET "
-        "failures=excluded.failures, first_failed_at=excluded.first_failed_at, "
-        "locked_until=excluded.locked_until",
-        (attempt_key, failures, first, locked_until),
-    )
-    # 防止有人不停枚举不存在的用户名导致计数表无限增长。
-    db.execute("DELETE FROM login_attempts WHERE first_failed_at < ?", (now - 2 * _LOGIN_WINDOW,))
-    db.commit()
-    return locked_until > now
+def _login_counter_keys(username):
+    ip_hash = hashlib.sha256((request.remote_addr or '').encode('utf-8')).hexdigest()
+    return (_login_attempt_key(username), 'ip:' + ip_hash, 'global:')
+
+
+def _retry_login(seconds):
+    response = jsonify(ok=False, error='尝试次数过多，请稍后重试')
+    response.status_code = 429
+    response.headers['Retry-After'] = str(max(1, int(seconds)))
+    return response
+
+
+def _login_gate(db, keys, now):
+    # The probe reservation lives in SQLite, so threads/workers share the budget.
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        rows = {row['attempt_key']: row for row in db.execute(
+            'SELECT * FROM login_attempts WHERE attempt_key IN (?,?,?)', keys)}
+        wait = max([0] + [rows[key]['locked_until'] - now for key in keys[:2] if key in rows])
+        if wait > 0:
+            db.commit()
+            return wait
+        global_row = rows.get('global:')
+        if global_row and global_row['locked_until'] > now:
+            probe = db.execute("SELECT locked_until FROM login_attempts WHERE attempt_key='global:probe'").fetchone()
+            if probe and probe['locked_until'] > now:
+                db.commit()
+                return 1
+            db.execute("INSERT INTO login_attempts VALUES('global:probe',0,?,?) ON CONFLICT(attempt_key) DO UPDATE SET first_failed_at=excluded.first_failed_at,locked_until=excluded.locked_until", (now, now + 1))
+        db.commit()
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _failed_login(db, keys, now):
+    # Read and increment all three counters in one short write transaction.
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        waits = []
+        for key, limit in zip(keys, (_LOGIN_FAILURE_LIMIT, _LOGIN_IP_LIMIT, _LOGIN_GLOBAL_LIMIT)):
+            row = db.execute('SELECT * FROM login_attempts WHERE attempt_key=?', (key,)).fetchone()
+            if row and (now - row['first_failed_at'] < _LOGIN_WINDOW or row['locked_until'] > now):
+                failures, first = row['failures'] + 1, row['first_failed_at']
+            else:
+                failures, first = 1, now
+            locked_until = (row['locked_until'] if row and row['locked_until'] > now else now + _LOGIN_WINDOW) if failures >= limit else 0
+            db.execute('INSERT INTO login_attempts VALUES(?,?,?,?) ON CONFLICT(attempt_key) DO UPDATE SET failures=excluded.failures,first_failed_at=excluded.first_failed_at,locked_until=excluded.locked_until',
+                       (key, failures, first, locked_until))
+            if locked_until > now:
+                waits.append(1 if key == 'global:' else locked_until - now)
+        db.execute('DELETE FROM login_attempts WHERE first_failed_at<? AND locked_until<=?', (now - 2 * _LOGIN_WINDOW, now))
+        db.commit()
+        return max(waits, default=0)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def task_login_destination(candidate):
@@ -343,23 +438,20 @@ def authenticate_login(data):
     username = username.strip()
     destination = task_login_destination(data.get("next", ""))
     db = get_db()
-    attempt_key = _login_attempt_key(username)
+    keys = _login_counter_keys(username)
     now = int(time.time())
-    attempt = db.execute(
-        "SELECT failures, first_failed_at, locked_until FROM login_attempts WHERE attempt_key=?",
-        (attempt_key,),
-    ).fetchone()
-    if attempt and attempt["locked_until"] > now:
-        return jsonify(ok=False, error="尝试次数过多，请 15 分钟后重试"), 429
+    wait = _login_gate(db, keys, now)
+    if wait:
+        return _retry_login(wait)
     row = db.execute(
         "SELECT * FROM members WHERE username = ? AND is_active = 1 AND deleted_at IS NULL", (username,)
     ).fetchone()
     if row is None or not check_password_hash(row["password_hash"], password):
-        locked = _failed_login(db, attempt_key, attempt, now)
+        locked = _failed_login(db, keys, now)
         if locked:
-            return jsonify(ok=False, error="尝试次数过多，请 15 分钟后重试"), 429
+            return _retry_login(locked)
         return jsonify(ok=False, error="用户名或密码错误"), 400
-    db.execute("DELETE FROM login_attempts WHERE attempt_key=?", (attempt_key,))
+    db.execute("DELETE FROM login_attempts WHERE attempt_key=?", (keys[0],))
     db.commit()
     session.clear()
     session.permanent = True

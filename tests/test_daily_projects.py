@@ -1,5 +1,7 @@
 """Daily goals remain independent from vehicle tasks and authorization."""
 import io
+import sqlite3
+from contextlib import closing
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -45,6 +47,30 @@ class DailyProjectsTest(unittest.TestCase):
         body['group_versions']={g['stage']:g['version'] for g in old['groups']}
         body.update(changes)
         return self.admin.post(f'/api/daily-projects/{pid}',json=body)
+
+    def test_image_decoding_does_not_hold_database_write_lock(self):
+        pid = self.create()
+        project = self.get(pid)
+        group = next(g for g in project['groups'] if g['stage'] == 'mechanical')
+        from modules import daily_projects
+        original = daily_projects.prepare_image
+        checked = []
+        def decode(upload):
+            with closing(sqlite3.connect(app_module.DB_PATH, timeout=0.1)) as other:
+                other.execute('BEGIN IMMEDIATE')
+                other.rollback()
+                checked.append(True)
+            return original(upload)
+        image = io.BytesIO()
+        Image.new('RGB', (2, 2), 'red').save(image, format='PNG')
+        image.seek(0)
+        with patch.object(daily_projects, 'prepare_image', side_effect=decode):
+            response = self.clients[0].post(f'/api/daily-projects/{pid}/groups/mechanical/progress', data={
+                'progress':'50', 'version':str(group['version']), 'project_version':str(project['version']),
+                'files':(image, 'small.png'),
+            })
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(checked, [True])
 
     def test_multiple_owners_average_and_no_vehicle_rows(self):
         before=len(self.admin.get('/api/data').get_json()['tasks'])

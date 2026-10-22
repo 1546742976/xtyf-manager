@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import sqlite3
+from modules.input_validation import parse_int_text
 import re
 
 from flask import Blueprint, current_app, jsonify, redirect, request, send_file, url_for
@@ -495,7 +496,7 @@ def progress(pid, stage):
                 value = body.get(key, '')
                 if not value.isascii() or not value.isdecimal():
                     raise ValueError('进度和版本必须为整数')
-                body[key] = int(value)
+                body[key] = parse_int_text(value, '进度和版本')
         percent = integer(body.get('progress'), '进度', 0, 100)
         version = integer(body.get('version'), '组版本')
         project_version = integer(body.get('project_version'), '项目版本')
@@ -505,22 +506,25 @@ def progress(pid, stage):
         files = [f for f in request.files.getlist('files') if f.filename]
         if len(files) > MAX_FILES:
             raise ValueError('一次最多上传 5 张图片')
+        images = [prepare_image(f) for f in files]
+        staged = stage_images(Path(current_app.config['TASK_ATTACHMENTS_DIR']) / 'daily', images)
         db.execute('BEGIN IMMEDIATE')
+        user = current_user()
+        if user is None:
+            db.rollback(); cleanup_staged(staged); return failure('登录已失效', 401)
         project = active_project(db, pid)
         group = db.execute('SELECT * FROM daily_groups WHERE project_id=? AND stage=?', (pid, stage)).fetchone()
         if not project or not group:
-            db.rollback(); return failure('项目组不存在', 404)
+            db.rollback(); cleanup_staged(staged); return failure('项目组不存在', 404)
         owner = db.execute('SELECT 1 FROM daily_owners WHERE project_id=? AND stage=? AND member_id=?', (pid, stage, user['id'])).fetchone()
         if not manager(user) and not owner:
-            db.rollback(); return failure('只能更新自己负责的组', 403)
+            db.rollback(); cleanup_staged(staged); return failure('只能更新自己负责的组', 403)
         if not group['enabled'] or project['status'] in TERMINAL:
-            db.rollback(); return failure('项目或组别为只读状态', 409)
+            db.rollback(); cleanup_staged(staged); return failure('项目或组别为只读状态', 409)
         if project['version'] != project_version or group['version'] != version:
-            db.rollback(); return failure('分配或进度已变化，请重新加载并核对后提交', 409)
+            db.rollback(); cleanup_staged(staged); return failure('分配或进度已变化，请重新加载并核对后提交', 409)
         if percent == group['progress'] and not note.strip() and not files:
             raise ValueError('请改变进度、填写备注或添加图片')
-        images = [prepare_image(f) for f in files]
-        staged = stage_images(Path(current_app.config['TASK_ATTACHMENTS_DIR']) / 'daily', images)
         uid = db.execute('INSERT INTO daily_updates(project_id,stage,actor_id,actor_name,progress,note,created_at) VALUES(?,?,?,?,?,?,?)', (pid, stage, user['id'], user['name'], percent, note.strip(), stamp())).lastrowid
         db.execute('UPDATE daily_groups SET progress=?,version=version+1 WHERE project_id=? AND stage=?', (percent, pid, stage))
         when = stamp()

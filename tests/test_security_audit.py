@@ -28,6 +28,23 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(self.rows()[-1][2], 'failure')
 
+    def test_authenticated_oversized_requests_keep_minimal_audit(self):
+        client = app_module.app.test_client()
+        client.post('/login', json={'username':'admin','password':'ci-test-password-only'})
+        for path, size, overrides in (
+            ('/api/task', 17*1024*1024, {}),
+            ('/api/assets/not-found', 17000, {'CONTENT_LENGTH':None, 'wsgi.input_terminated':True}),
+        ):
+            with self.subTest(path=path):
+                before = len(self.rows())
+                response = client.post(path, data=b'x'*size, content_type='application/json', environ_overrides=overrides)
+                self.assertEqual(response.status_code, 413)
+                self.assertEqual(len(self.rows()), before + 1)
+                with closing(sqlite3.connect(app_module.DB_PATH)) as db:
+                    row = db.execute('SELECT actor_id,outcome,http_status,details FROM security_audit ORDER BY id DESC LIMIT 1').fetchone()
+                self.assertIsNotNone(row[0])
+                self.assertEqual(row[1:], ('failure', 413, '{}'))
+
     def test_successful_login_survives_failure_throttling(self):
         client = app_module.app.test_client()
         client.post('/login', json={'username': 'audit_unknown', 'password': 'bad'})

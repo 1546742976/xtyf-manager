@@ -70,7 +70,7 @@ def update_progress(task_id: int):
     if task_id > MAX_SQLITE_INTEGER:
         return jsonify(ok=False, error="任务 ID 不合法"), 400
     raw_progress = request.form.get("progress", "")
-    if not raw_progress.isascii() or not raw_progress.isdecimal():
+    if len(raw_progress) > 3 or not raw_progress.isascii() or not raw_progress.isdecimal():
         return jsonify(ok=False, error="进度必须是 0～100 的整数"), 400
     progress = int(raw_progress)
     if progress > 100:

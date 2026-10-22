@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import secrets
+from modules.input_validation import clean_text
 import sqlite3
 
 from flask import Blueprint, Response, jsonify, request
@@ -266,8 +267,11 @@ def member_create():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify(ok=False, error="请求格式不正确"), 400
-    name = str(data.get("name") or "").strip()
-    username = str(data.get("username") or "").strip() or name
+    try:
+        name = clean_text(data.get('name'), '姓名', 64, allow_newlines=False)
+        username = clean_text(data.get('username') or name, '用户名', 64, allow_newlines=False)
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
     password = str(data.get("password") or "") or secrets.token_urlsafe(10)
     generated = not bool(data.get("password"))
     if not name or len(password) < 8:
@@ -315,27 +319,55 @@ def members_import():
     project_ids, project_error = normalize_ids(data.get("project_ids"), "造车组别")
     if project_error or project_ids is None or not active_ids(db, "projects", project_ids):
         return jsonify(ok=False, error=project_error or "造车组别不存在"), 400
-    existing = {row[0] for row in db.execute("SELECT username FROM members")}
-    created: list[str] = []
-    for raw in str(data.get("text") or "").splitlines():
-        parts = [part.strip() for part in raw.replace("，", ",").replace("\t", ",").split(",")]
-        if not parts or not parts[0] or parts[0].startswith("#"):
-            continue
-        name = parts[0]
-        username = parts[2] if len(parts) > 2 and parts[2] else name
-        suffix = 2
-        while username in existing:
-            username = f"{name}{suffix}"; suffix += 1
-        password = secrets.token_urlsafe(9)
-        member_id = int(db.execute(
-            "INSERT INTO members(name,username,password_hash,group_name,role,created_at,must_change_password) VALUES(?,?,?,?,?,?,1)",
-            (name, username, generate_password_hash(password), "", "member", now_str()),
-        ).lastrowid)
-        legacy_groups = _legacy_groups(db, parts[1] if len(parts) > 1 else "", True)
-        if "group_ids" in data and legacy_groups and legacy_groups != requested_groups:
-            db.rollback(); return jsonify(ok=False, error="导入组别与 group_ids 冲突"), 400
-        _set_member_groups(db, member_id, requested_groups if "group_ids" in data else legacy_groups)
-        _set_member_projects(db, member_id, project_ids)
-        existing.add(username); created.append(f"{name}（{username} / {password}）")
-    db.commit()
-    return jsonify(ok=True, created=created)
+    text = data.get('text', '')
+    if not isinstance(text, str):
+        return jsonify(ok=False, error='导入内容必须是文字'), 400
+    # splitlines also treats control characters such as \x1e as row separators.
+    # Preserve them for validation; accept only the usual LF/CRLF line endings.
+    lines = text.replace('\r\n', '\n').split('\n')
+    if text.endswith('\n'):
+        lines.pop()
+    if len(lines) > 500:
+        return jsonify(ok=False, error='每次最多导入 500 行'), 400
+    created, failures = [], []
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        existing = {row[0] for row in db.execute('SELECT username FROM members')}
+        for line, raw in enumerate(lines, 1):
+            if raw.strip().startswith('#'):
+                continue
+            db.execute('SAVEPOINT import_member')
+            try:
+                # Tabs and commas are supported delimiters; other controls remain invalid.
+                if any(ord(char) < 32 and char != '\t' or ord(char) == 127 for char in raw):
+                    raise ValueError('行内容不能包含控制字符')
+                parts = [part.strip() for part in raw.replace('，', ',').replace('\t', ',').split(',')]
+                if len(parts) > 3:
+                    raise ValueError('每行应为姓名、组别、用户名，最多 3 列')
+                name = clean_text(parts[0], '姓名', 64, allow_newlines=False)
+                username = clean_text(parts[2] if len(parts) > 2 and parts[2] else name, '用户名', 64, allow_newlines=False)
+                group_name = clean_text(parts[1] if len(parts) > 1 else '', '组别', 200, required=False, allow_newlines=False)
+                if username in existing:
+                    raise ValueError(f'用户名 {username} 已存在')
+                legacy_groups = _legacy_groups(db, group_name, True)
+                if 'group_ids' in data and legacy_groups and legacy_groups != requested_groups:
+                    raise ValueError('导入组别与 group_ids 冲突')
+                password = secrets.token_urlsafe(9)
+                member_id = int(db.execute(
+                    'INSERT INTO members(name,username,password_hash,group_name,role,created_at,must_change_password) VALUES(?,?,?,?,?,?,1)',
+                    (name, username, generate_password_hash(password), '', 'member', now_str()),
+                ).lastrowid)
+                _set_member_groups(db, member_id, requested_groups if 'group_ids' in data else legacy_groups)
+                _set_member_projects(db, member_id, project_ids)
+                db.execute('RELEASE import_member')
+                existing.add(username)
+                created.append(f'{name}（{username} / {password}）')
+            except (ValueError, sqlite3.IntegrityError) as exc:
+                db.execute('ROLLBACK TO import_member')
+                db.execute('RELEASE import_member')
+                failures.append({'line': line, 'reason': str(exc) if isinstance(exc, ValueError) else '用户名已存在或成员数据冲突'})
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return jsonify(ok=True, created=created, failures=failures)

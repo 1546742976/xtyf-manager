@@ -14,13 +14,14 @@ import base64
 import csv
 import io
 import os
+from modules.input_validation import clean_text
 import sqlite3
 import tempfile
 from datetime import datetime
 
-from flask import Blueprint, g, jsonify, redirect, render_template, request, send_file
+from flask import current_app, Blueprint, g, jsonify, redirect, render_template, request, send_file
 
-from common import current_user
+from common import current_user, error_response
 from modules.security import has_permission
 from modules.money import to_cents, format_cents, money_fields, money_json
 from modules.csv_security import safe_csv_cell
@@ -112,8 +113,14 @@ def _validated_count(value):
 
 
 def _valid_text_fields(data):
-    return all(isinstance(data.get(field, ""), str) for field in
-               ("category", "source_dest", "applicant", "handler", "notes"))
+    for field, limit in {'category':64,'source_dest':200,'applicant':64,'handler':64,'notes':2000}.items():
+        if not isinstance(data.get(field, ''), str):
+            return False
+        try:
+            clean_text(data.get(field, ''), field, limit, required=False)
+        except ValueError:
+            return False
+    return True
 
 
 def valid_record_date(value):
@@ -261,7 +268,7 @@ def _funds_guard():
     if user["role"] not in ("admin", "manager"):
         if "/api/" in request.path:
             return jsonify({"code": 403, "msg": "无权限"}), 403
-        return redirect("/")
+        return error_response(403, "无权限访问此页面")
     return None
 
 
@@ -306,6 +313,9 @@ def get_records():
     for f, col in [("date_from", "record_date"), ("date_to", "record_date")]:
         val = request.args.get(f, "").strip()
         if val:
+            if not valid_record_date(val):
+                conn.close()
+                return jsonify(code=1, msg='日期筛选条件无效（YYYY-MM-DD）'), 400
             op = ">=" if "from" in f else "<="
             q += f" AND {col} {op} ?"
             params.append(val)
@@ -342,7 +352,7 @@ def add_record():
     data = money_json()
     rt = data.get("record_type", "")
     if rt not in ("进", "出"):
-        return jsonify({"code": 1, "msg": "类型必须为“进”或“出”"})
+        return jsonify({"code": 1, "msg": "类型必须为“进”或“出”"}), 400
 
     try:
         amount = to_cents(data.get("amount", 0), positive=True)
@@ -353,7 +363,7 @@ def add_record():
     except (TypeError, ValueError):
         return jsonify({"code": 1, "msg": "发票数目必须是非负整数"}), 400
     if not _valid_text_fields(data):
-        return jsonify({"code": 1, "msg": "资金文字字段必须是字符串"}), 400
+        return jsonify({"code": 1, "msg": "资金文字字段格式或长度不合法（分类64、来源200、申请人/经手人64、备注2000字）"}), 400
 
     rd = data.get("record_date", "")
     if not valid_record_date(rd):
@@ -366,7 +376,7 @@ def add_record():
     if rt == "出":
         ok, err = validate_expense_fields(data)
         if not ok:
-            return jsonify({"code": 1, "msg": err})
+            return jsonify({"code": 1, "msg": err}), 400
 
     auto_review = can_review(user)
     review_status = "已审核" if auto_review else "待审核"
@@ -419,7 +429,7 @@ def update_record(rid):
             candidate[key] = data[key]
     if not _valid_text_fields(candidate):
         conn.close()
-        return jsonify({"code": 1, "msg": "资金文字字段必须是字符串"}), 400
+        return jsonify({"code": 1, "msg": "资金文字字段格式或长度不合法（分类64、来源200、申请人/经手人64、备注2000字）"}), 400
     if candidate["record_type"] not in ("进", "出"):
         conn.close()
         return jsonify({"code": 1, "msg": "资金类型不合法"}), 400
@@ -602,13 +612,13 @@ def get_chart():
             inc, exp = [r['income'] / 100 for r in rows], [r['expense'] / 100 for r in rows]
             fig, ax = plt.subplots(figsize=(10, 5))
             x, w = range(len(labels)), 0.35
-            b1 = ax.bar([i - w / 2 for i in x], inc, w, label='Income', color=colors['income'])
-            b2 = ax.bar([i + w / 2 for i in x], exp, w, label='Expense', color=colors['expense'])
+            b1 = ax.bar([i - w / 2 for i in x], inc, w, label='收入', color=colors['income'])
+            b2 = ax.bar([i + w / 2 for i in x], exp, w, label='支出', color=colors['expense'])
             ax.set_xticks(list(x))
             ax.set_xticklabels(labels, rotation=45, ha='right')
             ax.legend()
-            ax.set_ylabel('Amount (CNY)')
-            ax.set_title('Monthly Income vs Expense')
+            ax.set_ylabel('金额（元）')
+            ax.set_title('月度收支')
             for bars, field in [(b1, 'income'), (b2, 'expense')]:
                 for bar, row in zip(bars, rows):
                     if row[field]:
@@ -616,38 +626,38 @@ def get_chart():
                                 format_cents(row[field]), ha='center', va='bottom', fontsize=8)
         elif chart_type in ('category', 'applicant', 'source'):
             key, label, title = {
-                'category': ('category_stats', 'category', 'Expense by Category'),
-                'applicant': ('applicant_stats', 'applicant', 'Member Expense Ranking'),
-                'source': ('source_stats', 'source', 'Income Source Distribution'),
+                'category': ('category_stats', 'category', '支出分类'),
+                'applicant': ('applicant_stats', 'applicant', '成员支出排行'),
+                'source': ('source_stats', 'source', '收入来源分布'),
             }[chart_type]
             rows = stats[key][:15] if chart_type == 'applicant' else stats[key]
             fig, ax = plt.subplots(figsize=(8, 5))
             if chart_type == 'source':
                 if rows:
                     wedges, _, percentages = ax.pie([r['total'] / 100 for r in rows],
-                           labels=[(r[label] or 'Other') + ' · ' + format_cents(r['total']) for r in rows],
+                           labels=[(r[label] or '其他') + ' · ' + format_cents(r['total']) for r in rows],
                            colors=[colors['primary'], colors['expense'], colors['income']],
                            autopct='%1.1f%%', startangle=90)
                     pie_labels = list(zip(percentages, wedges))
                 else:
-                    ax.text(0.5, 0.5, 'No data', ha='center', va='center')
+                    ax.text(0.5, 0.5, '暂无数据', ha='center', va='center')
             elif chart_type == 'applicant':
                 rows = rows[::-1]
-                bars = ax.barh([r[label] or 'Unspecified' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
-                ax.set_xlabel('Amount (CNY)')
+                bars = ax.barh([r[label] or '未指定' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
+                ax.set_xlabel('金额（元）')
                 for bar, row in zip(bars, rows):
                     ax.text(bar.get_width(), bar.get_y() + bar.get_height() / 2,
                             format_cents(row['total']), ha='left', va='center', fontsize=9)
             else:
-                bars = ax.bar([r[label] or 'Other' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
-                ax.set_ylabel('Amount (CNY)')
+                bars = ax.bar([r[label] or '其他' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
+                ax.set_ylabel('金额（元）')
                 plt.xticks(rotation=45, ha='right')
                 for bar, row in zip(bars, rows):
                     ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                             format_cents(row['total']), ha='center', va='bottom', fontsize=9)
             ax.set_title(title)
         else:
-            return jsonify({'code': 1, 'msg': 'Unknown chart type'})
+            return jsonify({'code': 1, 'msg': '未知图表类型'}), 400
 
         # The browser supplies its resolved palette for follow-system mode.
         fig.patch.set_alpha(0)
@@ -671,9 +681,10 @@ def get_chart():
         buf.seek(0)
         plt.close(fig)
         return jsonify({"code": 0, "palette": palette, "data": f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"})
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("资金图表生成失败")
         plt.close("all")
-        return jsonify({"code": 1, "msg": str(e)})
+        return jsonify({"code": 1, "msg": "图表生成失败，请稍后重试"}), 500
     finally:
         conn.close()
 
