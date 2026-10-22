@@ -74,6 +74,12 @@ class ReleaseTests(unittest.TestCase):
                 with zipfile.ZipFile(out / name, 'w') as apk:
                     apk.writestr('assets/frontend/asset-manifest.json', (root / 'clients/frontend/dist/asset-manifest.json').read_bytes())
                     apk.writestr('assets/frontend/index.html', b'local page')
+                module.write_json(out / 'android-build.json', {
+                    'version': config['version'], 'versionCode': config['versionCode'],
+                    'certificateSha256': 'ab' * 32, 'signatureVerified': True,
+                    'alignmentVerified': True, 'testSigning': False,
+                    'apkSha256': hashlib.sha256((out / name).read_bytes()).hexdigest(),
+                })
         if out.name == 'windows':
             module.write_json(out / 'windows-verification.json', {'version':config['version'], 'framework':'tauri', 'architecture':'x64', 'installer':'NSIS', 'configurationTestsPassed':True, 'nativeExecutableVerified':True, 'clientPayloadVerified':True, 'installerPayloadExtracted':True, 'embeddedFrontendVerified':True, 'runtimeUiVerified':False, 'frontendManifestSha256': self.frontend_digest()})
         if out.name == 'linux':
@@ -115,6 +121,8 @@ class ReleaseTests(unittest.TestCase):
         report = module.release(self.root, self.builder)
         self.assertEqual(report['version'], '1.0.10')
         self.assertEqual(report['android']['versionCode'], 12)
+        self.assertEqual(report['android']['certificateSha256'], 'ab' * 32)
+        self.assertEqual(report['android']['signerComparison'], 'no-baseline')
         self.assertEqual(len(self.calls), 6)
         self.assertIn('--check', self.calls[0])
         self.assertEqual(len(report['artifacts']), 4)
@@ -130,6 +138,34 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(lock['packages']['']['version'], '1.0.10')
         manifest = module.ET.parse(self.root / 'clients/android/AndroidManifest.xml').getroot()
         self.assertEqual(manifest.get(f'{{{module.ANDROID_NS}}}versionCode'), '12')
+
+    def test_changed_signer_blocks_release_and_preserves_previous_artifacts(self):
+        previous = module.read_json(self.output / 'build-report.json')
+        previous['android']['certificateSha256'] = 'cd' * 32
+        module.write_json(self.output / 'build-report.json', previous)
+        self.original['dist/clients/build-report.json'] = (self.output / 'build-report.json').read_bytes()
+        with self.assertRaisesRegex(RuntimeError, '签名'):
+            module.release(self.root, self.builder)
+        self.assert_rollback()
+
+    def test_test_signature_or_missing_metadata_cannot_publish(self):
+        for mode in ('test', 'missing', 'wrong-hash', 'not-verified'):
+            with self.subTest(mode=mode):
+                def corrupt(command, root):
+                    self.builder(command, root)
+                    if any(Path(str(arg)).name == 'build_android.py' for arg in command):
+                        path = Path(command[command.index('--output-dir') + 1]) / 'android-build.json'
+                        if mode == 'missing':
+                            path.unlink()
+                        else:
+                            data = module.read_json(path)
+                            data[{'test': 'testSigning', 'wrong-hash': 'apkSha256',
+                                  'not-verified': 'signatureVerified'}[mode]] = {
+                                      'test': True, 'wrong-hash': '0' * 64, 'not-verified': False}[mode]
+                            module.write_json(path, data)
+                with self.assertRaises(RuntimeError):
+                    module.release(self.root, corrupt)
+                self.assert_rollback()
 
     def test_second_build_failure_restores_version_and_old_installers(self):
         def fail_android(command, root):

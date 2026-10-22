@@ -273,7 +273,29 @@ def verify_shared_frontend(root, staging, version, windows, linux):
     return digest
 
 
-def release(root=ROOT, runner=run_command, requested_version=None, rebuild_current=False):
+def android_verification(staging, config, previous, allow_signer_change=False):
+    path = staging / 'android/android-build.json'
+    if not path.is_file():
+        raise RuntimeError('Android 构建器未生成验签报告。')
+    report = read_json(path)
+    fingerprint = report.get('certificateSha256', '')
+    apk = staging / f'android/XTYF-Manager-{config["version"]}.apk'
+    if (not re.fullmatch(r'[0-9a-f]{64}', fingerprint)
+            or report.get('version') != config['version']
+            or report.get('versionCode') != config['versionCode']
+            or report.get('signatureVerified') is not True
+            or report.get('alignmentVerified') is not True
+            or report.get('testSigning') is not False
+            or report.get('apkSha256') != hashlib.sha256(apk.read_bytes()).hexdigest()):
+        raise RuntimeError('Android 签名、对齐或安装包摘要未通过校验，不能发布。')
+    old = (previous or {}).get('android', {}).get('certificateSha256')
+    if old and old != fingerprint and not allow_signer_change:
+        raise RuntimeError('Android 签名证书与上一版本不同；恢复原密钥，或明确使用 --allow-signer-change。')
+    return {**report, 'signerComparison': 'no-baseline' if not old else 'same' if old == fingerprint else 'changed',
+            'signerChangeApproved': bool(old and old != fingerprint and allow_signer_change)}
+
+
+def release(root=ROOT, runner=run_command, requested_version=None, rebuild_current=False, allow_signer_change=False):
     root = Path(root).resolve()
     output = (root / 'dist/clients').resolve()
     if not output.is_relative_to(root):
@@ -316,6 +338,8 @@ def release(root=ROOT, runner=run_command, requested_version=None, rebuild_curre
             windows = windows_verification(staging, version)
             linux = linux_verification(staging, version)
             frontend_digest = verify_shared_frontend(root, staging, version, windows, linux)
+            prior = snapshots['dist/clients/build-report.json']
+            android = android_verification(staging, config, json.loads(prior) if prior else None, allow_signer_change)
             blockmap = names[0] + '.blockmap'
             if rebuild_current:
                 for relative in VERSION_FILES:
@@ -329,7 +353,7 @@ def release(root=ROOT, runner=run_command, requested_version=None, rebuild_curre
                 'source': source_info,
                 'previousReleaseBackup': backup.relative_to(output).as_posix() if backup else None,
                 'windows': windows,
-                'android': {'package': 'online.skywalker.manager', 'versionCode': config['versionCode'], 'signatureAndAlignmentVerified': True, 'localResourcesVerified': True, 'frontendManifestSha256': frontend_digest, 'runtimeUiVerified': False},
+                'android': {**android, 'package': 'online.skywalker.manager', 'signatureAndAlignmentVerified': android['signatureVerified'] and android['alignmentVerified'], 'localResourcesVerified': True, 'frontendManifestSha256': frontend_digest, 'runtimeUiVerified': False},
                 'linux': linux,
                 'frontend': {'delivery': 'bundled-local-assets', 'protocolVersion': 1,
                              'manifestSha256': frontend_digest, 'identicalAcrossPackages': True},
@@ -409,13 +433,14 @@ def main():
                         help='Release this exact confirmed version instead of auto-incrementing the patch')
     parser.add_argument('--rebuild-current', action='store_true',
                         help='Rebuild the explicit current --version without incrementing versionCode; retain old installers in a backup')
+    parser.add_argument('--allow-signer-change', action='store_true', help='显式允许更换 Android 签名；通常无法覆盖安装旧版本')
     args = parser.parse_args()
     if args.dry_run:
         config = (rebuild_config(ROOT, args.version) if args.rebuild_current else
                   requested_config(ROOT, args.version) if args.version else next_config(ROOT))
         print(json.dumps(config, ensure_ascii=False, indent=2))
     else:
-        release(requested_version=args.version, rebuild_current=args.rebuild_current)
+        release(requested_version=args.version, rebuild_current=args.rebuild_current, allow_signer_change=args.allow_signer_change)
 
 
 if __name__ == '__main__':

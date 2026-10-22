@@ -125,6 +125,21 @@ class TestInvoiceJobRecovery(unittest.TestCase):
         self.assertEqual(self._db_row(jid)["attempts"], 0)
         self.assertEqual(self._audit(audit_id), "failure")
 
+    def test_stream_actor_validation_rejects_invalid_account_or_session(self):
+        self.assertTrue(invoice_jobs.actor_is_current(1, 0))
+        self.assertFalse(invoice_jobs.actor_is_current(1, 1))
+        for column, value in (("is_active", 0), ("deleted_at", "2026-10-22"),
+                              ("must_change_password", 1)):
+            with self.subTest(column=column):
+                with closing(sqlite3.connect(self.db_path)) as db, db:
+                    db.execute(f"UPDATE members SET {column}=? WHERE id=1", (value,))
+                self.assertFalse(invoice_jobs.actor_is_current(1, 0))
+                with closing(sqlite3.connect(self.db_path)) as db, db:
+                    db.execute("UPDATE members SET is_active=1,deleted_at=NULL,must_change_password=0 WHERE id=1")
+        with closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("DELETE FROM member_permissions WHERE member_id=1")
+        self.assertFalse(invoice_jobs.actor_is_current(1, 0))
+
     @unittest.skipUnless(sys.platform.startswith("linux"), "requires POSIX flock subprocess")
     def test_two_processes_claim_one_job_only_once(self):
         jid, audit_id = self._insert_job("scan_dups")

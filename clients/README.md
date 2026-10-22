@@ -6,6 +6,10 @@ Windows、Ubuntu、Fedora 使用 Tauri 2，Android 使用系统 WebView。登录
 
 ## 安装和升级
 
+Android 的 JKS 与配套密码文件是发布凭证，必须一起离线备份。构建时缺少任一文件会停止，不能通过重新生成密钥修复已有安装的升级问题。仅全新身份允许显式 `--init-signing-key` 并设置 `XTYF_CONFIRM_NEW_SIGNING_KEY=1`；CI 临时构建使用 `--test-signing`，不会写入发布签名目录，也不能作为正式发布。
+
+Android 构建报告 `android-build.json` 记录实际验签、对齐结果及证书 SHA-256。统一发布会对比上一份报告：证书变化默认失败；只有明确选择 `--allow-signer-change` 才放行并标记，通常将无法覆盖升级旧安装。旧报告没有证书指纹时标记 `no-baseline`，不表示已验证签名连续性。包内校验不等于目标设备运行验收。
+
 - Windows 10/11 x64：`dist/clients/windows/XTYF-Manager-Setup-<版本>-x64.exe`。NSIS 安装器提供快捷方式和卸载入口；缺少 WebView2 时联网补齐运行时。EXE 未使用发布者证书签名。
 - Android 8.0+：`dist/clients/android/XTYF-Manager-<版本>.apk`。保留包名 `online.skywalker.manager` 和既有发布密钥，递增 versionCode 后覆盖安装。返回使用系统返回键或手势。
 - Ubuntu 22.04 ARM64：`sudo apt install ./XTYF-Manager-<版本>-arm64.deb`。

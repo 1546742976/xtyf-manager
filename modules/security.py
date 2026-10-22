@@ -4,6 +4,9 @@ import os
 import secrets
 import sqlite3
 import subprocess
+import threading
+import time
+from datetime import datetime, timedelta
 from contextlib import closing
 from functools import wraps
 
@@ -19,6 +22,67 @@ AUDITED_READS = {"funds.export_csv", "invoices.api_export_download", "invoices.a
 AUDIT_FIELDS = {"id", "ids", "member_id", "record_type", "amount", "invoice_count",
                 "record_date", "status", "submitter_id", "permissions", "role",
                 "is_active", "type", "job_type", "group_ids", "project_ids"}
+LOGIN_ENDPOINTS = {"login", "client_api.login"}
+_audit_lock = threading.Lock()
+_audit_rate = {}
+_audit_writes = 0
+
+
+def _limited_audit_event(kind):
+    now = time.monotonic()
+    key = (kind, request.remote_addr or '')
+    with _audit_lock:
+        if now - _audit_rate.get(key, -60) < 60:
+            return False
+        if len(_audit_rate) >= 4096:
+            for old in list(_audit_rate):
+                if now - _audit_rate[old] >= 60:
+                    del _audit_rate[old]
+            if len(_audit_rate) >= 4096:
+                return False
+        _audit_rate[key] = now
+        return True
+
+
+def cleanup_audit_rows(db):
+    """Capacity takes priority over age; pending and complete job chains are exempt.
+
+    Zero disables each limit independently. A single transaction prevents cleanup
+    from racing a new job reference; protected rows may exceed the configured cap.
+    """
+    days = max(0, int(os.environ.get('AUDIT_RETENTION_DAYS', '90')))
+    limit = max(0, int(os.environ.get('AUDIT_MAX_ROWS', '100000')))
+    protected = """WITH RECURSIVE protected(id) AS (
+        SELECT id FROM security_audit WHERE outcome='pending'
+        UNION SELECT audit_id FROM invoice_jobs
+        UNION SELECT CAST(json_extract(a.details,'$.request_audit_id') AS INTEGER)
+          FROM security_audit a JOIN protected p ON p.id=a.id
+          WHERE json_valid(a.details) AND json_type(a.details,'$.request_audit_id')='integer'
+    ) """
+    db.execute('SAVEPOINT audit_cleanup')
+    try:
+        if days:
+            cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+            db.execute(protected + 'DELETE FROM security_audit WHERE created_at<? AND id NOT IN (SELECT id FROM protected)', (cutoff,))
+        if limit:
+            excess = max(0, db.execute('SELECT COUNT(*) FROM security_audit').fetchone()[0] - limit)
+            if excess:
+                db.execute(protected + 'DELETE FROM security_audit WHERE id IN (SELECT id FROM security_audit WHERE id NOT IN (SELECT id FROM protected) ORDER BY id LIMIT ?)', (excess,))
+        db.execute('RELEASE audit_cleanup')
+    except Exception:
+        db.execute('ROLLBACK TO audit_cleanup')
+        db.execute('RELEASE audit_cleanup')
+        raise
+
+
+def _start_request_audit(user):
+    g.audit_details = {}
+    with closing(sqlite3.connect(DB_PATH, timeout=15)) as db, db:
+        g.audit_id = db.execute(
+            'INSERT INTO security_audit(actor_id,actor_name,action,method,target,details,created_at) VALUES(?,?,?,?,?,?,?)',
+            (user['id'] if user else None, user['name'] if user else '',
+             request.endpoint or 'unknown', request.method, request.path, '{}', now_str()),
+        ).lastrowid
 
 
 def write_initial_credentials(path, password):
@@ -175,17 +239,10 @@ def init_security(app):
                 request._cached_data = raw  # Retain the bounded body for get_json/audit.
         user = current_user() if request.endpoint != "static" else None
         unsafe = request.method not in SAFE_METHODS
-        if unsafe or request.endpoint in AUDITED_READS:
-            details = _audit_details(request.get_json(silent=True)) if request.is_json else {}
-            g.audit_details = details
-            with closing(sqlite3.connect(DB_PATH, timeout=15)) as db, db:
-                g.audit_id = db.execute(
-                    "INSERT INTO security_audit(actor_id,actor_name,action,method,target,details,created_at) "
-                    "VALUES(?,?,?,?,?,?,?)",
-                    (user["id"] if user else None, user["name"] if user else "",
-                     request.endpoint or "unknown", request.method, request.path,
-                     json.dumps(details, ensure_ascii=False)[:20000], now_str()),
-                ).lastrowid
+        if user and (unsafe or request.endpoint in AUDITED_READS):
+            _start_request_audit(user)
+        elif unsafe and request.endpoint not in LOGIN_ENDPOINTS and _limited_audit_event('anonymous'):
+            current_app.logger.warning('未认证写请求已拒绝审计存储: %s', request.path)
         if unsafe:
             expected = session.get("csrf_token")
             supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token")
@@ -195,6 +252,8 @@ def init_security(app):
                 return _error("页面凭据已过期，请刷新页面后重试", "csrf_failed")
             if request.is_json and not isinstance(request.get_json(silent=True), dict):
                 return _error("请求必须是 JSON 对象", "invalid_payload", 400)
+        if getattr(g, 'audit_id', None) and request.is_json:
+            g.audit_details = _audit_details(request.get_json(silent=True))
         native_client = request.headers.get("X-XTYF-Client-Protocol") == "1"
         if native_client and user is None and request.endpoint not in {
             "client_api.bootstrap", "client_api.login", "client_api.logout", "security.get_csrf",
@@ -224,6 +283,12 @@ def init_security(app):
                 "Content-Security-Policy",
                 "frame-ancestors 'self'; object-src 'none'; base-uri 'self'",
             )
+        if (request.method not in SAFE_METHODS and request.endpoint in LOGIN_ENDPOINTS
+                and not getattr(g, 'audit_id', None)):
+            payload = response.get_json(silent=True) if response.is_json else None
+            succeeded = response.status_code < 400 and isinstance(payload, dict) and payload.get('ok') is True
+            if succeeded or _limited_audit_event('login_failure'):
+                _start_request_audit(current_user() if succeeded else None)
         audit_id = getattr(g, "audit_id", None)
         if audit_id:
             payload = response.get_json(silent=True) if response.is_json else None
@@ -248,6 +313,17 @@ def init_security(app):
                                (outcome, response.status_code, now_str(), json.dumps(g.audit_details, ensure_ascii=False)[:20000], audit_id))
             except sqlite3.Error:
                 current_app.logger.exception("Could not finalize audit record %s", audit_id)
+        if audit_id:
+            global _audit_writes
+            with _audit_lock:
+                _audit_writes += 1
+                cleanup_due = _audit_writes % 500 == 0
+            if cleanup_due:
+                try:
+                    with closing(sqlite3.connect(DB_PATH, timeout=5)) as db, db:
+                        cleanup_audit_rows(db)
+                except sqlite3.Error:
+                    current_app.logger.exception('审计保留清理失败')
         return response
 
 

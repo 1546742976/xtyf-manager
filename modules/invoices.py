@@ -39,7 +39,7 @@ from datetime import datetime
 from decimal import Decimal
 from functools import wraps
 from flask import (Blueprint, Response, g, has_request_context, jsonify, redirect, request, render_template,
-                   send_file, stream_with_context)
+                   send_file)
 from urllib.parse import quote
 
 from common import ROLE_NAMES, current_user, get_db
@@ -231,14 +231,14 @@ def _update_job(jid, progress, message):
     invoice_jobs.update_job(jid, progress, message)
 
 
-def _job_sse(jid):
+def _job_sse(jid, user_id, session_version):
     """Read persisted progress without blocking invoice writes or other workers."""
     def generate():
         previous = None
         heartbeat = time.monotonic()
         while True:
             # Revalidate the session and permission while a long-lived stream is open.
-            if not _is_finance():
+            if not invoice_jobs.actor_is_current(user_id, session_version):
                 yield 'data: ' + json.dumps({'status': 'error', 'message': '登录或财务授权已失效'}, ensure_ascii=False) + '\n\n'
                 break
             job = invoice_jobs.get_job(jid)
@@ -259,7 +259,7 @@ def _job_sse(jid):
             if job['status'] in invoice_jobs.TERMINAL:
                 break
             time.sleep(1)
-    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+    return Response(generate(), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
 
 
@@ -1491,9 +1491,10 @@ def api_job_detail(job_id):
 @bp.route('/api/job/stream/<job_id>')
 @finance_required
 def api_job_stream(job_id):
+    user = current_user()
     if invoice_jobs.get_job(job_id) is None:
         return jsonify(error='任务不存在'), 404
-    return _job_sse(job_id)
+    return _job_sse(job_id, user['id'], user['session_version'])
 
 
 # ---- 后台任务实现 ----

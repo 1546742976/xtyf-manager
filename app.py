@@ -50,7 +50,7 @@ from modules.task_alerts import bp as task_alerts_bp
 from modules.item_topics import bp as item_topics_bp, migrate as migrate_item_topics
 from modules.email_api import bp as email_bp
 from modules.mail_service import configure as configure_mail
-from modules.security import init_security, migrate_security, write_initial_credentials
+from modules.security import cleanup_audit_rows, init_security, migrate_security, write_initial_credentials
 from modules.workspace_settings import bp as workspace_settings_bp, migrate as migrate_workspace, theme_context
 from modules.client_api import create_client_blueprint
 from modules.client_updates import bp as client_updates_bp
@@ -253,6 +253,7 @@ def init_db():
         migrate_assets(db)
         migrate_invoice_owners(db)
         migrate_invoice_jobs(db)
+        cleanup_audit_rows(db)
         # Hot read paths (dashboard tree, status filters, attachment lookups)
         # would otherwise scan the whole table on every 5s poll.
         db.executescript("""

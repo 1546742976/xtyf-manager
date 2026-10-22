@@ -84,6 +84,17 @@ def get_job(jid):
         return _serialize(db.execute('SELECT * FROM invoice_jobs WHERE id=?', (jid,)).fetchone())
 
 
+def actor_is_current(user_id, session_version):
+    """Validate a stream viewer without retaining a Flask or SQLite context."""
+    with _db() as db:
+        return db.execute(
+            "SELECT 1 FROM members m JOIN member_permissions p ON p.member_id=m.id "
+            "WHERE m.id=? AND m.is_active=1 AND m.deleted_at IS NULL AND m.must_change_password=0 "
+            "AND m.session_version=? AND p.permission='invoices.manage'",
+            (user_id, session_version),
+        ).fetchone() is not None
+
+
 def list_jobs():
     with _db() as db:
         rows = db.execute(
