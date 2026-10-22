@@ -55,7 +55,7 @@ async function main(){
     const granted=(await (await api.get('/api/admin/permissions')).json()).members.find(m=>m.id===member).permissions;
     assert(granted.includes('assets.manage'));assert(granted.includes('invoices.manage'));
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
-    await page.locator('#asset-create').click();
+    await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();
     await page.locator('#asset-form [name=name]').fill('测试电机 '+label);
     await page.locator('#asset-form [name=specification]').fill('3508 <测试>');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
@@ -101,6 +101,7 @@ async function main(){
     await page.locator('#asset-content [data-action=return]').first().click();
     await page.locator('#asset-form [name=quantity]').fill('1');await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成归还验证');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.locator('#asset-content .asset-card').filter({has:page.getByRole('link',{name:'测试电机 '+label,exact:true})}).getByText('未还 2 个',{exact:true}).waitFor();
+    await page.locator('#asset-content[aria-busy=false]').waitFor();
     await page.goto(base+`/assets/detail?id=${id}`);await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.reload();await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await eastCard.getByRole('button',{name:'校区调拨',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('2');
@@ -121,7 +122,7 @@ async function main(){
     await page.locator('#asset-categories').click();await page.getByRole('button',{name:'新增类别',exact:true}).click();
     await page.getByLabel('名称',{exact:true}).fill('登记分类 '+label);await page.locator('#asset-save').click();
     await page.locator('#asset-dialog').waitFor({state:'hidden'});
-    await page.locator('#asset-create').click();await page.getByLabel('名称',{exact:true}).fill('自助耗材 '+label);
+    await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();await page.getByLabel('名称',{exact:true}).fill('自助耗材 '+label);
     await page.locator('#asset-form [name=category]').selectOption('登记分类 '+label);
     await page.locator('#asset-form [name=kind]').selectOption('consumable');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
@@ -132,7 +133,10 @@ async function main(){
     const ordinaryContext=await browser.newContext({...options,storageState:await ordinaryApi.storageState()});
     page=await ordinaryContext.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
     await page.goto(base+'/assets');await page.getByRole('link',{name:'自助耗材 '+label,exact:true}).waitFor();
-    assert.equal(await page.locator('#asset-create').isVisible(),false);
+    await page.locator('#asset-create').click();
+    assert.equal(await page.locator('#asset-add-manual').isVisible(),false);
+    await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill('M:'+supply.id);await page.locator('#asset-scan-raw').press('Enter');
+    await page.locator('#scan-receive').waitFor();assert.equal(await page.locator('#scan-create').count(),0);await page.locator('#asset-scan-close').click();
     assert.equal(await page.locator('#asset-categories').isVisible(),false);
     const supplyCard=page.locator('.asset-card').filter({has:page.getByRole('link',{name:'自助耗材 '+label,exact:true})});
     await page.locator('#asset-filter [name=campus_id]').selectOption(String(campus));

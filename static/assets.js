@@ -37,6 +37,18 @@
     unresolved=null;showPending();
   }
   const dialog=$('asset-dialog'), form=$('asset-form'), filter=$('asset-filter');
+  // Keep scrolling inside the rounded shell; only a complete backdrop click dismisses.
+  for(const modal of document.querySelectorAll('dialog.asset-dialog')){
+    const scroll=document.createElement('div');scroll.className='asset-dialog-scroll';
+    scroll.append(...modal.childNodes);modal.append(scroll);
+    const outside=e=>{const r=modal.getBoundingClientRect();return e.target===modal&&(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom);};
+    let beganOutside=false;
+    modal.addEventListener('pointerdown',e=>{beganOutside=outside(e);});
+    modal.addEventListener('click',e=>{
+      if(beganOutside&&outside(e)&&!pending)modal.querySelector('header button')?.click();
+      beganOutside=false;
+    });
+  }
   const requestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
   const status=(message)=>{$('asset-status').textContent=message;};
   async function api(path, body){
@@ -79,7 +91,8 @@
     $('asset-content').setAttribute('aria-busy','true');status('正在加载…');
     try{
       const c=await api('catalog'); if(own!==generation)return; catalog=c;serverReceivedAt=Date.now();showPending();
-      $('asset-create').hidden=!c.can_manage||!!itemId||mine;
+      $('asset-create').hidden=(!c.can_manage&&!window.AssetScan)||!!itemId||mine;
+      $('asset-add-manual').hidden=!c.can_manage;
       $('asset-campuses').hidden=!c.can_manage;
       $('asset-categories').hidden=!c.can_manage;
       filter.hidden=!!itemId||mine;
@@ -103,6 +116,7 @@
       }else if(mine){
         const l=await api('loans?mine=1&page='+loanPage);if(own!==generation)return;
         $('asset-title').textContent='我的借用';$('asset-content').innerHTML=renderLoans(l);
+        if(window.AssetUnits){await window.AssetUnits.loadMine();if(own!==generation)return;}
       }else{
         const search=new URLSearchParams({q:filter.elements.q.value,campus_id:filter.elements.campus_id.value,category:filter.elements.category.value,page:String(listPage)});
         const data=await api('items?'+search);if(own!==generation)return;listing=data.items;
@@ -296,7 +310,13 @@
     }
   });
   document.addEventListener('change',e=>{if(e.target.id==='asset-event-campus'){eventCampus=e.target.value;eventPage=1;load();}});
-  $('asset-create').onclick=()=>catalogEditor('items');
+  $('asset-create').onclick=()=>{
+    if(unresolved){recoverPending();return;}
+    $('asset-add-guidance').textContent=catalog.can_manage?'可手动新建目录，或扫描标签匹配已有物品并核对入库。':'可扫码登记已有耗材；新物品建档需由管理人员确认。';
+    $('asset-add-dialog').showModal();
+  };
+  $('asset-add-close').onclick=()=>{$('asset-add-dialog').close();$('asset-create').focus();};
+  $('asset-add-manual').onclick=()=>{$('asset-add-dialog').close();catalogEditor('items');opener=$('asset-create');};
   $('asset-campuses').onclick=()=>directoryManager('campuses');
   $('asset-categories').onclick=()=>directoryManager('categories');
   $('asset-pending-retry').onclick=()=>recoverPending();

@@ -2,7 +2,9 @@
 (() => {
   'use strict';
   const core=window.AssetLedger,{api,esc,input,reason,options}=core,$=id=>document.getElementById(id);
-  const drawer=$('asset-unit-drawer'), selected=new Map();
+  const embedded=new URLSearchParams(location.search).get('view')==='mine';
+  const modal=$('asset-unit-drawer'), drawer=embedded?$('asset-mine-units'):modal, selected=new Map();
+  if(embedded){drawer.append(...modal.childNodes);modal.remove();drawer.hidden=false;$('asset-unit-close').hidden=true;}
   const labels={normal:'正常',inspection:'待检查',fault:'故障',repair:'维修中',active:'在册',lost:'遗失',retired:'报废',destroyed:'已销毁'};
   const actions={borrow:'借用',return:'归还',handoff:'发起责任移交',accept:'确认接收',cancel_handoff:'取消移交',move:'登记移动',install:'安装',detach:'拆卸',fault:'报障',repair:'送修',healthy:'确认恢复可借',retire:'报废',lost:'遗失结案',recover:'找回／误报恢复',correct:'纠正保管人'};
   let item=null,page=1,rows=[],meta=null,opener,sequence=0,mine=false;
@@ -15,7 +17,7 @@
   }
   async function show(id=null,unitId=null,own=false){
     opener=document.activeElement;item=id?(await api('items/'+id)).item:null;mine=own;page=1;
-    if(!drawer.open)drawer.showModal();
+    if(!embedded&&!drawer.open)drawer.showModal();
     await refresh();
     if(unitId){const u=rows.find(r=>r.id===unitId)||(await api('scan/resolve',{raw:'U:'+unitId})).unit;selected.set(u.id,u);selectedSummary();}
   }
@@ -89,9 +91,8 @@
   drawer.addEventListener('change',e=>{if(e.target.dataset.unitSelect){const u=rows.find(v=>v.id===Number(e.target.dataset.unitSelect));if(e.target.checked)selected.set(u.id,u);else selected.delete(u.id);selectedSummary();}});
   $('asset-unit-close').onclick=()=>{drawer.close();opener?.focus();};
   $('asset-unit-campus').onchange=()=>{page=1;refresh();};
-  $('asset-unit-mine').onclick=()=>show(null,null,true);
   document.addEventListener('click',e=>{const a=e.target.closest('[data-unit-model]');if(a){e.preventDefault();show(Number(a.dataset.unitModel));}});
-  document.addEventListener('assets-loaded',()=>{if(drawer.open)refresh();});
-  document.addEventListener('asset-operation-saved',e=>{if(e.detail.path==='units/operate'){selected.clear();selectedSummary();refresh();}});
-  window.AssetUnits={show,refresh,select:async unit=>{if(selected.has(unit.id))throw Error('此单件已在待提交清单中');selected.set(unit.id,unit);selectedSummary();},get selection(){return [...selected.values()];}};
+  document.addEventListener('assets-loaded',()=>{if(!embedded&&drawer.open)refresh();});
+  document.addEventListener('asset-operation-saved',e=>{if(e.detail.path==='units/operate'){selected.clear();selectedSummary();if(!embedded)refresh();}});
+  window.AssetUnits={show,refresh,loadMine:()=>{item=null;mine=true;return refresh();},select:async unit=>{if(selected.has(unit.id))throw Error('此单件已在待提交清单中');selected.set(unit.id,unit);selectedSummary();},get selection(){return [...selected.values()];}};
 })();

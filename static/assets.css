@@ -23,17 +23,19 @@
 .asset-log li { border-bottom:1px solid var(--ux-stroke); padding:12px 0; overflow-wrap:anywhere; }
 .asset-log p { margin:6px 0; }
 .asset-empty { padding:32px 20px; border:1px dashed var(--ux-stroke); border-radius:14px; }
-.asset-dialog { background:var(--ux-surface); color:var(--ux-text); border:1px solid var(--ux-stroke); border-radius:16px; padding:24px; width:min(520px,calc(100vw - 32px)); max-height:85dvh; overflow:auto; box-sizing:border-box; }
+.asset-dialog { background:var(--ux-surface); color:var(--ux-text); border:1px solid var(--ux-stroke); border-radius:22px; padding:0; width:min(520px,calc(100vw - 32px)); max-height:85dvh; overflow:hidden; box-sizing:border-box; }
+.asset-dialog > .asset-dialog-scroll { padding:24px; max-height:inherit; overflow:auto; box-sizing:border-box; }
 .asset-dialog::backdrop { background:rgba(0,0,0,.45); }
 .asset-fields { display:grid; gap:16px; margin:16px 0; }
 .asset-dialog footer { display:flex; justify-content:flex-end; }
 #asset-form-status { color:var(--ux-danger); }
 .asset-workspace [hidden] { display:none !important; }
-@media(max-width:650px) { .asset-filters { grid-template-columns:1fr; } .asset-grid { grid-template-columns:1fr; } .asset-dialog { padding:18px; } }
+@media(max-width:650px) { .asset-filters { grid-template-columns:1fr; } .asset-grid { grid-template-columns:1fr; } .asset-dialog > .asset-dialog-scroll { padding:18px; } }
 
 .asset-pending { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:14px; border:1px solid var(--ux-stroke); border-radius:9px; margin:12px 0; }
 
 .asset-unit-drawer{width:min(960px,96vw);max-width:96vw;max-height:94vh}.asset-unit-drawer .asset-actions{margin-block:1rem}.asset-unit-drawer input[type=checkbox]{width:auto}.asset-unit-drawer pre{white-space:pre-wrap;overflow-wrap:anywhere}.asset-unit-drawer .asset-card{min-width:0}
+#asset-mine-units { width:100%; max-width:100%; max-height:none; }
 
 #asset-camera-video{width:100%;max-height:45vh;object-fit:contain}#asset-label-preview canvas{display:block;margin:1rem auto;border:1px solid #888}
 

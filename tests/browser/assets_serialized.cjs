@@ -17,7 +17,17 @@ async function main(){
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]){
     engineName=label;browser=await engine.launch();const context=await browser.newContext({...options,storageState:await api.storageState()});page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
-    await page.locator('#asset-create').click();await page.getByLabel('名称',{exact:true}).fill('逐件测试 '+label);await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    assert.equal(await page.locator('.asset-tabs #asset-scan, #asset-unit-mine').count(),0);
+    await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();
+    await page.getByLabel('名称',{exact:true}).fill('未提交草稿');
+    await page.locator('#asset-dialog-title').click();assert.equal(await page.locator('#asset-dialog').isVisible(),true);
+    const bounds=await page.locator('#asset-dialog').boundingBox();
+    await page.mouse.move(bounds.x+30,bounds.y+30);await page.mouse.down();await page.mouse.move(2,2);await page.mouse.up();
+    assert.equal(await page.locator('#asset-dialog').isVisible(),true,'dragging from inside must not dismiss');
+    assert.equal(await page.locator('#asset-dialog').evaluate(d=>getComputedStyle(d).borderRadius),'22px');
+    await page.mouse.click(2,2);await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    assert.equal(await page.locator('#asset-create').evaluate(b=>b===document.activeElement),true);
+    await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();await page.getByLabel('名称',{exact:true}).fill('逐件测试 '+label);await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.getByRole('link',{name:'逐件测试 '+label,exact:true}).click();await page.getByRole('button',{name:'批量建档',exact:true}).click();
     await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));await page.getByLabel('实收件数',{exact:true}).fill('3');await page.getByLabel('原因（必填）',{exact:true}).fill('合成入库');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.waitForFunction(()=>document.querySelectorAll('[data-unit-select]').length===3);
@@ -34,7 +44,7 @@ async function main(){
     await page.locator('#asset-label-download').waitFor();const pdf=await api.get(await page.locator('#asset-label-download').getAttribute('href'));assert.equal(pdf.headers()['content-type'],'application/pdf');assert((await pdf.body()).subarray(0,4).equals(Buffer.from('%PDF')));
     const image=await page.locator('#asset-label-preview canvas').first().evaluate(c=>c.toDataURL('image/png').split(',')[1]);
     await page.locator('#asset-label-close').click();await page.locator('[data-unit-action=clear]').click();await page.locator('#asset-unit-close').click();
-    await page.locator('#asset-scan').click();
+    await page.locator('#asset-create').click();await page.locator('#asset-scan').click();
     await page.evaluate(()=>{const deny=()=>Promise.reject(new DOMException('Synthetic denial','NotAllowedError'));if(navigator.mediaDevices)Object.defineProperty(navigator.mediaDevices,'getUserMedia',{configurable:true,value:deny});});
     await page.locator('#asset-camera-start').click();await page.locator('#asset-camera-status').filter({hasText:'相册'}).waitFor();
     await page.locator('#asset-camera-photo').setInputFiles({name:'synthetic-label.png',mimeType:'image/png',buffer:Buffer.from(image,'base64')});
@@ -43,7 +53,7 @@ async function main(){
     await page.locator('#asset-scan-raw').fill('U:'+units[2].id);await page.locator('#asset-scan-raw').press('Enter');await page.locator('#asset-scan-status').filter({hasText:'已在待提交清单'}).waitFor();
     await page.locator('#scan-queue-units').click();await page.locator('#asset-unit-close').click();
     const supply=(await post('/api/assets/catalog/items',{request_id:crypto.randomUUID(),name:'合成电阻 '+label,kind:'consumable',unit:'颗',supplier_code:label==='chromium'?'C10001':'C10002'})).id;
-    await page.locator('#asset-scan').click();await page.locator('#asset-scan-mode').selectOption('query');
+    await page.locator('#asset-create').click();await page.locator('#asset-scan').click();await page.locator('#asset-scan-mode').selectOption('query');
     await page.locator('#asset-scan-raw').fill(`{on:TEST-${label},pc:${label==='chromium'?'C10001':'C10002'},pm:SYNTHETIC,qty:100,mc:,pdi:unknown}`);await page.locator('#asset-scan-raw').press('Enter');await page.locator('#scan-receive').click();
     assert.equal(await page.getByLabel('实收数量',{exact:true}).inputValue(),'100');
     await page.getByLabel('实收数量',{exact:true}).fill('70');await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成开封包装');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
@@ -59,7 +69,7 @@ async function main(){
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     assert.equal((await(await api.get('/api/assets/items/'+supply)).json()).campuses.find(c=>c.id===campus).available,80);
     for(const [suffix,kind,qty] of [['1','consumable','6'],['2','returnable','2']]){
-      await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill(`{on:TEST-NEW-${label},pc:C${label==='chromium'?'31':'32'}${suffix},pm:SYNTHETIC,qty:${qty},mc:}`);
+      await page.locator('#asset-create').click();await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill(`{on:TEST-NEW-${label},pc:C${label==='chromium'?'31':'32'}${suffix},pm:SYNTHETIC,qty:${qty},mc:}`);
       await page.locator('#asset-scan-raw').press('Enter');await page.locator('#scan-create').click();
       assert.equal(await page.getByLabel('实收数量',{exact:true}).inputValue(),qty);
       await page.getByLabel('名称',{exact:true}).fill('新扫码 '+label+kind);await page.locator('#asset-form [name=kind]').selectOption(kind);
@@ -68,10 +78,21 @@ async function main(){
       await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成扫码建档入库');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
       const created=(await(await api.get('/api/assets/items?q='+encodeURIComponent('新扫码 '+label+kind))).json()).items[0];assert.equal(created.total,Number(qty));
     }
-    await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill('{pc:C999999,qty:bad}');await page.locator('#asset-scan-raw').press('Enter');await page.locator('#scan-create').click();
+    await page.locator('#asset-create').click();await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill('{pc:C999999,qty:bad}');await page.locator('#asset-scan-raw').press('Enter');await page.locator('#scan-create').click();
     assert.equal(await page.getByLabel('实收数量',{exact:true}).inputValue(),'');await page.locator('#asset-close').click();
     await page.locator('#asset-objects').click();await page.getByRole('button',{name:'新增使用对象',exact:true}).click();await page.getByLabel('名称',{exact:true}).fill('合成机器人 '+label);await page.getByLabel('原因（必填）',{exact:true}).fill('合成建档');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});await page.getByRole('heading',{name:'合成机器人 '+label,exact:true}).waitFor();await page.locator('#asset-lifecycle-close').click();
     await page.locator('#asset-takes').click();await page.getByRole('button',{name:'开始盘点',exact:true}).click();await page.locator(`#asset-form [name=items][value="${item.id}"]`).check();await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));await page.getByLabel('原因（必填）',{exact:true}).fill('合成盘点');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});await page.getByRole('button',{name:'查看盘点',exact:true}).first().click();await page.getByRole('button',{name:'核对差异并解冻',exact:true}).click();await page.getByLabel('原因（必填）',{exact:true}).fill('未扫描只记待核实');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});await page.locator('#asset-take-detail h4').filter({hasText:'closed'}).waitFor();await page.locator('#asset-lifecycle-close').click();
+    await page.getByRole('link',{name:'我的借用',exact:true}).click();
+    await page.getByRole('heading',{name:'我的未还借用',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'我的单件与待接收',exact:true}).waitFor();
+    await page.locator('#asset-mine-units [data-unit-select]').first().waitFor();
+    assert.equal(await page.locator('dialog[open]').count(),0);
+    const own=(await(await api.get('/api/assets/units?mine=1')).json()).units;
+    assert.equal(await page.locator('#asset-mine-units [data-unit-select]').count(),own.length);
+    await page.locator('#asset-mine-units [data-unit-select]').first().check();
+    await page.locator('[data-unit-action=return]').click();await page.getByLabel('原因（必填）',{exact:true}).fill('合成统一借用页面归还');
+    await page.locator('#asset-form [name=campus_id]').selectOption(String(campus));await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    await page.waitForFunction(n=>document.querySelectorAll('#asset-mine-units [data-unit-select]').length===n,own.length-1);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
     await page.screenshot({path:path.join(output,label+'.png'),fullPage:true});passed.push(label+': serialized drawer, lost response retry, camera denial fallback, QR photo decode, HID repeat, receipt actual quantity, unit/material PDF, object editor, stocktake closure, mobile layout');await browser.close();browser=null;
   }

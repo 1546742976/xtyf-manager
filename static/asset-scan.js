@@ -17,7 +17,7 @@
     };
   }
   function close(){dialog.close();opener?.focus();}
-  $('asset-scan').onclick=()=>{opener=document.activeElement;dialog.showModal();queue();if(!matchMedia('(pointer:coarse)').matches)$('asset-scan-raw').focus();};
+  $('asset-scan').onclick=()=>{$('asset-add-dialog').close();opener=$('asset-create');dialog.showModal();queue();if(!matchMedia('(pointer:coarse)').matches)$('asset-scan-raw').focus();};
   $('asset-scan-close').onclick=close;
   async function resolve(raw){
     const own=++sequence;resolved=null;$('asset-scan-preview').replaceChildren();status('正在识别…');

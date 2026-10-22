@@ -8,9 +8,7 @@
   </header>
   <nav class="asset-tabs" aria-label="资产导航">
     <a class="btn" href="/assets">全部物品</a><a class="btn" href="/assets?view=mine">我的借用</a>
-    <button class="btn" id="asset-scan" type="button" {% if not asset_units_enabled %}hidden{% endif %}>扫码登记</button>
     <button class="btn" id="asset-objects" type="button" hidden>使用对象</button><button class="btn" id="asset-takes" type="button" hidden>单件盘点</button>
-    <button class="btn" id="asset-unit-mine" type="button" {% if not asset_units_enabled %}hidden{% endif %}>我的单件／待接收</button>
     <button class="btn" id="asset-campuses" type="button" hidden>校区管理</button>
     <button class="btn" id="asset-categories" type="button" hidden>类别管理</button>
     <button class="btn primary" id="asset-create" type="button" hidden>新增物品</button>
@@ -27,7 +25,17 @@
     <button class="btn" type="submit">筛选</button>
   </form>
   <div id="asset-content" aria-busy="true"></div>
+  <section id="asset-mine-units" class="asset-section asset-unit-drawer" aria-labelledby="asset-unit-title" hidden></section>
 </section>
+<dialog id="asset-add-dialog" class="asset-dialog" aria-labelledby="asset-add-title">
+  <header class="asset-heading"><h2 id="asset-add-title">新增物品</h2><button class="btn" id="asset-add-close" type="button">取消</button></header>
+  <p>选择登记方式，核对资料和数量后再保存。</p>
+  <div class="asset-actions">
+    <button class="btn primary" id="asset-add-manual" type="button" hidden>手动填写</button>
+    <button class="btn" id="asset-scan" type="button" {% if not asset_units_enabled %}hidden{% endif %}>扫码登记</button>
+  </div>
+  <p id="asset-add-guidance" class="asset-muted"></p>
+</dialog>
 <dialog id="asset-dialog" aria-labelledby="asset-dialog-title" class="asset-dialog">
   <form id="asset-form">
     <header class="asset-heading"><h2 id="asset-dialog-title">资产操作</h2><button class="btn" type="button" id="asset-close">取消</button></header>
