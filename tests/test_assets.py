@@ -43,6 +43,11 @@ class AssetsTest(unittest.TestCase):
         self.other = self.save("campuses", {"name": "合成西校区"})
         self.item = self.save("items", {"name": "合成电机", "unit": "个", "kind": "returnable"})
         self.screw = self.save("items", {"name": "合成螺丝", "unit": "颗", "kind": "consumable"})
+        # This suite exercises pre-migration quantity inventory and PR #45 safeguards.
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            db.execute("UPDATE asset_items SET tracking='legacy' WHERE id=?", (self.item,))
+            db.commit()
 
     def client(self, uid):
         client = app_module.app.test_client()
@@ -412,7 +417,7 @@ class AssetsTest(unittest.TestCase):
             queries = []
             db.set_trace_callback(queries.append)
             totals(db)
-            self.assertEqual(len([q for q in queries if q.startswith("SELECT")]), 3)
+            self.assertEqual(len([q for q in queries if q.startswith("SELECT")]), 4)
         # Snapshots are strings, not links to mutable member display data.
         json.dumps(records, ensure_ascii=False)
 

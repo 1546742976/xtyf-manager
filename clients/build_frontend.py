@@ -144,7 +144,7 @@ def build(output=DIST):
         if not path.is_file(): continue
         destination = output / "static" / path.relative_to(ROOT / "static")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if path.suffix == ".js":
+        if path.suffix == ".js" and "vendor" not in path.relative_to(ROOT / "static").parts:
             content = adapt_script(path.read_text(encoding="utf-8-sig"))
             if path.name == "business-ui.js":
                 start, end = content.index('  async function download('), content.index('  document.addEventListener("click"')

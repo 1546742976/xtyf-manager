@@ -8,11 +8,11 @@ const {recordFailure,cleanupResources}=require('./diagnostics.cjs');
 const root=path.resolve(__dirname,'../..'),output=path.join(root,'.build-tools/assets-check');
 fs.mkdirSync(output,{recursive:true});
 const server=spawn(process.env.REVIEW_PYTHON||'python',['-B','tests/browser/server.py'],{cwd:root,env:{...process.env,MAIL_MODE:'preview'},stdio:['ignore','pipe','pipe']});
-let browser,page,api,engineName,uiServer;const passed=[],errors=[],accounts=[];
+let browser,page,api,engineName,uiServer,fixtureRoot;const passed=[],errors=[],accounts=[];
 async function main(){
   const base=await new Promise((resolve,reject)=>{
     let log='';const timer=setTimeout(()=>reject(Error('server timeout '+log)),30000);
-    server.stderr.on('data',d=>log+=d);server.stdout.on('data',d=>{log+=d;const m=log.match(/BROWSER_URL=(\S+)/);if(m){clearTimeout(timer);resolve(m[1]);}});
+    server.stderr.on('data',d=>log+=d);server.stdout.on('data',d=>{log+=d;const rootMatch=log.match(/BROWSER_ROOT=(.+)/);if(rootMatch)fixtureRoot=rootMatch[1].trim();const m=log.match(/BROWSER_URL=(\S+)/);if(m){clearTimeout(timer);resolve(m[1]);}});
     server.once('exit',code=>{clearTimeout(timer);reject(Error('server exited '+code+' '+log));});
   });
   api=await request.newContext({baseURL:base});
@@ -55,10 +55,15 @@ async function main(){
     const granted=(await (await api.get('/api/admin/permissions')).json()).members.find(m=>m.id===member).permissions;
     assert(granted.includes('assets.manage'));assert(granted.includes('invoices.manage'));
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
-    await page.locator('#asset-create').click();
+    await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();
     await page.locator('#asset-form [name=name]').fill('测试电机 '+label);
     await page.locator('#asset-form [name=specification]').fill('3508 <测试>');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    // This suite retains the pre-migration quantity/loan contract. New unit behavior
+    // is tested separately in assets_serialized; only this disposable DB is seeded.
+    const legacy=(await(await api.get('/api/assets/items?q='+encodeURIComponent('测试电机 '+label))).json()).items[0];
+    execFileSync(process.env.REVIEW_PYTHON||'python',['-c',"import pathlib,sqlite3,sys; p=pathlib.Path(sys.argv[1]); assert p.name=='data.db' and p.parent.name.startswith('xtyf-browser-review-'); db=sqlite3.connect(p); db.execute(\"UPDATE asset_items SET tracking='legacy' WHERE id=?\",(int(sys.argv[2]),)); db.commit(); db.close()",path.join(fixtureRoot,'data.db'),String(legacy.id)]);
+    await page.reload();await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.getByRole('link',{name:'测试电机 '+label,exact:true}).click();
     await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     const id=Number(new URL(page.url()).searchParams.get('id'));
@@ -96,6 +101,7 @@ async function main(){
     await page.locator('#asset-content [data-action=return]').first().click();
     await page.locator('#asset-form [name=quantity]').fill('1');await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成归还验证');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.locator('#asset-content .asset-card').filter({has:page.getByRole('link',{name:'测试电机 '+label,exact:true})}).getByText('未还 2 个',{exact:true}).waitFor();
+    await page.locator('#asset-content[aria-busy=false]').waitFor();
     await page.goto(base+`/assets/detail?id=${id}`);await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.reload();await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await eastCard.getByRole('button',{name:'校区调拨',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('2');
@@ -116,9 +122,10 @@ async function main(){
     await page.locator('#asset-categories').click();await page.getByRole('button',{name:'新增类别',exact:true}).click();
     await page.getByLabel('名称',{exact:true}).fill('登记分类 '+label);await page.locator('#asset-save').click();
     await page.locator('#asset-dialog').waitFor({state:'hidden'});
-    await page.locator('#asset-create').click();await page.getByLabel('名称',{exact:true}).fill('自助耗材 '+label);
+    await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();await page.getByLabel('名称',{exact:true}).fill('自助耗材 '+label);
     await page.locator('#asset-form [name=category]').selectOption('登记分类 '+label);
     await page.locator('#asset-form [name=kind]').selectOption('consumable');
+    await page.locator('#asset-form [name=consumable_mode]').selectOption('quantity');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.getByRole('link',{name:'自助耗材 '+label,exact:true}).waitFor();
     const supply=(await (await api.get('/api/assets/items?q='+encodeURIComponent('自助耗材 '+label))).json()).items[0];
@@ -127,7 +134,10 @@ async function main(){
     const ordinaryContext=await browser.newContext({...options,storageState:await ordinaryApi.storageState()});
     page=await ordinaryContext.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
     await page.goto(base+'/assets');await page.getByRole('link',{name:'自助耗材 '+label,exact:true}).waitFor();
-    assert.equal(await page.locator('#asset-create').isVisible(),false);
+    await page.locator('#asset-create').click();
+    assert.equal(await page.locator('#asset-add-manual').isVisible(),false);
+    await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill('M:'+supply.id);await page.locator('#asset-scan-raw').press('Enter');
+    await page.locator('#scan-receive').waitFor();assert.equal(await page.locator('#scan-create').count(),0);await page.locator('#asset-scan-close').click();
     assert.equal(await page.locator('#asset-categories').isVisible(),false);
     const supplyCard=page.locator('.asset-card').filter({has:page.getByRole('link',{name:'自助耗材 '+label,exact:true})});
     await page.locator('#asset-filter [name=campus_id]').selectOption(String(campus));

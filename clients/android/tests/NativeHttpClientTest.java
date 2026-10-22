@@ -44,6 +44,12 @@ public final class NativeHttpClientTest {
             check(!NativeHttpClient.probeRedirectAllowed(URI.create("http://example.com/a"), URI.create(destination)), "Reject unapproved probe redirect " + destination);
         check(!NativeHttpClient.probeRedirectAllowed(URI.create("https://example.com/a"), URI.create("http://example.com/b")), "Reject HTTPS downgrade");
         check(WebsitePolicy.trusted("https://example.com", "https://example.com/account#avatar"), "Website supports same origin fragments");
+        check(WebsitePolicy.camera("https://example.com", "https://example.com/assets", "https://example.com"), "Camera belongs to configured HTTPS page");
+        check(WebsitePolicy.camera("https://appassets.androidplatform.net", "https://appassets.androidplatform.net/assets", "https://appassets.androidplatform.net"), "Packaged secure page may request camera");
+        check(!WebsitePolicy.camera("http://example.com", "http://example.com/assets", "http://example.com"), "HTTP camera stays disabled");
+        check(!WebsitePolicy.camera("https://example.com", "https://evil.example/assets", "https://example.com"), "Navigated foreign page cannot keep camera authority");
+        for (String origin : new String[]{"https://evil.example", "https://example.com:444", "http://example.com", "file:///tmp/x", "null"})
+            check(!WebsitePolicy.camera("https://example.com", "https://example.com/assets", origin), "Reject untrusted camera requester " + origin);
         check(WebsitePolicy.blob("https://example.com", "blob:https://example.com/file-id"), "Accept this document origin Blob");
         for (String value : Arrays.asList("https://evil.example/file", "https://example.com:8443/file", "https://user@example.com/file", "https://appassets.androidplatform.net/index.html", "file:///tmp/a", "blob:https://example.com/file"))
             check(!WebsitePolicy.trusted("https://example.com", value), "Reject foreign or privileged website URL " + value);
