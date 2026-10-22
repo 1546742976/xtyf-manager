@@ -24,7 +24,7 @@
       </div>
       <button type="button" class="btn collab-new-messages" id="collab-new-messages" hidden>查看新消息</button>
       <form id="collab-reply" class="collab-composer">
-        <label for="collab-body">回复话题</label><textarea id="collab-body" name="body" maxlength="5000" rows="3" placeholder="写下进展或想法…"></textarea>
+        <label for="collab-body">回复话题</label><textarea id="collab-body" name="body" maxlength="20000" data-count-text rows="3" placeholder="写下进展或想法…"></textarea>
         <div class="collab-composer-tools"><label class="btn collab-file-button">添加附件<input type="file" multiple id="collab-files" aria-label="添加回复附件"></label><span class="collab-limit">最多 5 个文件，单个 100 MiB、合计 180 MiB</span><button type="submit" class="btn primary">发送</button></div>
         <ul class="collab-selected-files" data-selected-files></ul><progress data-upload-progress max="100" value="0" hidden aria-label="附件上传进度"></progress>
         <p class="collab-status" data-send-status role="status" aria-live="polite"></p><button type="button" class="btn" data-send-retry hidden>核对结果并重试</button>
@@ -37,7 +37,7 @@
   <header><h2 id="collab-topic-dialog-title">新建话题</h2><button class="btn" type="button" data-topic-close aria-label="关闭新建话题">关闭</button></header>
   <form id="collab-topic-form" class="collab-composer"><div class="collab-topic-fields">
     <label for="collab-new-title">话题标题<input id="collab-new-title" name="title" required maxlength="120" placeholder="让大家一眼了解讨论内容"></label>
-    <label for="collab-new-body">正文<textarea id="collab-new-body" name="body" maxlength="5000" rows="6" placeholder="说明背景、问题或希望推进的事情…"></textarea></label>
+    <label for="collab-new-body">正文<textarea id="collab-new-body" name="body" maxlength="20000" data-count-text rows="6" placeholder="说明背景、问题或希望推进的事情…"></textarea></label>
     <div class="collab-composer-tools"><label class="btn collab-file-button">添加附件<input type="file" multiple id="collab-new-files" aria-label="添加话题附件"></label><span class="collab-limit">最多 5 个文件，单个 100 MiB、合计 180 MiB</span></div>
     <ul class="collab-selected-files" data-selected-files></ul><progress data-upload-progress max="100" value="0" hidden aria-label="附件上传进度"></progress>
     <p class="collab-status" data-send-status role="status" aria-live="polite"></p><button type="button" class="btn" data-send-retry hidden>核对结果并重试</button></div>

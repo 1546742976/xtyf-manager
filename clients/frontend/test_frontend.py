@@ -64,6 +64,12 @@ class FrontendTests(unittest.TestCase):
         for name in ('index.html','page-runtime.js','external.html','vendor/bootstrap/bootstrap.min.css','vendor/bootstrap-icons/fonts/bootstrap-icons.woff2','vendor/pdfjs/pdf.mjs','vendor/pdfjs/pdf.worker.mjs'):
             self.assertIn(name,self.manifest['files'])
 
+    def test_public_bootstrap_is_not_duplicated_but_asset_scanner_remains_packaged(self):
+        self.assertNotIn('static/vendor/bootstrap/bootstrap.min.css', self.manifest['files'])
+        self.assertNotIn('static/vendor/bootstrap-icons/bootstrap-icons.min.css', self.manifest['files'])
+        self.assertIn('static/vendor/asset-tools/zxing.js', self.manifest['files'])
+        self.assertIn('static/vendor/asset-tools/barcode.js', self.manifest['files'])
+
     def test_templates_have_no_remote_scripts_styles_or_security_shims(self):
         for name,template in self.templates.items():
             self.assertNotRegex(template,r'<(?:script|link)\b[^>]*(?:src|href)=["\']https?://',name)

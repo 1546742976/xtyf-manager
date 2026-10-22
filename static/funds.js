@@ -95,7 +95,7 @@ function reload(){
         '<td>'+r.record_date+'</td>'+
         '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">待审核</span> '+(CAN_REVIEW?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>')+'</td>'+
         '<td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+(r.notes||'').replace(/"/g,'&quot;')+'">'+escText(r.notes||'-')+'</td>'+
-        '<td><button class="btn btn-outline-secondary btn-sm" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button></td>'+
+        '<td><button class="btn btn-outline-secondary btn-sm" aria-label="编辑第 '+r.id+' 条记录" title="编辑记录" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" aria-label="删除第 '+r.id+' 条记录" title="删除记录" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button></td>'+
         '</tr>';
     }).join('') : '';
   }).catch(function(e){ fundsToast('记录加载失败：'+e.message,'error'); });
@@ -231,6 +231,7 @@ function loadChart(type, btn){
   chartAbort = new AbortController();
   document.querySelectorAll('#t-charts .btn-group .btn').forEach(function(b){ b.classList.remove('active'); });
   if(btn) btn.classList.add('active');
+  document.getElementById('chartImg').hidden = true;
   document.getElementById('chartImg').style.display = 'none';
   document.getElementById('chartEmp').textContent = '正在生成图表…';
   document.getElementById('chartEmp').style.display = 'block';
@@ -238,18 +239,20 @@ function loadChart(type, btn){
     if (generation !== chartRequest) return;
     if(j.code===0){
       document.getElementById('chartImg').src = j.data;
+      document.getElementById('chartImg').hidden = false;
       document.getElementById('chartImg').style.display = 'inline';
       document.getElementById('chartEmp').style.display = 'none';
     } else {
       document.getElementById('chartEmp').textContent = j.msg || '图表加载失败，请重新点击图表类型重试';
       document.getElementById('chartEmp').style.display = 'block';
-      document.getElementById('chartImg').style.display = 'none';
+      document.getElementById('chartImg').hidden = true;
+  document.getElementById('chartImg').style.display = 'none';
     }
   }).catch(function(e){
     if (generation !== chartRequest) return;
     document.getElementById('chartEmp').textContent='图表加载失败：'+e.message;
     document.getElementById('chartEmp').style.display='block';
-    document.getElementById('chartImg').style.display='none';
+    document.getElementById('chartImg').hidden=true;document.getElementById('chartImg').style.display='none';
   });
 }
 

@@ -12,8 +12,8 @@
   <div class="split member-entry-layout">
     <form id="member-form" class="form-grid member-create-form" aria-labelledby="member-create-title">
       <h3 class="span-2 member-form-title" id="member-create-title">添加单个成员</h3>
-      <label>姓名<input name="name" required></label>
-      <label>用户名（默认姓名）<input name="username"></label>
+      <label>姓名<input name="name" maxlength="64" required></label>
+      <label>用户名（默认姓名）<input name="username" maxlength="64"></label>
       <label{% if me.role != 'admin' %} class="span-2"{% endif %}>初始密码（留空随机生成）<input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位"></label>
       {% if me.role == 'admin' %}
       <label>角色<select name="role"><option value="member">成员</option><option value="manager">项管</option><option value="admin">管理员</option></select></label>

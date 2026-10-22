@@ -5,7 +5,7 @@ const memberFilters = { q: "", group: "", project: "", role: "", showDeleted: fa
 
 function roleSelect(member) {
   const disabled = Number(member.id) === Number(state.me?.id) ? "disabled" : "";
-  return `<select class="role-select" data-role-id="${Number(member.id)}" ${disabled}><option value="member" ${member.role === "member" ? "selected" : ""}>成员</option><option value="manager" ${member.role === "manager" ? "selected" : ""}>项管</option><option value="admin" ${member.role === "admin" ? "selected" : ""}>管理员</option></select>`;
+  return `<select aria-label="${esc(member.name)}的系统角色" class="role-select" data-role-id="${Number(member.id)}" ${disabled}><option value="member" ${member.role === "member" ? "selected" : ""}>成员</option><option value="manager" ${member.role === "manager" ? "selected" : ""}>项管</option><option value="admin" ${member.role === "admin" ? "selected" : ""}>管理员</option></select>`;
 }
 
 function filteredMembers() {
@@ -107,8 +107,8 @@ function editMemberProfile(member) {
     `<div class="modal-head"><h2>编辑成员：${esc(member.name)}</h2><button class="btn ghost sm" type="button" data-close>关闭</button></div>
     <form id="member-profile-form" class="form-grid">
       <label>成员 ID（不可更改）<input value="${Number(member.id)}" readonly disabled></label>
-      <label>姓名（管理员维护）<input name="name" value="${esc(member.name)}" maxlength="80" required></label>
-      <label>登录用户名<input name="username" value="${esc(member.username)}" maxlength="64" required autocomplete="off"></label>
+      <label>姓名（管理员维护）<input name="name" maxlength="64" value="${esc(member.name)}" maxlength="80" required></label>
+      <label>登录用户名<input name="username" maxlength="64" value="${esc(member.username)}" maxlength="64" required autocomplete="off"></label>
       ${isSelf
         ? '<p class="ux-note span-2">不能调整自己的系统角色或停用自己的账号；修改本人密码请到「账户设置」。</p>'
         : `<label>系统角色<select name="role">${roleOptions}</select></label>
@@ -221,8 +221,11 @@ function bindMemberForms() {
     if (!form.reportValidity()) return;
     const result = await api("/api/members/import", { text: new FormData(form).get("text"), project_ids: checkedValues(form, "project_ids") });
     if (result?.ok) {
-      alert(`导入完成，共 ${result.created.length} 人。请逐人私下交付凭据，首次登录必须改密：\n${result.created.join("\n")}`);
-      form.reset();
+      let box = document.getElementById("member-import-result");
+      if (!box) {box=document.createElement("section");box.id="member-import-result";box.setAttribute("aria-live","polite");form.after(box);}
+      box.innerHTML=`<h3>导入结果：成功 ${result.created.length} 人，失败 ${(result.failures||[]).length} 行</h3><p>请通过可信渠道逐人交付凭据，首次登录必须改密。</p><pre>${esc(result.created.join("\n"))}</pre>`+
+        ((result.failures||[]).length?`<table><thead><tr><th>行号</th><th>失败原因</th></tr></thead><tbody>${result.failures.map(item=>`<tr><td>${Number(item.line)}</td><td>${esc(item.reason)}</td></tr>`).join("")}</tbody></table>`:"");
+      if (!(result.failures||[]).length) form.reset();
       loadMembers();
     } else form.querySelector(".form-message").textContent = result?.error || "导入失败";
   });

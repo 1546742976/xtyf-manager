@@ -43,7 +43,7 @@ function taskForm(task) {
     others = state.tasks.filter((item) => Number(item.id) !== Number(task.id));
   if (!editable) return taskReadOnly(task);
   return `<form id="task-form" class="task-settings"><input type="hidden" name="version" value="${Number(task.version || 0)}">
-    <label>标题<input name="title" value="${esc(task.title)}" required></label>
+    <label>标题<input name="title" maxlength="200" value="${esc(task.title)}" required></label>
     <div class="grid-2"><label>负责人（主负责人）<select name="owner_id"${ownershipLocked ? " disabled" : ""}>${memberOptions(members, task.owner_id)}</select></label><label>造车组别<select name="project_id"${ownershipLocked ? " disabled" : ""}>${options(state.projects, task.project_id, "未选择")}</select></label></div>
     <fieldset${ownershipLocked ? " disabled" : ""}><legend>参与成员（可多选）</legend><p class="field-help">${ownershipLocked ? "负责人和参与成员由管理员或项管调整。" : "负责人和参与成员都可编辑任务设置。"}</p>${choiceGrid("participant_ids", members, task.participant_ids || [], memberLabel)}</fieldset>
     <div class="grid-2"><label>优先级<select name="priority">${state.priorities.map((value) => `<option ${value === task.priority ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>状态<select name="status">${state.statuses.map((value) => `<option ${value === task.status ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label></div>
@@ -61,7 +61,7 @@ function taskForm(task) {
     <div class="task-date-guidance"><p class="field-help" data-task-date-note aria-live="polite"></p><button class="btn ghost sm" type="button" data-task-date-reset>重置为依赖时间</button></div>
     <fieldset><legend>其他前置任务（支持多选）</legend>${choiceGrid("predecessor_ids", others, task.predecessor_ids || [], taskLabel)}</fieldset>
     ${(task.dependency_warnings || []).length ? `<div class="warning-box" role="status"><strong>依赖提醒</strong><ul>${task.dependency_warnings.map((item) => `<li>${esc(item)}</li>`).join("")}</ul></div>` : ""}
-    <label>说明<textarea name="detail" rows="3">${esc(task.detail)}</textarea></label><label>本次更新备注<input name="note" placeholder="选填，记录本次调整原因"></label>
+    <label>说明<textarea name="detail" maxlength="10000" data-count-text rows="3">${esc(task.detail)}</textarea></label><label>本次更新备注<input name="note" placeholder="选填，记录本次调整原因"></label>
     <p id="task-form-message" class="form-message" role="alert"></p><div class="modal-actions">${isManagement() ? '<button type="button" class="btn danger" data-delete-task>删除任务</button>' : ""}<button class="btn primary" type="submit">保存更新</button></div>
   </form>`;
 }
@@ -102,7 +102,7 @@ function taskModalShell(task, navigation = {}) {
     ${progressSection(task)}
     ${taskBlockerSection(task)}
     <section class="modal-section" id="task-topic-links"></section>
-    <section class="modal-section"><h3>截图附件</h3>${canEdit(task) ? '<form id="attachment-form" class="attachment-form"><label>选择图片（PNG / JPEG / WebP；每张不超过 10 MiB，最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple required></label><label>说明<input name="description" maxlength="300" placeholder="截图内容或验收场景"></label><button class="btn" type="submit">上传截图</button><p class="form-message" role="alert"></p></form>' : ""}<div id="attachment-list"></div></section>
+    <section class="modal-section"><h3>截图附件</h3>${canEdit(task) ? '<form id="attachment-form" class="attachment-form"><label>选择图片（PNG / JPEG / WebP；每张不超过 10 MiB，最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple required></label><label>说明<input name="description" maxlength="500" data-count-text placeholder="截图内容或验收场景"></label><button class="btn" type="submit">上传截图</button><p class="form-message" role="alert"></p></form>' : ""}<div id="attachment-list"></div></section>
     <section class="modal-section"><h3>版本记录</h3><div id="task-revisions"><p class="empty">正在加载版本记录…</p></div></section>
     <section class="modal-section"><h3>动态与备注</h3><div id="task-logs" class="logs"><p class="empty">正在加载动态…</p></div></section>`;
 }
