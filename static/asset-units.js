@@ -23,6 +23,7 @@
   }
   async function refresh(){
     const seq=++sequence;drawer.setAttribute('aria-busy','true');status('正在读取实物记录…');$('asset-unit-content').inert=true;$('asset-unit-actions').inert=true;
+    if(mine&&$('asset-mine-summary'))$('asset-mine-summary').textContent='正在读取全部校区借用汇总…';
     try{
       meta=await api('units/catalog');
       if(seq!==sequence)return;
@@ -32,14 +33,19 @@
       const data=await api('units?'+new URLSearchParams({page,item_id:item?.id||'',mine:mine?'1':'',campus_id:$('asset-unit-campus').value}));
       if(seq!==sequence)return;
       rows=data.units;
+      if(mine&&$('asset-mine-summary')){
+        const s=data.summary;
+        $('asset-mine-summary').textContent=s?`全部校区：按数量借用 ${s.quantity_loans} 单 · 未还单件 ${s.unit_loans} 件 · 待接收 ${s.pending_receipts} 件`:'当前服务器暂不提供借用汇总。';
+      }
       $('asset-unit-campus').innerHTML=options(core.catalog.campuses,$('asset-unit-campus').value,'全部校区');
       $('asset-unit-content').innerHTML=(item?`<p><a href="/assets/detail?id=${item.id}">打开原详情与全部流水</a> · 总量由在册单件统计，报废、遗失不计入。</p>`:'')+
         (data.can_manage&&item?btn('receive','批量建档'):'')+
         '<div class="asset-grid">'+rows.map(u=>`<article class="asset-card"><label><input type="checkbox" data-unit-select="${u.id}" ${selected.has(u.id)?'checked':''}> 选择 U:${u.id}</label><h3>${esc(u.item_name)}</h3><p>${esc(u.serial||'未填写厂家 SN')} · ${esc(u.campus_name)}</p><p>${esc(u.location||'未填写位置')}</p><p>${labels[u.lifecycle]} · ${labels[u.health]} · ${esc(u.keeper_name||'仓库')}</p><p>${esc(u.object_name||'未安装')} ${esc(u.position)}</p>${u.receiver_id?`<p>待接收成员 #${u.receiver_id}；确认前仍由原保管人负责。</p>`:''}${btn('history','历史',u.id)}</article>`).join('')+'</div>'+
+        (rows.length?'':'<p class="asset-empty">当前校区筛选下没有保管或待接收的单件。</p>')+
         `<div class="asset-pager">${page>1?btn('prev','上一页'):''}<span>第 ${page} 页 · ${data.total} 件</span>${page*20<data.total?btn('next','下一页'):''}</div>`;
       $('asset-unit-actions').innerHTML=Object.entries(actions).filter(([a])=>data.can_manage||!['repair','healthy','retire','lost','recover','correct'].includes(a)).map(([a,l])=>btn(a,l)).join('')+btn('clear','清空选择')+btn('print','打印标签');
       selectedSummary();status('扫码只选择单件，执行操作前须核对并确认。');
-    }catch(e){status(e.message);}finally{if(seq===sequence){drawer.setAttribute('aria-busy','false');$('asset-unit-content').inert=false;$('asset-unit-actions').inert=false;}}
+    }catch(e){if(seq===sequence){status(e.message);if(mine&&$('asset-mine-summary'))$('asset-mine-summary').textContent='借用汇总读取失败，请刷新重试。';}}finally{if(seq===sequence){drawer.setAttribute('aria-busy','false');$('asset-unit-content').inert=false;$('asset-unit-actions').inert=false;}}
   }
   async function migration(){
     $('asset-unit-actions').replaceChildren();

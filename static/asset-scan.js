@@ -19,28 +19,29 @@
   function close(){dialog.close();opener?.focus();}
   $('asset-scan').onclick=()=>{$('asset-add-dialog').close();opener=$('asset-create');dialog.showModal();queue();if(!matchMedia('(pointer:coarse)').matches)$('asset-scan-raw').focus();};
   $('asset-scan-close').onclick=close;
+  dialog.addEventListener('close',()=>{sequence++;resolved=null;});
   async function resolve(raw){
     const own=++sequence;resolved=null;$('asset-scan-preview').replaceChildren();status('正在识别…');
     try{
-      const value=await core.api('scan/resolve',{raw});if(own!==sequence)return;
+      const value=await core.api('scan/resolve',{raw});if(own!==sequence)return {status:'stale'};
       resolved=value;const p=value.parsed;
       const mode=$('asset-scan-mode').value;
       if(mode==='units'){
         if(p.type!=='unit')throw Error('请扫描具体设备标签；物料编号不能替代单件身份');
-        await window.AssetUnits.select(value.unit);queue();status('单件已加入清单，尚未执行操作。');$('asset-scan-raw').value='';return;
+        await window.AssetUnits.select(value.unit);if(own!==sequence)return {status:'stale'};queue();status('单件已加入清单，尚未执行操作。');$('asset-scan-raw').value='';return {status:'success'};
       }
       if(mode==='receipts'){
         if(p.type!=='package')throw Error('请扫描采购包装标签');
         if(value.item){
           if(packages.has(p.raw))throw Error('本清单已包含同一标签，不自动累计数量');
           if(packages.size>=20)throw Error('每批最多 20 个包装');
-          packages.set(p.raw,value);queue();status(value.history.length?'此包装曾登记，提交前需明确填写重复收货原因':'已加入包装清单；确认前不入库');$('asset-scan-raw').value='';return;
+          packages.set(p.raw,value);queue();status(value.history.length?'此包装曾登记，提交前需明确填写重复收货原因':'已加入包装清单；确认前不入库');$('asset-scan-raw').value='';return {status:'success'};
         }
       }
       if(p.type==='unit'){
         status('已找到单件；识别不会改变库存。');
         $('asset-scan-preview').innerHTML=`<p>${esc(value.item.name)} · 单件 #${value.unit.id}</p><button class="btn" id="scan-unit-open">打开单件抽屉</button>`;
-        $('scan-unit-open').onclick=()=>{close();window.AssetUnits?.show(value.item.id,value.unit.id);};return;
+        $('scan-unit-open').onclick=()=>{close();window.AssetUnits?.show(value.item.id,value.unit.id);};return {status:'success'};
       }
       status(p.quantity_error||'已识别，请核对实际数量和校区后登记。');
       $('asset-scan-preview').innerHTML=`<p>商品：${esc(p.code||'内部物料')} · 型号：${esc(p.model||value.item?.specification||'')}</p>`+
@@ -74,10 +75,11 @@
         const found=await core.api('items?q='+encodeURIComponent(p.model||p.code));
         close();core.open('关联已有型号','<p>仅显示名称／规格匹配项；如无匹配，可在物料编辑页关联供应商编号。</p>'+`<label>物料<select name="item_id" required>${options(found.items,'','请选择')}</select></label>`+reason(true),'identifiers',{code:p.code},['item_id']);
       };
-    }catch(e){if(own===sequence)status(e.message);}
+      return {status:'success'};
+    }catch(e){if(own!==sequence)return {status:'stale'};resolved=null;status(e.message);return {status:'failure',message:e.message};}
   }
   $('asset-scan-form').onsubmit=e=>{e.preventDefault();resolve($('asset-scan-raw').value);};
   $('asset-scan-raw').onkeydown=e=>{if(e.key===$('asset-scan-end').value&&!e.shiftKey&&!e.isComposing){e.preventDefault();resolve(e.target.value);}};
   document.addEventListener('asset-operation-saved',e=>{if(e.detail.path==='scan/batch'){packages.clear();queue();}});
-  window.AssetScan={resolve,dialog,get resolved(){return resolved;}};
+  window.AssetScan={resolve,dialog,cancel:()=>{sequence++;resolved=null;},get resolved(){return resolved;}};
 })();

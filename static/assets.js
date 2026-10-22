@@ -74,11 +74,11 @@
   }
   function renderLoans(data){
     loans=data.loans;
-    return `<h2>${mine?'我的未还借用':'当前借用'}</h2>`+(loans.length?`<div class="asset-grid">${loans.map(l=>`<article class="asset-card">
+    return `<h2>${mine?'按数量借用':'当前借用'}</h2>`+(loans.length?`<div class="asset-grid">${loans.map(l=>`<article class="asset-card">
       <h3><a href="/assets/detail?id=${l.item_id}">${esc(l.name)}</a></h3><p>${esc(l.specification)} · ${esc(l.campus_name)}</p>
       <p>${esc(l.member_name)} · ${esc(l.created_at)}</p><strong>未还 ${l.outstanding} ${esc(l.unit)}</strong>
       <div class="asset-actions">${l.member_id===data.member_id?button('return','归还',l.id):''}</div></article>`).join('')}</div>`:
-      '<p class="asset-empty">没有未归还的借用。</p>')+pager('loans',data.page,data.total);
+      `<p class="asset-empty">${mine?'暂无按数量登记的未还借单。':'没有未归还的借用。'}</p>`)+pager('loans',data.page,data.total);
   }
   function renderEvents(data){
     events=data.events;
@@ -121,7 +121,7 @@
           <section class="asset-section">${renderLoans(l)}</section><section class="asset-section">${renderEvents(e)}</section>`;
       }else if(mine){
         const l=await api('loans?mine=1&page='+loanPage);if(own!==generation)return;
-        $('asset-title').textContent='我的借用';$('asset-content').innerHTML=renderLoans(l);
+        $('asset-title').textContent='我的借用';$('asset-content').innerHTML='<p id="asset-mine-summary" role="status">正在读取全部校区借用汇总…</p>'+renderLoans(l);
         if(window.AssetUnits){await window.AssetUnits.loadMine();if(own!==generation)return;}
       }else{
         const search=new URLSearchParams({q:filter.elements.q.value,campus_id:filter.elements.campus_id.value,category:filter.elements.category.value,page:String(listPage)});

@@ -2,15 +2,20 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id),host=$('asset-scan-camera');
-  let reader=null,stream=null,generation=0,last='',busy=false;
+  let reader=null,stream=null,generation=0,last='',busy=null,failed='';
   host.innerHTML='<div class="asset-actions"><button type="button" class="btn" id="asset-camera-start">打开相机</button><button type="button" class="btn" id="asset-camera-stop">停止相机</button><label class="btn">从相册识别<input id="asset-camera-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden></label></div><video id="asset-camera-video" playsinline muted hidden></video><p id="asset-camera-status" role="status"></p>';
   const status=t=>$('asset-camera-status').textContent=t;
-  function stop(){generation++;reader?.reset();reader=null;stream?.getTracks().forEach(t=>t.stop());stream=null;$('asset-camera-video').hidden=true;}
-  async function found(text){
-    if(busy||last===text)return;last=text;busy=true;
-    try{await window.AssetScan.resolve(text);if(navigator.vibrate)navigator.vibrate(50);status('已识别，核对后才会登记；可继续扫描其他标签。');}
-    finally{busy=false;}
+  const retry=document.createElement('button');retry.id='asset-camera-retry';retry.type='button';retry.className='btn';retry.textContent='重试此标签';retry.hidden=true;host.append(retry);
+  function stop(){generation++;window.AssetScan.cancel();busy=null;failed='';retry.hidden=true;reader?.reset();reader=null;stream?.getTracks().forEach(t=>t.stop());stream=null;$('asset-camera-video').hidden=true;}
+  async function found(text,explicit=false){
+    if(busy||(!explicit&&last===text))return;last=text;$('asset-scan-raw').value=text;const own=generation,token={};busy=token;retry.disabled=true;
+    try{
+      const result=await window.AssetScan.resolve(text);if(own!==generation||result?.status==='stale')return;
+      if(result?.status!=='success'){failed=text;retry.hidden=false;status((result?.message||'识别失败')+'；可重试此标签。');return;}
+      failed='';retry.hidden=true;if(navigator.vibrate)navigator.vibrate(50);status('已识别，核对后才会登记；可继续扫描其他标签。');
+    }finally{if(busy===token){busy=null;retry.disabled=false;}}
   }
+  retry.onclick=()=>failed&&found(failed,true);
   $('asset-camera-start').onclick=async()=>{
     stop();last='';const own=generation;
     if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){status('当前页面不能打开相机，请使用 HTTPS、相册图片或手动输入。');return;}
@@ -26,18 +31,19 @@
   };
   $('asset-camera-stop').onclick=()=>{stop();status('相机已停止');};
   $('asset-camera-photo').onchange=async e=>{
-    const file=e.target.files[0];if(!file)return;stop();last='';
+    const file=e.target.files[0];if(!file)return;stop();last='';const own=generation;
     if(file.size>10*1024*1024){status('请选择不超过 10 MiB 的图片');return;}
     let source=file;
     if(window.XTYF&&file.handle){
       try{const data=await window.XTYF.invoke('read_selected_image',{handle:file.handle});
         if(data.size>10*1024*1024||typeof data.body!=='string'||data.body.length>14*1024*1024)throw Error('图片过大');
         source=new Blob([Uint8Array.from(atob(data.body),c=>c.charCodeAt(0))],{type:data.mime});
-      }catch(e){status('客户端图片读取失败：'+e.message);return;}
+      }catch(e){if(own===generation)status('客户端图片读取失败：'+e.message);return;}
     }
+    if(own!==generation)return;
     const url=URL.createObjectURL(source);const decoder=new ZXing.BrowserMultiFormatReader();
-    try{await found((await decoder.decodeFromImageUrl(url)).getText());}
-    catch(_){status('没有识别到有效条码，请重拍标签或手动输入原文。');}
+    try{const result=await decoder.decodeFromImageUrl(url);if(own===generation)await found(result.getText());}
+    catch(_){if(own===generation)status('没有识别到有效条码，请重拍标签或手动输入原文。');}
     finally{decoder.reset();URL.revokeObjectURL(url);e.target.value='';}
   };
   $('asset-scan-dialog').addEventListener('close',stop);
