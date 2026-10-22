@@ -6,7 +6,6 @@ import sqlite3
 import threading
 import time
 import unittest
-from unittest.mock import patch
 from uuid import uuid4
 
 from flask.testing import FlaskClient
@@ -174,25 +173,34 @@ class TestSecurityAndStability(unittest.TestCase):
         self.assertEqual(row["申请人"], "'" + injected)
         self.assertEqual(row["备注"], "'\t+SUM(1,2)")
 
-        fake_invoice = {
-            "month": "2026.10", "folder": "未报销", "status": "未报销",
-            "submitter": injected, "seq": 1, "category": "模拟类",
-            "amount": "2.50", "source": "手动", "vendor": "\t@cmd",
-            "date": "", "reimbursed_date": "", "notes": "模拟备注",
-            "invoice_number": "", "filename": "模拟.pdf", "rel_path": "2026.10/未报销/模拟.pdf",
-        }
-        with patch("modules.invoices.scan_invoices", return_value=[fake_invoice]):
+        from modules import invoices
+        rel = '2026.10/未报销/csv-fixture-' + uuid4().hex + '.pdf'
+        path = os.path.join(invoices.BASE_DIR, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as stream:
+            stream.write(b'%PDF-1.4\n%%EOF')
+        previous = invoices.load_meta()
+        metadata = dict(previous)
+        metadata[rel] = {'submitter': injected, 'submitter_id': 0, 'confirmed_vendor': '\t@cmd',
+                         'confirmed_amount_cents': 250, 'rel_path': rel}
+        invoices.save_meta(metadata)
+        try:
+            self.assertEqual(self.admin.post('/invoices/api/refresh').status_code, 200)
             downloaded = self.admin.get("/invoices/api/export/download")
             self.assertEqual(downloaded.status_code, 200)
-            row = next(csv.DictReader(io.StringIO(downloaded.get_data(
-                as_text=True).lstrip("\ufeff"))))
+            row = next(row for row in csv.DictReader(io.StringIO(downloaded.get_data(
+                as_text=True).lstrip("\ufeff"))) if row['文件路径'] == rel)
             self.assertEqual(row["提交人"], "'" + injected)
             self.assertEqual(row["供应商"], "'\t@cmd")
             saved = self.admin.post("/invoices/api/export")
             self.assertEqual(saved.status_code, 200, saved.get_json())
             with open(saved.get_json()["path"], encoding="utf-8-sig", newline="") as stream:
-                persisted = next(csv.DictReader(stream))
+                persisted = next(row for row in csv.DictReader(stream) if row['文件路径'] == rel)
             self.assertEqual(persisted["提交人"], "'" + injected)
+        finally:
+            os.remove(path)
+            invoices.save_meta(previous)
+            self.admin.post('/invoices/api/refresh')
 
 
 class TestSessionSecretPermissions(unittest.TestCase):
