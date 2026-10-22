@@ -721,7 +721,7 @@ class DailyMailTest(unittest.TestCase):
         test_message=render_test_html()
         self.assertIn('123456',verification)
         self.assertIn('30 分钟',verification)
-        self.assertIn('北京时间 08:00',verification)
+        self.assertIn('发送频率',verification)
         self.assertIn('巡天御风',test_message)
         self.assertIn('邮件模板预览成功',test_message)
         for body in (verification,test_message):
@@ -731,3 +731,128 @@ class DailyMailTest(unittest.TestCase):
             self.assertNotIn('<script',body)
             self.assertNotIn('href=',body)
             self.assertNotIn('http://',body)
+
+    def test_member_and_admin_can_set_intervals_but_others_cannot(self):
+        defaults=self.member.get('/api/account/email').get_json()['preferences']
+        self.assertEqual((defaults['morning_interval_hours'],defaults['daily_interval_days'],
+                          defaults['countdown_interval_days']), (72,7,7))
+        self.assertTrue(defaults['morning_enabled'])
+        self.assertFalse(defaults['countdown_enabled'])
+        updated={**defaults,'morning_interval_hours':12,'daily_interval_days':14,
+                 'countdown_interval_days':1,'countdown_enabled':True}
+        self.assertEqual(self.member.post('/api/account/email/preferences',json=updated).status_code,200)
+        self.assertEqual(self.member.get('/api/account/email').get_json()['preferences'],updated)
+        self.assertEqual(self.member.post(f'/api/admin/mail/{self.mid}/preferences',json=defaults).status_code,403)
+        self.assertEqual(self.member.get('/api/admin/mail').status_code,403)
+        for wrong in ({**updated,'morning_interval_hours':13},
+                      {**updated,'morning_interval_hours':0},
+                      {**updated,'morning_interval_hours':180},
+                      {**updated,'daily_interval_days':0},
+                      {**updated,'daily_interval_days':15},
+                      {**updated,'countdown_interval_days':15},
+                      {**updated,'morning_enabled':1},
+                      {**updated,'daily_interval_days':True},
+                      {**updated,'unexpected':1},
+                      {}):
+            with self.subTest(wrong=wrong):
+                self.assertEqual(self.member.post('/api/account/email/preferences',json=wrong).status_code,400)
+        self.assertEqual(self.member.get('/api/account/email').get_json()['preferences'],updated)
+        by_admin={**defaults,'morning_enabled':False,'daily_interval_days':4}
+        self.assertEqual(self.admin.post(f'/api/admin/mail/{self.mid}/preferences',json=by_admin).status_code,200)
+        self.assertEqual(self.member.get('/api/account/email').get_json()['preferences'],by_admin)
+        rows=self.admin.get('/api/admin/mail').get_json()['members']
+        self.assertEqual(next(row['preferences'] for row in rows if row['id']==self.mid),by_admin)
+        self.assertEqual(self.admin.post('/api/admin/mail/999999999/preferences',json=defaults).status_code,404)
+        # Preferences survive the first email binding; verification-code policy stays separate.
+        self.assertEqual(self.member.post('/api/account/email/request',json={'email':'new@example.com'}).status_code,202)
+        self.assertEqual(self.member.get('/api/account/email').get_json()['preferences'],by_admin)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM mail_jobs WHERE member_id=? AND kind='verify'",
+                                         (self.mid,)).fetchone()[0],1)
+
+    def test_half_day_personal_window_and_configurable_team_cadence(self):
+        self.bind()
+        self.task(owner_id=self.mid)
+        morning=self.at.replace(hour=8)
+        prefs=self.member.get('/api/account/email').get_json()['preferences']
+        prefs['morning_interval_hours']=12
+        self.assertEqual(self.member.post('/api/account/email/preferences',json=prefs).status_code,200)
+        enqueue_daily(self.db,morning)
+        first=dict(self.db.execute("SELECT * FROM mail_jobs WHERE member_id=? AND kind='morning'",(self.mid,)).fetchone())
+        sent=[]
+        self.assertEqual(process_job(self.db,first|{'attempts':1},morning,sent.append),'sent')
+        evening=morning.replace(hour=20)
+        self.assertTrue(daily_window(evening,kind='morning_pm'))
+        enqueue_daily(self.db,evening)
+        second=dict(self.db.execute("SELECT * FROM mail_jobs WHERE member_id=? AND kind='morning_pm'",
+                                    (self.mid,)).fetchone())
+        self.assertEqual(process_job(self.db,second|{'attempts':1},evening,sent.append),'sent')
+        self.assertIn('个人任务早报',sent[-1]['Subject'])
+        self.assertEqual(len(sent),2)
+        enqueue_daily(self.db,evening+timedelta(hours=1))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM mail_jobs WHERE member_id=? AND kind='morning_pm'",
+                                         (self.mid,)).fetchone()[0],1)
+        # Team cadence is independent: a seven-day interval blocks the following six evenings.
+        enqueue_daily(self.db,self.at)
+        team=dict(self.db.execute("SELECT * FROM mail_jobs WHERE member_id=? AND kind='daily'",(self.mid,)).fetchone())
+        self.assertEqual(process_job(self.db,team|{'attempts':1},self.at,sent.append),'sent')
+        enqueue_daily(self.db,self.at+timedelta(days=6))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM mail_jobs WHERE member_id=? AND kind='daily'",
+                                         (self.mid,)).fetchone()[0],1)
+        enqueue_daily(self.db,self.at+timedelta(days=7))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM mail_jobs WHERE member_id=? AND kind='daily'",
+                                         (self.mid,)).fetchone()[0],2)
+
+    def test_countdown_opt_in_content_and_target_changes(self):
+        self.bind()
+        p=self.member.get('/api/account/email').get_json()['preferences']
+        p.update(countdown_enabled=True,countdown_interval_days=1,morning_enabled=False,daily_enabled=False)
+        self.assertEqual(self.member.post('/api/account/email/preferences',json=p).status_code,200)
+        db=self.isolated_digest_db()
+        db.execute("UPDATE workspace_countdown SET title=?,target_date=?,version=version+1 WHERE id=1",
+                   ('<目标&测试>','2026-10-20'))
+        db.commit()
+        morning=self.at.replace(hour=8)
+        enqueue_daily(db,morning)
+        job=dict(db.execute("SELECT * FROM mail_jobs WHERE member_id=? AND kind='countdown'",(self.mid,)).fetchone())
+        out=[]
+        self.assertEqual(process_job(db,job|{'attempts':1},morning,out.append),'sent')
+        self.assertIn('剩余 5 天',out[0].get_body(preferencelist=('html',)).get_content())
+        self.assertNotIn('<目标&测试>',out[0].get_body(preferencelist=('html',)).get_content())
+        enqueue_daily(db,morning+timedelta(hours=1))
+        self.assertEqual(db.execute("SELECT count(*) FROM mail_jobs WHERE member_id=? AND kind='countdown'",
+                                    (self.mid,)).fetchone()[0],1)
+        enqueue_daily(db,morning+timedelta(days=1))
+        waiting=dict(db.execute("SELECT * FROM mail_jobs WHERE member_id=? AND kind='countdown' ORDER BY id DESC LIMIT 1",
+                                (self.mid,)).fetchone())
+        db.execute("UPDATE workspace_countdown SET target_date=?,version=version+1 WHERE id=1",('2026-10-30',))
+        db.commit()
+        self.assertEqual(process_job(db,waiting|{'attempts':1},morning+timedelta(days=1),out.append),'skipped')
+        enqueue_daily(db,morning+timedelta(days=2))
+        self.assertEqual(db.execute("SELECT count(*) FROM mail_jobs WHERE member_id=? AND kind='countdown'",
+                                    (self.mid,)).fetchone()[0],3)
+        db.execute("UPDATE workspace_countdown SET target_date=? WHERE id=1",('2026-10-14',))
+        db.commit()
+        enqueue_daily(db,morning+timedelta(days=3))
+        self.assertEqual(db.execute("SELECT count(*) FROM mail_jobs WHERE member_id=? AND kind='countdown'",
+                                    (self.mid,)).fetchone()[0],3)
+
+    def test_preference_change_invalidates_pending_digests_not_verification(self):
+        generation=self.bind()
+        morning=self.at.replace(hour=8)
+        for kind in ('verify','morning','daily','countdown'):
+            queue(self.db,self.mid,kind,morning.date().isoformat(),generation,morning.timestamp(),uuid4().hex)
+        self.db.commit()
+        prefs=self.member.get('/api/account/email').get_json()['preferences']
+        prefs['daily_enabled']=False
+        self.member.post('/api/account/email/preferences',json=prefs)
+        states={row['kind']:row['state'] for row in self.db.execute(
+            "SELECT kind,state FROM mail_jobs WHERE member_id=?",(self.mid,))}
+        self.assertEqual(states['verify'],'pending')
+        self.assertEqual(states['daily'],'skipped')
+        self.assertEqual(states['morning'],'pending')
+        self.assertEqual(states['countdown'],'pending')
+        # Saving the same settings is a no-op for already queued mail.
+        self.member.post('/api/account/email/preferences',json=prefs)
+        self.assertEqual(self.db.execute(
+            "SELECT state FROM mail_jobs WHERE member_id=? AND kind='morning'",(self.mid,)).fetchone()[0],
+            'pending')

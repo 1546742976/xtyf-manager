@@ -21,6 +21,7 @@
   function showPending(){
     const host=$('asset-pending'),retry=$('asset-pending-retry');
     host.hidden=!unresolved;
+    retry.disabled=!!pending;
     if(!unresolved)return;
     const sameUser=catalog&&unresolved.actor_id===catalog.member_id;
     $('asset-pending-message').textContent=sameUser?
@@ -80,14 +81,14 @@
     const saved={actor_id:catalog.member_id,path:'supply-status',request_id:requestId(),body:{item_id:item.id,campus_id:campus.id,
       status:trigger.dataset.supplyStatus,version:campus.stock_version,item_version:item.version}};
     try{rememberPending(saved);}catch(_){status('无法安全保存待确认请求，请检查浏览器会话存储设置后重试。');return;}
-    pending=true;trigger.disabled=true;status('正在更新耗材状态…');
+    pending=true;showPending();trigger.disabled=true;status('正在更新耗材状态…');
     try{
       await api(saved.path,{...saved.body,request_id:saved.request_id});forgetPending();
       if(await load())status('已标记为'+supplyName(saved.body.status)+'。');
     }catch(error){
       const unknown=!error.status||error.status>=500;if(!unknown)forgetPending();
       status(error.message+(unknown?'；结果尚未确认，请重试上次提交。':'；请刷新数据后核对。'));
-    }finally{pending=false;trigger.disabled=false;}
+    }finally{pending=false;trigger.disabled=false;showPending();}
   }
   function renderLoans(data){
     loans=data.loans;
@@ -168,6 +169,7 @@
   }
   function recoverPending(){
     if(!unresolved)return;
+    if(pending){status('原请求仍在处理中，请完成后再重试。');return;}
     if(!catalog||unresolved.actor_id!==catalog.member_id){
       status('待确认记录属于其他登录账号，不能使用当前身份重试。');return;
     }
@@ -331,7 +333,7 @@
         return;
       }
     }
-    pending=true;$('asset-save').disabled=true;$('asset-close').disabled=true;$('asset-form-status').textContent='正在保存…';
+    pending=true;showPending();$('asset-save').disabled=true;$('asset-close').disabled=true;$('asset-form-status').textContent='正在保存…';
     try{
       await api(saved.path,{...saved.body,request_id:saved.request_id});
       forgetPending();
@@ -342,7 +344,7 @@
       if(!unknown)forgetPending();
       $('asset-form-status').textContent=error.message+(unknown?'；结果尚未确认，可重试原请求；刷新或重新打开页面后仍会保留该请求。':'');
       $('asset-form-status').focus();
-    }finally{pending=false;$('asset-save').disabled=false;$('asset-close').disabled=false;}
+    }finally{pending=false;showPending();$('asset-save').disabled=false;$('asset-close').disabled=false;}
   });
   dialog.addEventListener('cancel',e=>{if(pending)e.preventDefault();});
   $('asset-close').onclick=()=>{if(!pending){dialog.close();opener?.focus();}};
