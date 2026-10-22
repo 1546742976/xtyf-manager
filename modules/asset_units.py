@@ -703,7 +703,10 @@ def migrate_item(db, data):
             raise Invalid("核对数量与各校区库存、每笔未还借单不一致", 409)
         unit_ids = []
         for entry in entries:
-            keeper = member(db, loans[entry["loan_id"]]["member_id"]) if entry["loan_id"] else None
+            # Historical custody is not a new borrow. Preserve the old loan's
+            # member ID and name even when that account is disabled or soft-deleted.
+            old_loan = loans[entry["loan_id"]] if entry["loan_id"] else None
+            keeper = {"id": old_loan["member_id"], "name": old_loan["member_name"]} if old_loan else None
             identity = db.execute(
                 "INSERT INTO asset_units(item_id,campus_id,serial,keeper_id,created_at) VALUES(?,?,?,?,?)",
                 (item["id"], entry["campus_id"], entry["serial"], keeper["id"] if keeper else None, stamp()),
