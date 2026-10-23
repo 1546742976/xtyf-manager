@@ -53,14 +53,16 @@
       "deb": {
         "depends": [
           "libwebkit2gtk-4.1-0",
-          "libgtk-3-0"
+          "libgtk-3-0",
+          "gstreamer1.0-plugins-good"
         ],
         "section": "utils"
       },
       "rpm": {
         "depends": [
           "webkit2gtk4.1",
-          "gtk3"
+          "gtk3",
+          "gstreamer1-plugins-good"
         ],
         "release": "1"
       }

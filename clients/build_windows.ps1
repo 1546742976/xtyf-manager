@@ -9,7 +9,7 @@ if ($env:XTYF_USE_SYSTEM_RUST -ne '1') {
     $env:RUSTUP_HOME = Join-Path $projectRoot '.build-tools\rustup'
     $env:PATH = "$env:CARGO_HOME\bin;$env:PATH"
 }
-$env:CARGO_TARGET_DIR = Join-Path $projectRoot '.build-tools\tauri-target-windows'
+if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $projectRoot '.build-tools\tauri-target-windows' }
 $env:npm_config_cache = Join-Path $projectRoot '.build-tools\npm-cache'
 $env:CARGO_HTTP_MULTIPLEXING = 'true'
 if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) { throw 'Rust is missing. Install the pinned Rust 1.99.1 toolchain.' }

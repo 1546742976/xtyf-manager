@@ -15,6 +15,7 @@ mod updates;
 mod native_updates;
 mod website;
 mod pdf_save;
+mod camera;
 
 struct Session {
     client: Client,

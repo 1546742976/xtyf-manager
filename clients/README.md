@@ -10,7 +10,9 @@ Android 的 JKS 与配套密码文件是发布凭证，必须一起离线备份�
 
 Android 构建报告 `android-build.json` 记录实际验签、对齐结果及证书 SHA-256。统一发布会对比上一份报告：证书变化默认失败；只有明确选择 `--allow-signer-change` 才放行并标记，通常将无法覆盖升级旧安装。旧报告没有证书指纹时标记 `no-baseline`，不表示已验证签名连续性。包内校验不等于目标设备运行验收。
 
-- Windows 10/11 x64：`dist/clients/windows/XTYF-Manager-Setup-<版本>-x64.exe`。NSIS 安装器提供快捷方式和卸载入口；缺少 WebView2 时联网补齐运行时。EXE 未使用发布者证书签名。
+- Windows 10/11 x64 / Windows 11 ARM64：`dist/clients/windows/XTYF-Manager-Setup-<版本>-x64.exe`。NSIS 安装器提供快捷方式和卸载入口；缺少 WebView2 时联网补齐运行时。EXE 未使用发布者证书签名。
+- Windows ARM64 安装包：`XTYF-Manager-Setup-<版本>-arm64.exe`，使用 ARM64 原生程序及 WebView2。x64 主机仅检查其 PE 架构、安装载荷及嵌入资源，不执行 ARM64 程序。
+- Ubuntu 22.04 amd64：`XTYF-Manager-<版本>-amd64.deb`；Fedora ARM64：`XTYF-Manager-<版本>-aarch64.rpm`。
 - Android 8.0+：`dist/clients/android/XTYF-Manager-<版本>.apk`。保留包名 `online.skywalker.manager` 和既有发布密钥，递增 versionCode 后覆盖安装。返回使用系统返回键或手势。
 - Ubuntu 22.04 ARM64：`sudo apt install ./XTYF-Manager-<版本>-arm64.deb`。
 - Fedora 44/45 x86_64：`sudo dnf install ./XTYF-Manager-<版本>-x86_64.rpm`。
@@ -70,7 +72,7 @@ python clients/release.py --dry-run
 python clients/release.py
 ```
 
-当前脚本默认递增一次补丁版本和 Android versionCode；用户确认其他新版本时，预览和正式构建均添加 `--version X.Y.Z`。指定的新版本必须高于已发布版本，Android versionCode 仍只递增一次。先检查构建环境，再构建一次共享前端，四个平台复用同一份资源清单。四个安装包全部构建并检查通过后才替换报告、发布新版和清理旧包；失败恢复版本及原报告，保留旧安装包。
+当前脚本默认递增一次补丁版本和 Android versionCode；用户确认其他新版本时，预览和正式构建均添加 `--version X.Y.Z`。指定的新版本必须高于已发布版本，Android versionCode 仍只递增一次。先检查构建环境，再构建一次共享前端，七种产物复用同一份资源清单。七个安装包全部构建并检查通过后才替换报告、发布新版和清理旧包；失败恢复版本及原报告，保留旧安装包。
 
 用户明确要求保持当前版本重新生成时，使用显式同版本重建入口；例如当前已发布版本为 1.0.11：
 
@@ -79,7 +81,7 @@ python clients/release.py --version 1.0.11 --rebuild-current --dry-run
 python clients/release.py --version 1.0.11 --rebuild-current
 ```
 
-该入口要求配置、已有发布报告及各平台版本元数据一致，不修改版本号、Android versionCode 或版本文件内容。四包完整校验后，旧安装包、报告、校验和及版本元数据快照保留在 `dist/clients/.rebuild-backups/`，随后逐个原子替换交付物；替换失败恢复原交付物并保留备份。新报告记录 `releaseMode`、源码提交及是否存在已跟踪未提交修改、`previousReleaseBackup`，用于区分相同版本的不同构建。备份目录由报告指明，不随旧安装包清理而删除。
+该入口要求配置、已有发布报告及各平台版本元数据一致，不修改版本号、Android versionCode 或版本文件内容。七包完整校验后，旧安装包、报告、校验和及版本元数据快照保留在 `dist/clients/.rebuild-backups/`，随后逐个原子替换交付物；替换失败恢复原交付物并保留备份。新报告记录 `releaseMode`、源码提交及是否存在已跟踪未提交修改、`previousReleaseBackup`，用于区分相同版本的不同构建。备份目录由报告指明，不随旧安装包清理而删除。
 
 同版本重建不会触发按版本号检测的升级，需要手动安装对应安装包。沿用原有签名及用户数据，实际覆盖安装与运行结果须另外记录。
 
@@ -88,8 +90,8 @@ python clients/release.py --version 1.0.11 --rebuild-current
 交付记录：
 
 - `dist/clients/build-report.json`：版本、架构、包检查、构建环境及实际运行验证范围。
-- `dist/clients/SHA256SUMS.txt`：四个安装包的 SHA-256。
-- `clients/frontend/dist/asset-manifest.json`：前端协议、页面和资源哈希；同一次发布的四包使用同一清单。
+- `dist/clients/SHA256SUMS.txt`：七个安装包的 SHA-256。
+- `clients/frontend/dist/asset-manifest.json`：前端协议、页面和资源哈希；同一次发布的七包使用同一清单。
 
 只读检查、纯文档整理或用户明确要求不打包时无需发布。不推送 GitHub、不部署服务器、不设置后台监听或定时打包。
 
@@ -120,7 +122,7 @@ python clients/build_linux.py --check
 
 Linux 默认使用 `Ubuntu-22.04` WSL 的 root 构建用户，缓存位于 `/root/.cache/xtyf-manager-build`；可通过脚本参数指定发行版和用户。ARM64 开发包提取到独立 sysroot，不修改主机 apt 软件源或外国架构列表。Linux 依赖及输出与 Windows 分开。
 
-单平台生成安装包同样需要确认是否生成及版本号；以下命令只用于按当前版本调试，不代替四包正式发布（`-Check` 仅检查环境）：
+单平台生成安装包同样需要确认是否生成及版本号；以下命令只用于按当前版本调试，不代替七包正式发布（`-Check` 仅检查环境）：
 
 ```powershell
 .\clients\build_windows.ps1 -Check
@@ -170,3 +172,9 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 ## GitHub Actions 自动发布
 
 客户端代码或打入安装包的共享 UI 资源变更合并／直接推送到 `main`，全部客户端构建通过后自动发布 `YYYYMMDD-betaN` 测试 Pre-release；PR 阶段只编译并上传 Artifacts。推送 `vX.Y.Z` 标签后自动发布正式 Release（须预先配置原 Android 签名密钥 Secrets）。发布前严格核对所有平台安装包 SHA-256 和版本，缺一不发布。详情与密钥配置步骤见 [Actions 版本发布指南](../.github/RELEASING.md)。
+
+## 摄像头授权（v1.1.1）
+
+Windows 使用 WebView2 系统授权流程；Linux WebKitGTK 在可信页面发起视频请求后显示确认窗口；Android 保留 CAMERA 运行时授权与请求来源校验。仅允许本地页面和当前配置的 HTTPS 网站，外链窗口与麦克风请求不开放。普通 HTTP 网站不能实时调用摄像头，可使用相册识别或本地界面；不会关闭浏览器安全检查。用户拒绝、系统隐私开关、无设备或驱动问题仍可能阻止取流。包检查、权限逻辑测试与目标设备真实取流分别记录。
+
+跨架构发布保持相同 Tauri 2 / Android 系统 WebView 技术栈。统一入口要求两个 EXE、四个 Linux 包及 APK 全部校验通过，才发布七包报告。可通过 `XTYF_SIGNING_DIR` 指向既有签名目录；不复制或重新生成发布密钥。

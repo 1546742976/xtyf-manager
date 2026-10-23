@@ -1,4 +1,4 @@
-"""Build four installers for a new version or an explicitly confirmed current-version rebuild."""
+"""Build seven installers for a new version or an explicitly confirmed current-version rebuild."""
 from __future__ import annotations
 
 import argparse
@@ -24,9 +24,9 @@ VERSION_FILES = (
     'clients/android/AndroidManifest.xml',
 )
 INSTALLERS = {
-    'windows': re.compile(r'XTYF-Manager-Setup-(\d+\.\d+\.\d+)-x64\.exe(?:\.blockmap)?'),
+    'windows': re.compile(r'XTYF-Manager-Setup-(\d+\.\d+\.\d+)-(?:x64|arm64)\.exe(?:\.blockmap)?'),
     'android': re.compile(r'XTYF-Manager-(\d+\.\d+\.\d+)\.apk'),
-    'linux': re.compile(r'XTYF-Manager-(\d+\.\d+\.\d+)-(?:arm64\.deb|x86_64\.rpm)'),
+    'linux': re.compile(r'XTYF-Manager-(\d+\.\d+\.\d+)-(?:(?:arm64|amd64)\.deb|(?:aarch64|x86_64)\.rpm)'),
 }
 ANDROID_NS = 'http://schemas.android.com/apk/res/android'
 
@@ -219,6 +219,7 @@ def linux_verification(staging, version):
     verification = read_json(path)
     for target, architecture, package_format in (
         ('ubuntu', 'arm64', 'deb'), ('fedora', 'x86_64', 'rpm'),
+        ('ubuntu-amd64', 'x86_64', 'deb'), ('fedora-aarch64', 'arm64', 'rpm'),
     ):
         result = verification.get(target, {})
         expected = {'version': version, 'architecture': architecture, 'format': package_format}
@@ -228,30 +229,31 @@ def linux_verification(staging, version):
         for field in ('packageMetadataVerified', 'elfArchitectureVerified', 'desktopEntryVerified', 'clientPayloadVerified'):
             if result.get(field) is not True:
                 raise RuntimeError(f'Linux verification failed: {target}.{field}')
-    ubuntu = verification['ubuntu']
-    required = ubuntu.get('glibcRequired', '')
-    if not isinstance(required, str) or not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', required):
-        raise RuntimeError('Linux verification has no valid Ubuntu GLIBC requirement')
-    required_parts = tuple(map(int, required.split('.')))
-    required_parts += (0,) * (3 - len(required_parts))
-    if ubuntu.get('glibcLimit') != '2.35' or required_parts > (2, 35, 0):
-        raise RuntimeError('Linux verification exceeds Ubuntu 22.04 GLIBC 2.35 compatibility')
+    for target in ('ubuntu', 'ubuntu-amd64'):
+        ubuntu = verification[target]
+        required = ubuntu.get('glibcRequired', '')
+        if not isinstance(required, str) or not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', required):
+            raise RuntimeError('Linux verification has no valid Ubuntu GLIBC requirement')
+        required_parts = tuple(map(int, required.split('.')))
+        required_parts += (0,) * (3 - len(required_parts))
+        if ubuntu.get('glibcLimit') != '2.35' or required_parts > (2, 35, 0):
+            raise RuntimeError('Linux verification exceeds Ubuntu 22.04 GLIBC 2.35 compatibility')
     return verification
 
 
-def windows_verification(staging, version):
-    path = staging / 'windows/windows-verification.json'
+def windows_verification(staging, version, architecture="x64"):
+    path = staging / ('windows/windows-verification.json' if architecture == 'x64' else 'windows/windows-verification-arm64.json')
     if not path.is_file():
         raise RuntimeError('Windows builder did not produce its verification report')
     report = read_json(path)
-    if any(report.get(key) != value for key, value in {'version': version, 'framework': 'tauri', 'architecture': 'x64', 'installer': 'NSIS'}.items()):
+    if any(report.get(key) != value for key, value in {'version': version, 'framework': 'tauri', 'architecture': architecture, 'installer': 'NSIS'}.items()):
         raise RuntimeError('Windows verification metadata mismatch')
     if not all(report.get(key) is True for key in ('configurationTestsPassed', 'nativeExecutableVerified', 'clientPayloadVerified', 'installerPayloadExtracted', 'embeddedFrontendVerified')):
         raise RuntimeError('Windows verification failed')
     return report
 
 
-def verify_shared_frontend(root, staging, version, windows, linux):
+def verify_shared_frontend(root, staging, version, windows, linux, windows_arm64=None):
     manifest_bytes = (root / 'clients/frontend/dist/asset-manifest.json').read_bytes()
     manifest = json.loads(manifest_bytes)
     if manifest.get('version') != version or manifest.get('protocolVersion') != 1 or not manifest.get('files'):
@@ -259,6 +261,9 @@ def verify_shared_frontend(root, staging, version, windows, linux):
     digest = hashlib.sha256(manifest_bytes).hexdigest()
     for platform, actual in (
         ('windows', windows.get('frontendManifestSha256')),
+        ('windows-arm64', (windows_arm64 or {}).get('frontendManifestSha256')),
+        ('ubuntu-amd64', linux['ubuntu-amd64'].get('localFrontendManifestSha256')),
+        ('fedora-aarch64', linux['fedora-aarch64'].get('localFrontendManifestSha256')),
         ('ubuntu', linux['ubuntu'].get('localFrontendManifestSha256')),
         ('fedora', linux['fedora'].get('localFrontendManifestSha256')),
     ):
@@ -321,13 +326,17 @@ def release(root=ROOT, runner=run_command, requested_version=None, rebuild_curre
             print(f'Building version {version}, Android versionCode {config["versionCode"]}', flush=True)
             runner([sys.executable, root / 'clients/build_frontend.py'], root)
             runner([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', root / 'clients/build_windows.ps1', '-OutputDirectory', staging / 'windows'], root)
+            runner([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', root / 'clients/build_windows.ps1', '-Architecture', 'arm64', '-OutputDirectory', staging / 'windows'], root)
             runner([sys.executable, root / 'clients/build_android.py', '--skip-frontend-build', '--output-dir', staging / 'android'], root)
             runner([sys.executable, root / 'clients/build_linux.py', '--output-dir', staging / 'linux'], root)
             names = [
                 f'windows/XTYF-Manager-Setup-{version}-x64.exe',
+                f'windows/XTYF-Manager-Setup-{version}-arm64.exe',
                 f'android/XTYF-Manager-{version}.apk',
                 f'linux/XTYF-Manager-{version}-arm64.deb',
                 f'linux/XTYF-Manager-{version}-x86_64.rpm',
+                f'linux/XTYF-Manager-{version}-aarch64.rpm',
+                f'linux/XTYF-Manager-{version}-amd64.deb',
             ]
             artifacts = []
             for relative in names:
@@ -336,8 +345,9 @@ def release(root=ROOT, runner=run_command, requested_version=None, rebuild_curre
                     raise RuntimeError(f'Builder did not produce a complete installer: {relative}')
                 artifacts.append({'file': relative, 'bytes': source.stat().st_size, 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()})
             windows = windows_verification(staging, version)
+            windows_arm64 = windows_verification(staging, version, 'arm64')
             linux = linux_verification(staging, version)
-            frontend_digest = verify_shared_frontend(root, staging, version, windows, linux)
+            frontend_digest = verify_shared_frontend(root, staging, version, windows, linux, windows_arm64)
             prior = snapshots['dist/clients/build-report.json']
             android = android_verification(staging, config, json.loads(prior) if prior else None, allow_signer_change)
             blockmap = names[0] + '.blockmap'
@@ -352,7 +362,7 @@ def release(root=ROOT, runner=run_command, requested_version=None, rebuild_curre
                 'releaseMode': 'same-version-rebuild' if rebuild_current else 'new-version',
                 'source': source_info,
                 'previousReleaseBackup': backup.relative_to(output).as_posix() if backup else None,
-                'windows': windows,
+                'windows': windows, 'windowsArm64': windows_arm64,
                 'android': {**android, 'package': 'online.skywalker.manager', 'signatureAndAlignmentVerified': android['signatureVerified'] and android['alignmentVerified'], 'localResourcesVerified': True, 'frontendManifestSha256': frontend_digest, 'runtimeUiVerified': False},
                 'linux': linux,
                 'frontend': {'delivery': 'bundled-local-assets', 'protocolVersion': 1,
@@ -361,7 +371,7 @@ def release(root=ROOT, runner=run_command, requested_version=None, rebuild_curre
             }
             write_json(staging / 'build-report.json', report)
             (staging / 'SHA256SUMS.txt').write_text(''.join(a['sha256'] + '  ' + a['file'] + '\n' for a in artifacts), encoding='utf-8')
-            # All four installers and their validation passed before any is published.
+            # All seven installers and their validation passed before any is published.
             publish_names = names + ([blockmap] if (staging / blockmap).is_file() else [])
             for relative in publish_names:
                 destination = output / relative
@@ -376,7 +386,7 @@ def release(root=ROOT, runner=run_command, requested_version=None, rebuild_curre
             if rebuild_current and (backup / blockmap).is_file() and blockmap not in publish_names:
                 published.append(output / blockmap)
                 (output / blockmap).unlink()
-            # Reports are replaced only after all four installer copies succeed.
+            # Reports are replaced only after all seven installer copies succeed.
             for name in ('build-report.json', 'SHA256SUMS.txt'):
                 (staging / name).replace(output / name)
         except BaseException:

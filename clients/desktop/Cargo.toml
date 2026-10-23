@@ -26,6 +26,10 @@ sha2 = "0.10"
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 tempfile = "3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already used by Tauri; enable its existing camera capture setting explicitly.
+webkit2gtk = "=2.0.2"
+
 [profile.release]
 strip = true
 lto = "thin"

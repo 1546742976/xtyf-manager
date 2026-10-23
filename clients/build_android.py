@@ -65,11 +65,13 @@ def parse_certificate_sha256(output):
 def collect_apk_metadata(apk, java, tools, env):
     verified = subprocess.run([str(java), '-jar', str(tools / 'lib/apksigner.jar'),
                                'verify', '--verbose', '--print-certs', str(apk)],
-                              check=True, env=env, capture_output=True, text=True)
+                              check=True, env=env, capture_output=True)
     align = tools / ('zipalign.exe' if os.name == 'nt' else 'zipalign')
     subprocess.run([str(align), '-c', '-v', '4', str(apk)], check=True, env=env,
-                   capture_output=True, text=True)
-    return {'certificateSha256': parse_certificate_sha256(verified.stdout),
+                   capture_output=True)
+    # SDK tools may print localized Windows paths. The certificate field itself
+    # is ASCII; do not let unrelated console encoding break signature checks.
+    return {'certificateSha256': parse_certificate_sha256(verified.stdout.decode('utf-8', errors='replace')),
             'signatureVerified': True, 'alignmentVerified': True,
             'apkSha256': hashlib.sha256(apk.read_bytes()).hexdigest()}
 
@@ -101,7 +103,7 @@ def main():
     test_identity = tempfile.TemporaryDirectory(prefix='xtyf-test-signing-') if args.test_signing else None
     try:
         key, password_path = resolve_signing_identity(
-            Path(test_identity.name) if test_identity else CLIENT / 'signing',
+            Path(test_identity.name) if test_identity else Path(os.environ.get('XTYF_SIGNING_DIR', str(CLIENT / 'signing'))),
             allow_create=args.init_signing_key or args.test_signing,
             keytool=args.jdk / 'bin' / ('keytool' + extension))
     except BaseException:
