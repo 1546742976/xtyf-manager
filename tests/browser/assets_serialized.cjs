@@ -39,8 +39,11 @@ async function main(){
     await page.locator('#asset-form [name=quantity]').fill('3');
     await page.locator('#asset-form [name=reason]').fill('合成实物入库');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
+    const received=await(await api.get('/api/assets/units?item_id='+id)).json();
+    assert.equal(received.units.length,3,'receipt must persist three physical identities');
+    await page.locator('#asset-unit-drawer[open]').waitFor();
     await page.locator('#asset-unit-content [data-unit-select]').first().waitFor();
-    assert.equal(await page.locator('#asset-unit-content [data-unit-select]').count(),3);
+    assert.equal(await page.locator('#asset-unit-content [data-unit-select]').count(),3,'resumed drawer must refresh received units');
     await page.locator('#asset-unit-content [data-unit-select]').nth(0).check();
     await page.locator('#asset-unit-content [data-unit-select]').nth(1).check();
     await page.locator('#asset-unit-actions [data-unit-action=borrow]').click();

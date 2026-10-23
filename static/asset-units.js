@@ -7,7 +7,9 @@
   if(embedded){drawer.append(...modal.childNodes);modal.remove();drawer.hidden=false;$('asset-unit-close').hidden=true;}
   const labels={normal:'正常',inspection:'待检查',fault:'故障',repair:'维修中',active:'在册',lost:'遗失',retired:'报废',destroyed:'已销毁'};
   const actions={borrow:'借用',return:'归还',handoff:'发起责任移交',accept:'确认接收',cancel_handoff:'取消移交',move:'登记移动',install:'安装',detach:'拆卸',fault:'报障',repair:'送修',healthy:'确认恢复可借',retire:'报废',lost:'遗失结案',recover:'找回／误报恢复',correct:'纠正保管人'};
-  let item=null,page=1,rows=[],meta=null,sequence=0,mine=false,canManage=false;
+  let item=null,page=1,perPage=20,historyPerPage=20,historyId=null,rows=[],meta=null,sequence=0,mine=false,canManage=false;
+  core.registerPager('units',(next,size)=>{page=next;perPage=size;return refresh();});
+  core.registerPager('unit-history',(next,size)=>{historyPerPage=size;return act('history',historyId,next);});
   const btn=(action,label,id='',extra='')=>`<button type="button" class="btn" data-unit-action="${action}" data-id="${id}" ${extra}>${label}</button>`;
   const scanBtn=(task,label)=>`<button type="button" class="btn" data-asset-scan-task="${task}" ${item?`data-item-id="${item.id}"`:''} ${$('asset-unit-campus').value?`data-campus-id="${esc($('asset-unit-campus').value)}"`:''}>${label}</button>`;
   const select=(name,label,values,value='',empty='请选择')=>`<label>${label}<select name="${name}" required>${options(values,value,empty)}</select></label>`;
@@ -58,7 +60,7 @@
     if(!embedded&&!drawer.open)core.showDialog(drawer);
     if(embedded)document.querySelector('[data-asset-mine-view="units"]')?.click();
     await refresh();
-    if(unitId){const u=rows.find(r=>r.id===unitId)||(await api('scan/resolve',{raw:'U:'+unitId})).unit;addSelection(u);selectedSummary();}
+    if(unitId){const u=rows.find(r=>r.id===unitId)||(core.catalog.intake_enabled?(await api('units/'+unitId)).unit:(await api('scan/resolve',{raw:'U:'+unitId})).unit);addSelection(u);selectedSummary();}
   }
   async function showRecord(itemId,unitId){
     if(!Number.isSafeInteger(unitId)||unitId<1)throw Error('请提供有效的实物编号');
@@ -74,15 +76,17 @@
       if(item){item=(await api('items/'+item.id)).item;}
       $('asset-unit-title').textContent=item?item.name+' · 单件管理':mine?'我的单件与待接收':'单件工作台';
       if(item&&item.tracking!=='unit'){await migration();return;}
-      const data=await api('units?'+new URLSearchParams({page,item_id:item?.id||'',mine:mine?'1':'',campus_id:$('asset-unit-campus').value}));
+      const query=new URLSearchParams({page,item_id:item?.id||'',mine:mine?'1':'',campus_id:$('asset-unit-campus').value});
+      if(core.catalog.intake_enabled)query.set('per_page',perPage);
+      const data=await api('units?'+query);
       if(seq!==sequence)return;
-      rows=data.units;
+      rows=data.units;page=data.page;
       canManage=data.can_manage;
       $('asset-unit-campus').innerHTML=options(core.catalog.campuses,$('asset-unit-campus').value,'全部校区');
       $('asset-unit-content').innerHTML=`<div class="asset-heading asset-unit-list-heading"><div><h3>实物清单</h3>${item?`<p class="asset-muted"><a href="/assets/detail?id=${item.id}">查看物料详情与全部流水</a> · 每件实物单独追踪</p>`:'<p class="asset-muted">行内借还只操作当前实物，批量操作只处理已选清单。</p>'}</div>${data.can_manage&&item?`<div class="asset-actions">${scanBtn('receive','扫码收货')}${btn('receive','手工登记实物')}</div>`:''}</div>`+
         `<div class="asset-actions" aria-label="扫码办理实物业务">${mine?'':scanBtn('borrow','扫码借用')}${scanBtn('return','扫码归还')}${scanBtn('move','扫码移动')}</div>`+
         (rows.length?'<div class="asset-unit-list">'+rows.map(renderUnit).join('')+'</div>':`<div class="asset-empty"><h3>${mine?'暂无借用或待接收实物':'当前校区暂无实物记录'}</h3><p>${mine?'借用或收到移交后，实物会出现在这里。':data.can_manage&&item?'新设备到货后，点击「新增实物 / 批量建档」登记。':'可切换校区查看其他实物。'}</p></div>`)+
-        `<div class="asset-pager">${page>1?btn('prev','上一页'):''}<span>第 ${page} 页 · ${data.total} 件</span>${page*20<data.total?btn('next','下一页'):''}</div>`;
+        core.renderPager('units',page,data.total,data.per_page||perPage);
       renderActions();selectedSummary();status('选择操作后可先核对，确认保存才会改变记录。');
     }catch(e){status(e.message);}finally{if(seq===sequence){drawer.setAttribute('aria-busy','false');$('asset-unit-content').inert=false;$('asset-unit-actions').inert=false;}}
   }
@@ -108,12 +112,11 @@
     }
     if(action==='history-close'){$('asset-unit-history').replaceChildren();drawer.querySelector(`[data-unit-action="history"][data-id="${id}"]`)?.focus();return;}
     if(action==='history'){
-      const h=await api(`units/${id}/history?page=${historyPage}`);
+      if(historyId!==id){historyId=id;historyPerPage=core.catalog.intake_enabled?20:100;}
+      const h=await api(`units/${id}/history?page=${historyPage}${core.catalog.intake_enabled?'&per_page='+historyPerPage:''}`);
       const history=$('asset-unit-history');history.className='asset-unit-history';history.tabIndex=-1;
       history.innerHTML=`<header class="asset-heading"><div><h3>U:${id} · 流转记录</h3><p class="asset-muted">第 ${h.page} 页 / 共 ${h.total} 条</p></div>${btn('history-close','收起记录',id)}</header>${h.events.length?`<ol class="asset-log">${h.events.map(e=>`<li>#${e.id} ${esc(actions[e.action.replace('unit_','')]||e.action)} · ${esc(e.actor_name)} · ${esc(e.created_at)}<p>${esc(e.reason)}</p><details><summary>前后状态与来源</summary><pre>${esc(JSON.stringify({details:e.details,receipt:e.receipt},null,2))}</pre></details></li>`).join('')}</ol>`:'<p class="asset-muted">暂无流转记录。</p>'}`;
-      const pager=document.createElement('nav');pager.className='asset-pager';pager.setAttribute('aria-label','实物流转记录分页');
-      for(const [label,p] of [['上一页',h.page-1],['下一页',h.page+1]])if(p>0&&(p-1)*100<h.total){const b=document.createElement('button');b.className='btn';b.textContent=label;b.onclick=()=>act('history',id,p).catch(e=>status(e.message));pager.append(b);}
-      if(pager.childElementCount)history.append(pager);
+      history.insertAdjacentHTML('beforeend',core.renderPager('unit-history',h.page,h.total,h.per_page||historyPerPage));
       history.focus({preventScroll:true});history.scrollIntoView({block:'start',behavior:'smooth'});return;
     }
     if(action==='print'){if(!selected.size)throw Error('请先选择需要打印的实物');return window.AssetLabels?.open([...selected.values()]);}
@@ -158,6 +161,9 @@
   $('asset-unit-close').onclick=()=>drawer.close();
   $('asset-unit-campus').onchange=()=>{page=1;refresh();};
   document.addEventListener('click',e=>{const a=e.target.closest('[data-unit-model]');if(a){e.preventDefault();show(Number(a.dataset.unitModel)).catch(e=>status(e.message));}});
+  // Saving through a nested modal may finish loading before its parent drawer reopens.
+  // Refresh on resume as well, so newly received units are always displayed.
+  drawer.addEventListener('asset-dialog-resumed',()=>{if(!embedded)refresh();});
   document.addEventListener('assets-loaded',()=>{if(!embedded&&drawer.open)refresh();});
   document.addEventListener('asset-operation-saved',e=>{
     if(e.detail.path==='units/operate'){

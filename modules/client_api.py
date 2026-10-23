@@ -40,6 +40,7 @@ def create_client_blueprint(authenticate, statuses, priorities):
             uiCompatibility={"protocolMin": 1, "protocolMax": 1},
             assets_enabled=True,
             asset_units_enabled=True,
+            asset_intake_enabled=True,
             authenticated=user is not None,
             user=public_user,
             me=public_user,

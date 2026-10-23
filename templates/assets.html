@@ -57,6 +57,11 @@
     <div><h2>库存清单</h2><p id="asset-result-summary" class="asset-result-summary" aria-live="polite"></p></div>
     <span class="asset-list-hint">点击名称查看库存与流转记录</span>
   </div>
+  <section id="asset-category-organizer" class="asset-category-organizer" aria-label="整理库存类别" hidden>
+    <div class="asset-heading"><div><h3>整理库存类别</h3><p id="asset-category-selection" class="asset-muted" aria-live="polite"></p></div><button class="btn" type="button" data-action="category-organize-close">完成整理</button></div>
+    <div class="asset-actions"><button class="btn" type="button" data-action="category-select-page">选择本页</button><button class="btn" type="button" data-action="category-clear">清空选择</button><button class="btn primary" type="button" data-action="category-assign">设置已选物料类别</button></div>
+    <details><summary>查看已选物料</summary><ul id="asset-category-selected-list"></ul></details>
+  </section>
   <div id="asset-content" aria-busy="true"></div>
   </section>
   <section id="asset-mine-units" class="asset-section asset-unit-drawer" aria-labelledby="asset-unit-title" hidden></section>
@@ -92,7 +97,7 @@
   <label class="asset-scan-task">这次要做什么<select id="asset-scan-mode"><option value="general">先识别，再选择操作</option><option value="search">查找物料</option><option value="receive">采购入库</option><option value="borrow">借用设备 / 工具</option><option value="return">归还设备 / 工具</option><option value="count">现场盘点</option><option value="move">移动 / 校区调拨</option></select></label>
   <div class="asset-scan-inputs" role="group" aria-label="扫码方式"><button type="button" class="btn" data-scan-input="camera" aria-pressed="false">摄像头</button><button type="button" class="btn" data-scan-input="gun" aria-pressed="true">扫码枪 / 粘贴</button></div>
   <div id="asset-scan-camera" hidden></div>
-  <form id="asset-scan-form" class="asset-fields"><label>标签原文或商品编号<textarea id="asset-scan-raw" rows="3" maxlength="4096" placeholder="在这里扫码，或粘贴立创包装二维码、C 编号、U: 单件标签、M: 物料标签" required></textarea></label><div class="asset-actions"><button class="btn primary" type="submit">识别标签</button><span class="asset-muted">识别不会修改库存</span></div></form>
+  <form id="asset-scan-form" class="asset-fields"><label>标签原文或商品编号<textarea id="asset-scan-raw" rows="3" maxlength="4096" placeholder="扫码或粘贴包装二维码、厂家序列号、C 编号、U: 单件标签或 M: 物料标签" required></textarea></label><div class="asset-actions"><button class="btn primary" type="submit">识别标签</button><span class="asset-muted">识别不会修改库存</span></div></form>
   <details id="asset-scan-gun-settings" class="asset-form-section"><summary>扫码枪设置</summary><label>扫码结束按键<select id="asset-scan-end"><option value="Enter">Enter</option><option value="Tab">Tab</option><option value="manual">手动点击识别</option></select></label></details>
   <p id="asset-scan-status" role="status" aria-live="polite"></p><div id="asset-scan-preview"></div><div id="asset-scan-queue"></div>
 </dialog>

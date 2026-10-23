@@ -36,7 +36,13 @@ class ScanTest(unittest.TestCase):
         self.assertEqual(value["fields"]["pdi"], "TEST")
         for quantity in ("0", "-2", "1.5", "3oops", ""):
             self.assertIsNone(parse_label("{pc:C12345,qty:" + quantity + "}")["label_quantity"])
-        for raw in ("{pc:C12345,pc:C23456,qty:1}", "{pc:bad,qty:1}", '__import__("os")', "{pc:C1,bad}"):
+        for raw in ("{pc:C12345,pc:C23456,qty:1}", "{pc:bad,qty:1}", "{pc:C1,bad}"):
+            value = parse_label(raw)
+            self.assertEqual(value["type"], "external")
+            self.assertEqual(value["raw"], raw)
+            self.assertTrue(value["parse_error"])
+        self.assertEqual(parse_label('__import__("os")')["type"], "external")
+        for raw in ("", "   ", "a" * 4097, None):
             with self.assertRaises(Invalid):
                 parse_label(raw)
 

@@ -5,7 +5,7 @@ from collections import Counter
 
 from flask import Blueprint, request
 from common import current_user, get_db
-from modules.assets import Invalid, event, integer, manager, paging, require_manager, row, stamp, text
+from modules.assets import Invalid, event, integer, manager, paginated, require_manager, row, stamp, text
 from modules.asset_scan import read, write
 
 bp = Blueprint("asset_units", __name__)
@@ -156,6 +156,7 @@ def units():
         args.append(request.args["lifecycle"])
     clause = " WHERE " + " AND ".join(where) if where else ""
     count = db.execute("SELECT COUNT(*) FROM asset_units u" + clause, args).fetchone()[0]
+    page_number, per_page = paginated(count)
     values = [
         dict(r)
         for r in db.execute(
@@ -164,17 +165,32 @@ def units():
             "FROM asset_units u JOIN asset_items i ON i.id=u.item_id JOIN asset_campuses c ON c.id=u.campus_id "
             "LEFT JOIN members m ON m.id=u.keeper_id LEFT JOIN asset_objects o ON o.id=u.object_id"
             + clause
-            + " ORDER BY u.id LIMIT 20 OFFSET ?",
-            (*args, (paging() - 1) * 20),
+            + " ORDER BY u.id LIMIT ? OFFSET ?",
+            (*args, per_page, (page_number - 1) * per_page),
         )
     ]
     return {
         "units": values,
         "total": count,
-        "page": paging(),
+        "page": page_number,
+        "per_page": per_page,
         "can_manage": manager(),
         "member_id": current_user()["id"],
     }
+
+
+@bp.get("/api/assets/units/<int:identity>")
+@read
+def detail(identity):
+    db = get_db()
+    unit = row(db, "asset_units", identity)
+    item = row(db, "asset_items", unit["item_id"])
+    unit.update(item_name=item["name"], campus_name=row(db, "asset_campuses", unit["campus_id"])["name"])
+    if unit["keeper_id"]:
+        unit["keeper_name"] = row(db, "members", unit["keeper_id"])["name"]
+    handoff = db.execute("SELECT receiver_id FROM asset_handoffs WHERE unit_id=? AND status='pending' LIMIT 1", (identity,)).fetchone()
+    unit["receiver_id"] = handoff["receiver_id"] if handoff else None
+    return {"unit": unit, "item": item, "can_manage": manager(), "member_id": current_user()["id"]}
 
 
 @bp.get("/api/assets/units/<int:identity>/history")
@@ -186,11 +202,12 @@ def history(identity):
         "json_extract(details,'$.unit_id')=? OR EXISTS(SELECT 1 FROM json_each(details,'$.unit_ids') WHERE value=?)"
     )
     total = db.execute("SELECT COUNT(*) FROM asset_events WHERE " + clause, (identity, identity)).fetchone()[0]
+    page_number, per_page = paginated(total, default=100)
     records = [
         dict(r)
         for r in db.execute(
-            "SELECT * FROM asset_events WHERE " + clause + " ORDER BY id DESC LIMIT 100 OFFSET ?",
-            (identity, identity, (paging() - 1) * 100),
+            "SELECT * FROM asset_events WHERE " + clause + " ORDER BY id DESC LIMIT ? OFFSET ?",
+            (identity, identity, per_page, (page_number - 1) * per_page),
         )
     ]
     for record in records:
@@ -201,7 +218,8 @@ def history(identity):
     return {
         "events": records,
         "total": total,
-        "page": paging(),
+        "page": page_number,
+        "per_page": per_page,
         "loans": [
             dict(r) for r in db.execute("SELECT * FROM asset_unit_loans WHERE unit_id=? ORDER BY id DESC", (identity,))
         ],

@@ -9,6 +9,8 @@
   const names={receive:'入库',borrow:'借用',return:'归还',consume:'领用',adjust:'盘点调整',transfer:'校区调拨',correct:'纠错',catalog:'目录维护',supply_status:'耗材状态'};
   let catalog, detail, listing=[], loans=[], events=[], generation=0, listPage=1, loanPage=1, eventPage=1, eventCampus='',detailView='stock',mineView='units';
   let operation=null, pending=false, opener=null, serverReceivedAt=0;
+  const pageSizes={items:20,loans:20,events:20}, pagerHandlers=new Map(),categorySelection=new Map();
+  let organizing=false;
   // In-flight writes survive dialog closure, page reloads and packaged-view navigation.
   // Namespace by server, then verify the user before ever replaying a saved write.
   const serverScope=window.XTYF?.config?.serverUrl||location.origin;
@@ -85,13 +87,31 @@
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
     }:{});
     const data=await response.json().catch(()=>({error:'服务器返回了无法识别的内容'}));
-    if(!response.ok||!data.ok){const error=new Error(data.error||'请求失败');error.status=response.status;throw error;}
+    if(!response.ok||!data.ok){const error=new Error(data.error||'请求失败');error.status=response.status;error.data=data;throw error;}
     return data;
   }
   const button=(action,label,id,extra='')=>`<button type="button" class="btn" data-action="${action}" data-id="${id}" ${extra}>${label}</button>`;
-  function pager(name,page,total){
-    return `<nav class="asset-pager" aria-label="分页">${page>1?button(name+'-prev','上一页',page-1):''}<span>第 ${page} 页 · 共 ${total} 项</span>${page*20<total?button(name+'-next','下一页',page+1):''}</nav>`;
+  function pager(name,page,total,perPage=20){
+    const last=Math.max(1,Math.ceil(total/perPage));page=Math.max(1,Math.min(page,last));
+    const control=(label,target,disabled=false,extra='')=>`<button type="button" class="btn" data-asset-page="${target}" ${disabled?'disabled':''} ${extra}>${label}</button>`;
+    if(!catalog?.intake_enabled)return `<nav class="asset-pager" data-asset-pager="${esc(name)}" data-per-page="${perPage}" aria-label="分页">${page>1?control('上一页',page-1):''}<span>第 ${page} 页 · 共 ${total} 项</span>${page<last?control('下一页',page+1):''}<input type="hidden" data-asset-page-input max="${last}"></nav>`;
+    const nearby=[];for(let p=Math.max(1,page-2);p<=Math.min(last,page+2);p++)nearby.push(control(String(p),p,false,`data-page-distance="${Math.abs(p-page)}" aria-label="第 ${p} 页"${p===page?' aria-current="page"':''}`));
+    return `<nav class="asset-pager" data-asset-pager="${esc(name)}" data-per-page="${perPage}" aria-label="分页"><span class="asset-pager-summary">共 ${total} 项 · 第 ${page} / ${last} 页</span><div class="asset-pager-pages">${control('首页',1,page===1)}${control('上一页',page-1,page===1)}${nearby.join('')}${control('下一页',page+1,page===last)}${control('末页',last,page===last)}</div><div class="asset-pager-options"><label>跳至<input type="number" inputmode="numeric" min="1" max="${last}" value="${page}" data-asset-page-input aria-label="跳转页码"></label>${control('跳转','jump')}<label>每页<select data-asset-page-size aria-label="每页条数">${[20,50,100].map(n=>`<option value="${n}"${n===perPage?' selected':''}>${n} 条</option>`).join('')}</select></label></div></nav>`;
   }
+  const registerPager=(name,handler)=>pagerHandlers.set(name,handler);
+  const pageQuery=(name)=>catalog?.intake_enabled?'&per_page='+pageSizes[name]:'';
+  async function changePage(nav,target,size){
+    const handler=pagerHandlers.get(nav.dataset.assetPager);if(!handler||pending)return;
+    const field=nav.querySelector('[data-asset-page-input]');
+    const page=target==='jump'?Number(field.value):Number(target),perPage=size||Number(nav.dataset.perPage);
+    if(!Number.isSafeInteger(page)||page<1||page>Number(field.max)){field.setCustomValidity('请输入 1 至 '+field.max+' 的页码');field.reportValidity();field.setCustomValidity('');return;}
+    nav.setAttribute('aria-busy','true');
+    try{await handler(page,perPage);}catch(error){status(error.message,'error');}
+    finally{nav.removeAttribute('aria-busy');}
+  }
+  registerPager('items',(page,size)=>{listPage=page;pageSizes.items=size;return load();});
+  registerPager('loans',(page,size)=>{loanPage=page;pageSizes.loans=size;return load();});
+  registerPager('events',(page,size)=>{eventPage=page;pageSizes.events=size;return load();});
   function options(values, selected, empty=''){
     return (empty?`<option value="">${empty}</option>`:'')+values.map(v=>`<option value="${esc(v.id)}"${String(v.id)===String(selected)?' selected':''}>${esc(v.name)}${v.active===0?'（停用）':''}</option>`).join('');
   }
@@ -114,7 +134,7 @@
     const secondary=(item.active&&!['status','unit','migrating'].includes(item.tracking)?button('receive-item','补货入库',item.id)+button('quantity','盘点校正',item.id):'')+
       (catalog.can_manage?button('edit-item','编辑物品',item.id):'')+(window.AssetLabels?button('print-item','打印物料标签',item.id):'');
     return `<article class="asset-card asset-list-row">
-      <div class="asset-item-identity"><span class="asset-item-icon">${itemIcon(item)}</span><div class="asset-item-copy">
+      <div class="asset-item-identity">${organizing?`<label class="asset-category-check"><input type="checkbox" data-category-item="${item.id}" ${categorySelection.has(item.id)?'checked':''} aria-label="选择 ${esc(item.name)} M:${item.id}"><span>选择</span></label>`:''}<span class="asset-item-icon">${itemIcon(item)}</span><div class="asset-item-copy">
         <h2><a ${item.tracking==='unit'?'data-unit-model="'+item.id+'"':''} href="/assets/detail?id=${item.id}">${esc(item.name)}</a></h2>
         <p>${esc(item.specification)||'未填写规格'}</p><span class="asset-item-category">${esc(item.category)||'未分类'}</span>
       </div></div>
@@ -144,15 +164,15 @@
     }finally{pending=false;trigger.disabled=false;showPending();}
   }
   function renderLoans(data){
-    loans=data.loans;
+    loans=data.loans;loanPage=data.page;
     return `<h2>${mine?'我的未还借用':'当前借用'}</h2>`+(loans.length?`<div class="asset-grid">${loans.map(l=>`<article class="asset-card">
       <h3><a href="/assets/detail?id=${l.item_id}">${esc(l.name)}</a></h3><p>${esc(l.specification)} · ${esc(l.campus_name)}</p>
       <p>${esc(l.member_name)} · ${esc(l.created_at)}</p><strong>未还 ${l.outstanding} ${esc(l.unit)}</strong>
       <div class="asset-actions">${l.member_id===data.member_id?button('return','归还',l.id):''}</div></article>`).join('')}</div>`:
-      '<p class="asset-empty">没有未归还的借用。</p>')+pager('loans',data.page,data.total);
+      '<p class="asset-empty">没有未归还的借用。</p>')+pager('loans',data.page,data.total,data.per_page||pageSizes.loans);
   }
   function renderEvents(data){
-    events=data.events;
+    events=data.events;eventPage=data.page;
     return `<h2>操作记录</h2><label>记录校区<select id="asset-event-campus">${options(catalog.campuses,eventCampus,'全部校区')}</select></label><p class="asset-muted">时间为北京时间；纠错追加记录，保留原始流水。</p><ol class="asset-log">${events.map(e=>{
       const movements=(e.details.deltas||[]).map(([id,delta])=>`${esc(catalog.campuses.find(c=>c.id===id)?.name||id)}：在库 ${delta>=0?'+':''}${delta}`).join('；');
       return `<li><strong>#${e.id} ${names[e.action]||esc(e.action)}${!['catalog','supply_status'].includes(e.action)?' · '+e.quantity:''}</strong>
@@ -161,7 +181,7 @@
         <p>${e.action==='supply_status'?supplyName(e.details.before)+' → '+supplyName(e.details.after):movements}</p><p>${esc(e.reason)||'未填写用途'}${e.corrects_id?' · 纠正 #'+e.corrects_id:''}${e.correction_id?' · 已由 #'+e.correction_id+' 纠正':''}</p>
         ${e.receipt?`<details><summary>包装入库来源 · 标签 ${e.receipt.label_quantity??'未知'} / 实收 ${e.receipt.actual_quantity}</summary><pre>${esc(JSON.stringify(e.receipt,null,2))}</pre></details>`:''}
         ${catalog.can_manage&&!e.correction_id&&!e.details.mode_reset&&['receive','adjust','transfer','consume','borrow','return'].includes(e.action)?button('correct','登记纠错',e.id):''}</li>`;
-    }).join('')}</ol>${data.total?'':'<p class="asset-empty">暂无记录。</p>'}${pager('events',data.page,data.total)}`;
+    }).join('')}</ol>${data.total?'':'<p class="asset-empty">暂无记录。</p>'}${pager('events',data.page,data.total,data.per_page||pageSizes.events)}`;
   }
   function updateAssetViews(summary){
     for(const button of document.querySelectorAll('[data-asset-view]')){
@@ -214,31 +234,34 @@
       }
       $('asset-campuses').hidden=!c.can_manage;
       $('asset-categories').hidden=!c.can_manage;
+      if(!c.can_manage||!c.intake_enabled)organizing=false;
       filter.hidden=!!itemId||mine;
       const campus=filter.elements.campus_id.value;
       filter.elements.campus_id.innerHTML=options(c.campuses,campus,'全部校区');
       if(itemId){
-        const [d,l,e]=await Promise.all([api('items/'+itemId),api(`loans?item_id=${itemId}&page=${loanPage}`),api(`events?item_id=${itemId}&page=${eventPage}&campus_id=${encodeURIComponent(eventCampus)}`)]);
+        const [d,l,e]=await Promise.all([api('items/'+itemId),api(`loans?item_id=${itemId}&page=${loanPage}${pageQuery('loans')}`),api(`events?item_id=${itemId}&page=${eventPage}&campus_id=${encodeURIComponent(eventCampus)}${pageQuery('events')}`)]);
         if(own!==generation)return; detail=d;
         $('asset-title').textContent=d.item.name;
         $('asset-content').innerHTML=renderItemDetail(d,l,e);
       }else if(mine){
-        const l=await api('loans?mine=1&page='+loanPage);if(own!==generation)return;
+        const l=await api('loans?mine=1&page='+loanPage+pageQuery('loans'));if(own!==generation)return;
         $('asset-title').textContent='我的借用';
         $('asset-content').innerHTML=(window.AssetScan?'<div class="asset-mine-scan-actions asset-actions"><button type="button" class="btn" data-asset-scan-task="borrow">扫码借用</button><button type="button" class="btn" data-asset-scan-task="return">扫码归还</button></div>':'')+(window.AssetUnits?`<nav class="asset-detail-tabs" aria-label="借用记录类型"><button type="button" data-asset-mine-view="units" aria-pressed="${mineView==='units'}">单件设备与待接收</button><button type="button" data-asset-mine-view="quantity" aria-pressed="${mineView==='quantity'}">按数量借用 · ${l.total} 笔</button></nav>`:'')+`<section id="asset-quantity-loans" ${window.AssetUnits&&mineView!=='quantity'?'hidden':''}>${renderLoans(l)}</section>`;
         if(window.AssetUnits){await window.AssetUnits.loadMine();if(own!==generation)return;$('asset-mine-units').hidden=mineView!=='units';}
       }else{
-        const search=new URLSearchParams({q:filter.elements.q.value,campus_id:filter.elements.campus_id.value,category:filter.elements.category.value,view:assetView,page:String(listPage)});
-        const data=await api('items?'+search);if(own!==generation)return;listing=data.items;
+        const search=new URLSearchParams({q:filter.elements.q.value,campus_id:filter.elements.campus_id.value,category:filter.elements.category.value==='__uncategorized__'?'':filter.elements.category.value,view:assetView,page:String(listPage)});
+        if(c.intake_enabled){search.set('per_page',pageSizes.items);if(filter.elements.category.value==='__uncategorized__')search.set('uncategorized','1');}
+        const data=await api('items?'+search);if(own!==generation)return;listing=data.items;listPage=data.page;
         const category=filter.elements.category.value;
-        filter.elements.category.innerHTML=options(data.categories.map(v=>({id:v,name:v})),category,'全部类别');
+        filter.elements.category.innerHTML=options([...(c.intake_enabled?[{id:'__uncategorized__',name:'未分类'}]:[]),...data.categories.map(v=>({id:v,name:v}))],category,'全部类别');
         updateAssetViews(data.summary);
         $('asset-result-summary').textContent=`共 ${data.total} 种物料${data.total?' · 第 '+data.page+' 页':''}`;
         const filtered=assetView!=='all'||filter.elements.q.value||filter.elements.campus_id.value||filter.elements.category.value;
         $('asset-content').innerHTML=data.items.length?
-          `<div class="asset-list-header" aria-hidden="true"><span>物料信息</span><span>管理方式</span><span>库存概况</span><span>操作</span></div><div class="asset-list">${data.items.map(renderListItem).join('')}</div>${pager('items',data.page,data.total)}`:
-          `<div class="asset-empty">${itemIcon({kind:'returnable'})}<h3>${filtered?'没有找到符合条件的物料':'物料仓库，准备就绪'}</h3><p>${filtered?'试试其他关键词，或清除筛选查看全部物料。':c.can_manage?'点击右上角“新增 / 扫码入库”，登记第一种物料。':'尚未登记物料，请联系管理人员建档。'}</p>${filtered?'<button class="btn asset-reset" id="asset-clear-empty" type="button">清除筛选</button>':''}</div>`;
+          `<div class="asset-list-header" aria-hidden="true"><span>物料信息</span><span>管理方式</span><span>库存概况</span><span>操作</span></div><div class="asset-list">${data.items.map(renderListItem).join('')}</div>${pager('items',data.page,data.total,data.per_page||pageSizes.items)}`:
+          `<div class="asset-empty">${itemIcon({kind:'returnable'})}<h3>${filtered?'没有找到符合条件的物料':'物料仓库，准备就绪'}</h3><p>${filtered?'试试其他关键词，或清除筛选查看全部物料。':c.can_manage?'点击右上角“新增 / 扫码入库”，登记第一种物料。':'尚未登记物料，请联系管理人员建档。'}</p>${filtered?'<button class="btn asset-reset" id="asset-clear-empty" type="button">清除筛选</button>':''}</div>${pager('items',data.page,data.total,data.per_page||pageSizes.items)}`;
       }
+      updateCategorySelection();
       status('数据已更新。');document.dispatchEvent(new CustomEvent('assets-loaded'));return true;
     }catch(e){if(own===generation)status(e.message+'；可点击“刷新”重试。','error');return false;}
     finally{if(own===generation)$('asset-content').setAttribute('aria-busy','false');}
@@ -306,10 +329,15 @@
       input('supplier_code','关联嘉立创 C 编号','','maxlength="40" placeholder="例如 C12345"');
     if(value.id)fields+=`<label>启用状态<select name="active">${options([{id:'true',name:'启用'},{id:'false',name:'停用，保留历史'}],value.active?'true':'false')}</select></label><p class="asset-muted">有库存或未还借用的物料不能停用；停用类别前需先移出其下的启用物料。</p>`;
     if(isItem)fields+='</details>';
+    if(isItem&&!value.id&&catalog.intake_enabled)fields+='<details class="asset-form-section"><summary>与现有档案重名时</summary><label class="asset-inline-choice"><input type="checkbox" name="force_new" value="true"> 确认这是另一物品，另建独立档案</label><label data-force-new-reason hidden>另建原因（必填）<textarea name="reason" maxlength="500" rows="3" disabled required></textarea></label><p class="asset-muted">名称、规格相同的物品通常可共用档案；另建将生成独立 M: 编号。</p></details>';
     if(isItem&&value.id)fields+=reason(true);
     open((value.id?'编辑':'新增')+label,fields,'catalog/'+kind,base);
     if(operation.recovery)return;
     if(isItem){
+      if(form.elements.force_new)form.elements.force_new.onchange=()=>{
+        const enabled=form.elements.force_new.checked,field=form.querySelector('[data-force-new-reason]');
+        field.hidden=!enabled;field.querySelector('textarea').disabled=!enabled;
+      };
       const mode=form.elements.consumable_mode,returnableMode=form.elements.returnable_mode,supplier=form.elements.supplier_code;
       const updateMode=()=>{
         const consumable=form.elements.kind.value==='consumable';
@@ -341,11 +369,52 @@
   function directoryManager(kind){
     const category=kind==='categories',noun=category?'类别':'校区',action=category?'category':'campus';
     $('asset-directory-title').textContent=noun+'管理';$('asset-directory-dialog').dataset.kind=kind;
-    $('asset-directory-content').innerHTML='<div class="asset-actions">'+button('new-'+action,'新增'+noun,0)+'</div>'+
+    $('asset-directory-content').innerHTML='<div class="asset-actions">'+button('new-'+action,'新增'+noun,0)+(category&&catalog.intake_enabled&&!itemId&&!mine?button('category-organize','整理库存类别',0):'')+'</div>'+
       (catalog[kind].length?catalog[kind].map(c=>`<div class="asset-directory-row"><span><strong>${esc(c.name)}</strong><small class="asset-muted">${c.active?'启用中':'已停用'}</small></span>${button('edit-'+action,'编辑',c.id)}</div>`).join(''):'<p class="asset-empty">还没有'+noun+'，点击上方按钮添加。</p>');
     showDialog($('asset-directory-dialog'));
   }
+  function updateCategorySelection(){
+    const host=$('asset-category-organizer');if(!host)return;
+    host.hidden=!organizing||!!itemId||mine;
+    if(host.hidden)return;
+    const values=[...categorySelection.values()],outside=values.filter(v=>!listing.some(i=>i.id===v.id)).length;
+    $('asset-category-selection').textContent=`已选 ${values.length} / 100 种物料${outside?` · ${outside} 种不在当前页`:''}。翻页、搜索、切换筛选后保留选择；只修改已选型号。`;
+    $('asset-category-selected-list').innerHTML=values.map(v=>`<li><span>${esc(v.name)} · ${esc(v.specification)||'无规格'} · M:${v.id}</span>${button('category-remove','取消选择',v.id,`aria-label="取消选择 M:${v.id}"`)}</li>`).join('');
+    for(const checkbox of document.querySelectorAll('[data-category-item]'))checkbox.checked=categorySelection.has(Number(checkbox.dataset.categoryItem));
+    for(const control of host.querySelectorAll('[data-action]'))if(['category-clear','category-assign'].includes(control.dataset.action))control.disabled=!values.length;else if(control.dataset.action==='category-select-page')control.disabled=!listing.length;
+  }
+  function selectCategoryItem(item){
+    if(categorySelection.has(item.id))return;
+    if(categorySelection.size>=100)throw Error('每批最多选择 100 种物料，请先保存或取消已有选择');
+    categorySelection.set(item.id,{id:item.id,version:item.version,name:item.name,specification:item.specification});
+  }
+  async function categoryAction(action,id){
+    if(!catalog.can_manage||!catalog.intake_enabled)throw Error('当前账号或服务器暂不支持整理类别');
+    if(action==='category-organize'){
+      organizing=true;$('asset-directory-dialog').close();await load();
+      $('asset-category-organizer').scrollIntoView({block:'nearest',behavior:'smooth'});return;
+    }
+    if(action==='category-organize-close'){organizing=false;return load();}
+    if(action==='category-clear'){categorySelection.clear();updateCategorySelection();return;}
+    if(action==='category-remove'){categorySelection.delete(id);updateCategorySelection();return;}
+    if(action==='category-select-page'){
+      if(new Set([...categorySelection.keys(),...listing.map(v=>v.id)]).size>100)throw Error('选择本页后将超过 100 种物料，请先取消部分选择');
+      listing.forEach(selectCategoryItem);updateCategorySelection();return;
+    }
+    if(action==='category-assign'){
+      if(!categorySelection.size)throw Error('请先勾选需要整理的物料');
+      const values=[...categorySelection.values()],categories=catalog.categories.filter(c=>c.active);
+      open('设置物料类别',`<div class="asset-operation-summary"><strong>本次共 ${values.length} 种物料</strong><p>包括已选清单中不在当前页的物料。同型号的全部实物沿用类别。</p></div><label>目标类别<select name="category_id">${options(categories,'','未分类')}</select></label><p id="asset-category-confirmation" class="asset-operation-summary" aria-live="polite"></p>`,'categories/assign',{},[],data=>{
+        const target=categories.find(c=>String(c.id)===data.get('category_id'));
+        return {items:values.map(v=>({id:v.id,version:v.version})),category_id:target?.id??null,category_version:target?.version??null};
+      });
+      if(operation.recovery)return;
+      const update=()=>{$('asset-category-confirmation').textContent=`确认将 ${values.length} 种物料设置为“${categories.find(c=>String(c.id)===form.elements.category_id.value)?.name||'未分类'}”。`;};
+      form.elements.category_id.onchange=update;update();$('asset-save').textContent='确认修改类别';
+    }
+  }
   async function act(action,id,campusId){
+    if(action.startsWith('category-'))return categoryAction(action,id);
     if(action==='new-campus'||action==='edit-campus'){catalogEditor('campuses',catalog.campuses.find(c=>c.id===id)||{});return;}
     if(action==='new-category'||action==='edit-category'){catalogEditor('categories',catalog.categories.find(c=>c.id===id)||{});return;}
     if(action==='units'){
@@ -480,7 +549,7 @@
     if(!recovery){
       for(const [key,value] of new FormData(form)){
         if(key==='returnable_mode'&&value==='')continue;
-        body[key]=operation.numberKeys.includes(key)?Number(value):['active','detached','destroyed'].includes(key)?value==='true':key==='serials'?(value.trim()?value.split('\n').map(s=>s.trim()):undefined):value;
+        body[key]=operation.numberKeys.includes(key)?Number(value):['active','detached','destroyed','force_new'].includes(key)?value==='true':key==='serials'?(value.trim()?value.split('\n').map(s=>s.trim()):undefined):value;
       }
       if(operation.buildBody)body=operation.buildBody(new FormData(form));
       if(operation.campuses&&body.action==='adjust')body.version=operation.campuses.find(c=>c.id===body.campus_id)?.stock_version;
@@ -494,6 +563,9 @@
     let saved=unresolved;
     if(!saved){
       saved={actor_id:catalog.member_id,path:operation.path,body,request_id:requestId()};
+      if(new TextEncoder().encode(JSON.stringify({...body,request_id:saved.request_id})).length>16384){
+        $('asset-form-status').textContent='本次资料超过请求大小限制，请减少条目或缩短内容后重新提交。当前资料已保留。';return;
+      }
       try{rememberPending(saved);}
       catch(_){
         $('asset-form-status').textContent='无法安全保存待确认请求，请检查浏览器会话存储设置后重试。';
@@ -543,6 +615,26 @@
     if(menu){menu.open=false;menu.querySelector('summary').focus();}
   });
   document.addEventListener('change',e=>{if(e.target.id==='asset-event-campus'){eventCampus=e.target.value;eventPage=1;load();}});
+  document.addEventListener('click',e=>{
+    const control=e.target.closest('[data-asset-page]');if(control)changePage(control.closest('[data-asset-pager]'),control.dataset.assetPage);
+  });
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&e.target.matches('[data-asset-page-input]')){e.preventDefault();changePage(e.target.closest('[data-asset-pager]'),'jump');}
+  });
+  document.addEventListener('change',e=>{
+    if(e.target.matches('[data-asset-page-size]'))changePage(e.target.closest('[data-asset-pager]'),1,Number(e.target.value));
+    if(e.target.matches('[data-category-item]')){
+      const id=Number(e.target.dataset.categoryItem);
+      try{if(e.target.checked)selectCategoryItem(listing.find(v=>v.id===id));else categorySelection.delete(id);}
+      catch(error){status(error.message,'error');}updateCategorySelection();
+    }
+  });
+  document.addEventListener('asset-operation-saved',e=>{
+    if(e.detail.path==='categories/assign'){
+      for(const v of e.detail.body.items)if(categorySelection.get(v.id)?.version===v.version)categorySelection.delete(v.id);
+      updateCategorySelection();
+    }
+  });
   $('asset-create').onclick=()=>{
     if(unresolved){recoverPending();return;}
     $('asset-add-guidance').textContent=catalog.can_manage?'可手动新建目录，或扫描标签匹配已有物品并核对入库。':'可扫码登记已有耗材；新物品建档需由管理人员确认。';
@@ -554,8 +646,8 @@
   $('asset-categories').onclick=()=>directoryManager('categories');
   $('asset-pending-retry').onclick=()=>recoverPending();
   $('asset-refresh').onclick=()=>load();
-  filter.onsubmit=e=>{e.preventDefault();listPage=1;load();};
   let assetSearchTimer=null;
+  filter.onsubmit=e=>{e.preventDefault();clearTimeout(assetSearchTimer);listPage=1;load();};
   filter.elements.q.addEventListener('input',()=>{
     clearTimeout(assetSearchTimer);
     assetSearchTimer=setTimeout(()=>{listPage=1;load();},350);
@@ -583,6 +675,6 @@
   filter.addEventListener('change',e=>{
     if(e.target.name==='campus_id'||e.target.name==='category'){listPage=1;load();}
   });
-  window.AssetLedger={api,load,open,showDialog,input,reason,options,esc,campusFields,scanQuantity,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
+  window.AssetLedger={api,load,open,showDialog,input,reason,options,esc,campusFields,scanQuantity,renderPager:pager,registerPager,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
   load();
 })();
