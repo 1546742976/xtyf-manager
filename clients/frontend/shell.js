@@ -4,7 +4,7 @@
   const isLocal=url=>url.protocol===location.protocol&&url.host===location.host;
   const routes={
     '/':['dashboard.html','dashboard'], '/login':['login.html','login'], '/tasks':['board.html','tasks'],
-    '/account':['account.html','account'], '/manage':['manage.html','manage','manage_tasks'],
+    '/account':['account.html','account'], '/updates':['site_updates.html','updates'], '/manage':['manage.html','manage','manage_tasks'],
     '/members':['members.html','members','manage_members'], '/discussions':['discussions.html','discussions'],
     '/funds':['funds.html','funds','access_funds'], '/invoices':['invoices.html','invoices'],
     '/assets':['assets.html','assets'], '/assets/detail':['assets.html','assets'],

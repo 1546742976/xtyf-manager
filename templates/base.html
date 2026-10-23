@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='task-center.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='item-topics.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='themes.css') }}">
+  {% if me %}<link rel="stylesheet" href="{{ url_for('static', filename='site-updates.css') }}">{% endif %}
   {% if page == 'account' %}<link rel="stylesheet" href="{{ url_for('static', filename='account-avatar.css') }}">{% endif %}
   {% if page == 'assets' %}<link rel="stylesheet" href="{{ url_for('static', filename='assets.css') }}">{% endif %}
 </head>
@@ -24,6 +25,14 @@
   {% include "_workspace_sidebar.html" %}
   <div class="workspace-main">
     {% include "_workspace_top.html" %}
+    {% if not me.must_change_password %}
+    <section class="site-update-banner" data-site-update-banner data-user-id="{{ me.id }}" data-site-update-api="{{ url_for('site_updates.version') }}" role="status" aria-label="网站更新公告" hidden>
+      <span class="site-update-mark" aria-hidden="true">✦</span>
+      <div class="site-update-content"><strong>网站已更新</strong><span data-site-update-summary>新版本已上线，点击查看本次更新内容。</span></div>
+      <a class="site-update-detail" data-site-update-detail href="{{ url_for('site_updates.timeline') }}">查看详情 →</a>
+      <button class="site-update-close" data-site-update-close type="button" aria-label="关闭更新公告">×</button>
+    </section>
+    {% endif %}
   {% endif %}
   <main class="container workspace-content" id="main-content">
     {% block content %}{% endblock %}
@@ -33,6 +42,7 @@
     <div class="modal" id="modal" role="dialog" aria-modal="true" aria-label="任务操作窗口"></div>
   </div>
   {% if me %}<script src="{{ url_for('static', filename='workspace.js') }}"></script>{% endif %}
+  {% if me and not me.must_change_password %}<script src="{{ url_for('static', filename='site-updates.js') }}"></script>{% endif %}
   {% if me %}<script src="{{ url_for('static', filename='item-topics.js') }}"></script>{% endif %}
   {% block scripts %}{% endblock %}
 </body>

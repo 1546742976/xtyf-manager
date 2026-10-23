@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}更新日志{% endblock %}
+{% block content %}
+<div class="ux-page-head">
+  <div><p class="ux-eyebrow">WORKSPACE / CHANGELOG</p><h1>更新日志</h1>
+    <p>按时间浏览网站已打包的 Git Commit 记录。信息在构建时缓存，页面无需连接 GitHub。</p></div>
+</div>
+<div data-site-update-timeline data-site-update-history-api="{{ url_for('site_updates.history') }}" aria-live="polite">
+  <p class="release-empty">正在加载更新日志…</p>
+</div>
+{% endblock %}

@@ -67,6 +67,10 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 完整功能覆盖矩阵、运行命令与不包括的浏览器 E2E 范围，见
 [测试与 GitHub Actions](docs/technical/测试与CI.md)。
 
+## 更新公告与发布日志
+
+登录后的顶部显示“网站已更新”公告，点击可进入 `/updates` 时间轴查看构建时缓存的最近 200 条 Git Commit 记录；成员也可通过侧栏随时打开更新日志。公告按用户和浏览器记录已读的部署 commit，并在页面保持打开时每分钟检查一次新版本。服务器无须访问 GitHub 或保留 `.git`；当发布包由 `deploy/package_release.py` 生成时自动写入 `site-release.json`。更多信息见 [更新公告与发布日志](docs/technical/更新公告与发布日志.md)。
+
 ## 部署与数据安全
 
 已有服务器升级可使用无参数流程：本地运行 `python deploy/package_release.py` 打包当前 commit，手动上传并解压后，在服务器解压目录运行 `sudo python3 deploy/update_release.py`。更新脚本会停服备份、在副本上迁移、切换部署并检查启动；失败时尝试恢复旧运行目录。详见[打包与服务器更新](docs/technical/打包与服务器更新.md)。

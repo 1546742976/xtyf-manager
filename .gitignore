@@ -28,6 +28,9 @@ dist/
 mail.env
 data/mail-preview/
 
+# Generated at deploy/package time, never committed.
+site-release.json
+
 # Client signing secrets and generated build resources belong to this stage.
 .build-tools/
 clients/signing/
