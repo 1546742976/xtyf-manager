@@ -178,3 +178,7 @@ python clients/build_linux.py --output-dir .build-tools/linux-debug
 Windows 使用 WebView2 系统授权流程；Linux WebKitGTK 在可信页面发起视频请求后显示确认窗口；Android 保留 CAMERA 运行时授权与请求来源校验。仅允许本地页面和当前配置的 HTTPS 网站，外链窗口与麦克风请求不开放。普通 HTTP 网站不能实时调用摄像头，可使用相册识别或本地界面；不会关闭浏览器安全检查。用户拒绝、系统隐私开关、无设备或驱动问题仍可能阻止取流。包检查、权限逻辑测试与目标设备真实取流分别记录。
 
 跨架构发布保持相同 Tauri 2 / Android 系统 WebView 技术栈。统一入口要求两个 EXE、四个 Linux 包及 APK 全部校验通过，才发布七包报告。可通过 `XTYF_SIGNING_DIR` 指向既有签名目录；不复制或重新生成发布密钥。
+
+Windows ARM64 还需要 MSVC ARM64 编译工具和 Clang（既有 `ring` 加密库的交叉编译要求）；发布预检查会确认 Clang 可用，可放在 PATH 或使用 Visual Studio 官方 Clang 组件。Linux 显式启用 WebKitGTK 媒体采集，并在 DEB/RPM 中声明 GStreamer Good 插件依赖，供 Video4Linux 摄像头取流。
+
+`clients/desktop/test_camera_runtime.cjs` 使用 `XTYF_TEST_EXE` 指向调试程序、`XTYF_SMOKE_DIR` 隔离配置。默认场景使用模拟摄像头和模拟同意；设置 `XTYF_CAMERA_TEST_MODE=deny` 在全新、不绕过权限回调的进程中检查麦克风拒绝。两项结果位于 `.build-tools/camera-native-check/`，不代表真实摄像头或所有目标平台已运行。

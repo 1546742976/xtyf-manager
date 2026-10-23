@@ -126,7 +126,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(report['android']['versionCode'], 12)
         self.assertEqual(report['android']['certificateSha256'], 'ab' * 32)
         self.assertEqual(report['android']['signerComparison'], 'no-baseline')
-        self.assertEqual(len(self.calls), 7)
+        self.assertEqual(len(self.calls), 8)
         self.assertIn('--check', self.calls[0])
         self.assertEqual(len(report['artifacts']), 7)
         self.assertEqual(report['linux'], self.verification('1.0.10'))
@@ -221,7 +221,7 @@ class ReleaseTests(unittest.TestCase):
             self.builder(command, root)
         with self.assertRaises(subprocess.CalledProcessError):
             module.release(self.root, fail_linux)
-        self.assertEqual(len(self.calls), 7)
+        self.assertEqual(len(self.calls), 8)
         self.assert_rollback()
 
     def test_missing_linux_artifact_does_not_publish_partial_release(self):
@@ -405,7 +405,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(report['android']['versionCode'], 11)
         self.assertEqual(report['releaseMode'], 'same-version-rebuild')
         self.assertEqual(report['source'], revision)
-        self.assertEqual(len(self.calls), 7)
+        self.assertEqual(len(self.calls), 8)
         backup = self.output / report['previousReleaseBackup']
         self.assertTrue(backup.is_relative_to(self.output / '.rebuild-backups'))
         for relative in module.VERSION_FILES:

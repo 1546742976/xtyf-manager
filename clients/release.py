@@ -315,6 +315,7 @@ def release(root=ROOT, runner=run_command, requested_version=None, rebuild_curre
         runner([sys.executable, root / 'clients/build_linux.py', '--check'], root)
         powershell = shutil.which('pwsh') or shutil.which('powershell') or 'powershell'
         runner([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', root / 'clients/build_windows.ps1', '-Check'], root)
+        runner([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', root / 'clients/build_windows.ps1', '-Architecture', 'arm64', '-Check'], root)
         rollback_files = (*VERSION_FILES, 'dist/clients/build-report.json', 'dist/clients/SHA256SUMS.txt')
         snapshots = {relative: (root / relative).read_bytes() if (root / relative).exists() else None for relative in rollback_files}
         staging = Path(tempfile.mkdtemp(prefix='.release-', dir=output)).resolve()
