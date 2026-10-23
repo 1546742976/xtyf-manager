@@ -85,7 +85,8 @@ class DailyProjectsTest(unittest.TestCase):
     def test_group_authorization_and_manager(self):
         pid=self.create()
         self.assertEqual(self.update(pid,'vision').status_code,403)
-        self.assertEqual(self.clients[0].post('/api/daily-projects',json={'title':'x','groups':{'vision':[self.ids[0]]}}).status_code,403)
+        self.assertEqual(self.clients[0].post('/api/daily-projects',json={'title':'x','groups':{'vision':[self.ids[0]]}}).status_code,200)
+        self.assertEqual(self.clients[0].post(f'/api/daily-projects/{pid}',json={}).status_code,403)
         self.assertEqual(self.update(pid,'vision',self.clients[2]).status_code,200)
 
     def test_cross_group_success_same_group_conflict(self):

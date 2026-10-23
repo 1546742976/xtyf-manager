@@ -301,8 +301,10 @@ def effective_status(db, pid, requested):
 
 @bp.post('/api/daily-projects')
 @bp.post('/api/daily-projects/<int:pid>')
-@manager_required
+@login_required
 def save(pid=None):
+    if pid is not None and current_user()['role'] not in ('admin', 'manager'):
+        return failure('无权限修改项目', 403)
     db = get_db()
     try:
         body = request.get_json(silent=True)

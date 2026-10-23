@@ -72,7 +72,7 @@ def data():
 
 
 @bp.route("/api/task", methods=["POST"])
-@manager_required
+@login_required
 def create():
     body, response = _json_body()
     if response is not None:

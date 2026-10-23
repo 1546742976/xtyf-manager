@@ -148,7 +148,10 @@ def create_task(
     owner_id = parse_id(data.get("owner_id"), "owner_id")
     project_id = parse_id(data.get("project_id"), "project_id")
     if "project" in data:
-        legacy_id = _legacy_catalog(db, "projects", str(data.get("project") or ""), True)
+        project_name = str(data.get("project") or "").strip()
+        legacy_id = _legacy_catalog(db, "projects", project_name, actor['role'] in ('admin', 'manager'))
+        if project_name and legacy_id is None:
+            rollback_owned(); return None, None, "造车组别不存在", 400
         if "project_id" in data and project_id != legacy_id:
             rollback_owned(); return None, None, "project 与 project_id 冲突", 400
         project_id = legacy_id
