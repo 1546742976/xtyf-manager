@@ -8,6 +8,13 @@ Type=oneshot
 User={{APP_USER}}
 WorkingDirectory={{APP_DIR}}
 EnvironmentFile={{MAIL_ENV}}
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+# 主库位于项目根目录；允许 SQLite 创建日志并保护源码目录。
+ReadWritePaths={{APP_DIR}}
+ReadOnlyPaths={{APP_DIR}}/app.py {{APP_DIR}}/common.py {{APP_DIR}}/modules {{APP_DIR}}/templates {{APP_DIR}}/static {{APP_DIR}}/clients {{APP_DIR}}/deploy {{APP_DIR}}/venv
 ExecStart={{APP_DIR}}/venv/bin/python deploy/mail_worker.py
 UMask=0077
 TimeoutStartSec=20min

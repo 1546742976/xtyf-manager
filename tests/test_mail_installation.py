@@ -37,7 +37,7 @@ class MailInstallerTests(unittest.TestCase):
         self.assertIn("User=rmuser", (self.units / "rm-mail.service").read_text())
         self.assertIn("WorkingDirectory=" + str(self.app),
                       (self.units / "rm-mail.service").read_text())
-        self.assertIn("OnUnitInactiveSec=15s",
+        self.assertIn("OnUnitInactiveSec=60s",
                       (self.units / "rm-mail.timer").read_text())
         self.assertIn("AccuracySec=1s", (self.units / "rm-mail.timer").read_text())
         self.assertFalse((self.units / "timers.target.wants").exists())

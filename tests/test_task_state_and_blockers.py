@@ -181,7 +181,10 @@ class TaskStateAndBlockerTests(unittest.TestCase):
         tid = self.create(status='阻塞', blocker_reason='缺料', blocker_next_action='采购')
         self.progress(tid, 30)
         self.progress(tid, 100)
-        revisions = self.admin.get(f'/api/task/{tid}/revisions').get_json()['revisions']
+        response = self.admin.get(f'/api/task/{tid}/revisions')
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertIn('revisions', response.get_json(), response.get_json())
+        revisions = response.get_json()['revisions']
         completion = revisions[0]
         result = self.admin.post(f'/api/task/{tid}/revisions/{completion["id"]}/revert', json={'version': self.task(tid)['version']})
         self.assertEqual(result.status_code, 200, result.get_json())

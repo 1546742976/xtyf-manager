@@ -1,8 +1,8 @@
-# 运行依赖清单：deploy.sh 会用清华镜像安装到 venv；gunicorn 由 deploy.sh 单独安装
-flask>=3.0.0
-Pillow>=10.3.0
-cryptography>=43
-matplotlib>=3.7.0
-pdfplumber>=0.10.0
-
-reportlab>=4.4,<5
+# 直接依赖固定为验收版本；升级必须修改此清单并重跑回归。
+Flask==3.1.3
+Pillow==13.0.0
+cryptography==50.0.2
+matplotlib==3.11.2
+pdfplumber==0.11.10
+reportlab==4.5.1
+gunicorn==26.2.0; sys_platform != 'win32'

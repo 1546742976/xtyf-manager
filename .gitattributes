@@ -19,3 +19,7 @@ clients/frontend/vendor/** -text
 
 # Barcode decoding resources are verified byte-for-byte by their lock.
 static/vendor/asset-tools/** -text
+
+# Public Bootstrap copies use the same locked bytes as the client vendor.
+static/vendor/bootstrap/** -text
+static/vendor/bootstrap-icons/** -text

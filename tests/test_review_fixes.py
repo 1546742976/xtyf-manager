@@ -41,8 +41,12 @@ class TestReviewFixes(unittest.TestCase):
             'tmp_path': tmp, 'month': '2026.10', 'amount': '1.00', **fields})
 
     def record(self):
-        return self.admin.post('/funds/api/records', json={
-            'record_type': '进', 'amount': '5.00', 'record_date': '2026-10-13'}).get_json()
+        response = self.admin.post('/funds/api/records', json={
+            'record_type': '进', 'amount': '5.00', 'record_date': '2026-10-13'})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertIn('id', payload, payload)
+        return payload
 
     def test_stale_review_rejected_and_unchanged_edit_keeps_version(self):
         record = self.record()
@@ -172,7 +176,9 @@ class TestReviewFixes(unittest.TestCase):
     def test_nested_organize_preserves_metadata_cache_and_is_idempotent(self):
         with invoices._invoice_lock, tempfile.TemporaryDirectory() as root, patch.multiple(
             invoices, BASE_DIR=root, META_FILE=os.path.join(root, '.invoice_meta.json'),
-            CACHE_FILE=os.path.join(root, '.invoice_cache.json')):
+            CACHE_FILE=os.path.join(root, '.invoice_cache.json'),
+            SNAPSHOT_FILE=os.path.join(root, '.invoice_snapshot.json'),
+            SNAPSHOT_STATE_FILE=os.path.join(root, '.invoice_snapshot_state.json')):
             meta = {}
             for sub in ('a', 'b'):
                 rel = f'legacy/deep/{sub}/类别-1元-商家-2026.10.13-发票.pdf'
@@ -190,7 +196,9 @@ class TestReviewFixes(unittest.TestCase):
             preview = self.admin.get('/invoices/api/organize/preview').get_json()
             self.assertEqual(preview['count'], 2)
             self.assertTrue(all(row['status'] == '已报销' and row['month'] == '2026.9' for row in preview['files']))
-            result = invoices.organize_all_files()
+            organized = self.admin.post('/invoices/api/organize', json={})
+            self.assertEqual(organized.status_code, 200, organized.get_data(as_text=True))
+            result = organized.get_json()['results']
             self.assertEqual((result['moved'], result['errors']), (2, 0))
             moved = invoices.load_meta()
             self.assertEqual(len(moved), 2)
@@ -203,9 +211,14 @@ class TestReviewFixes(unittest.TestCase):
                 self.assertTrue(os.path.isfile(os.path.join(root, entry['rel_path'])))
                 self.assertNotIn('\\', entry['rel_path'])
             self.assertEqual(set(invoices.load_cache()), set(moved))
-            self.assertEqual(invoices.organize_all_files()['moved'], 0)
+            repeated = self.admin.post('/invoices/api/organize', json={})
+            self.assertEqual(repeated.status_code, 200, repeated.get_data(as_text=True))
+            self.assertEqual(repeated.get_json()['results']['moved'], 0)
             self.assertEqual(invoices.load_meta(), moved)
-            rows = self.member.get('/invoices/api/invoices').get_json()['data']
+            listing = self.member.get('/invoices/api/invoices')
+            self.assertEqual(listing.status_code, 200)
+            self.assertEqual(listing.headers['X-Invoice-Snapshot-State'], 'current')
+            rows = listing.get_json()['data']
             self.assertEqual(len(rows), 2)
             self.assertTrue(all(row['amount'] == '99.99' for row in rows))
 

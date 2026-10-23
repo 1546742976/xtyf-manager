@@ -65,6 +65,10 @@ class FrontendTests(unittest.TestCase):
             self.assertIn(name,self.manifest['files'])
 
     def test_public_bootstrap_is_not_duplicated_but_asset_scanner_remains_packaged(self):
+        lock = json.loads((ROOT/'frontend/vendor-lock.json').read_text(encoding='utf-8'))
+        for name, digest in lock['files'].items():
+            if name.startswith(('bootstrap/', 'bootstrap-icons/')):
+                self.assertEqual(hashlib.sha256((ROOT.parent/'static/vendor'/name).read_bytes()).hexdigest(), digest, name)
         self.assertNotIn('static/vendor/bootstrap/bootstrap.min.css', self.manifest['files'])
         self.assertNotIn('static/vendor/bootstrap-icons/bootstrap-icons.min.css', self.manifest['files'])
         self.assertIn('static/vendor/asset-tools/zxing.js', self.manifest['files'])

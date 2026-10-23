@@ -39,7 +39,7 @@ echo "==> 创建虚拟环境并安装依赖"
 PIP_INDEX="https://pypi.tuna.tsinghua.edu.cn/simple"
 sudo python3 -m venv "$APP_DIR/venv"
 sudo "$APP_DIR/venv/bin/pip" install --upgrade pip -q -i "$PIP_INDEX"
-sudo "$APP_DIR/venv/bin/pip" install -q -i "$PIP_INDEX" -r "$APP_DIR/requirements.txt" gunicorn
+sudo "$APP_DIR/venv/bin/pip" install -q -i "$PIP_INDEX" -r "$APP_DIR/requirements.txt"
 
 sudo chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
 

@@ -8,6 +8,16 @@ Wants=network-online.target
 User={{APP_USER}}
 WorkingDirectory={{APP_DIR}}
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=MPLCONFIGDIR=/tmp/xtyf-matplotlib
+Environment=XDG_CACHE_HOME=/tmp/xtyf-cache
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+# SQLite 的 data.db WAL/SHM 与 secret.key 原子替换需要根目录可写。
+# 已有数据布局不迁移，单独把源码及运行依赖重新挂为只读。
+ReadWritePaths={{APP_DIR}}
+ReadOnlyPaths={{APP_DIR}}/app.py {{APP_DIR}}/common.py {{APP_DIR}}/modules {{APP_DIR}}/templates {{APP_DIR}}/static {{APP_DIR}}/clients {{APP_DIR}}/deploy {{APP_DIR}}/venv
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 # 默认 1 worker / 8 线程；配置钩子在服务重启后自动接续持久化发票队列
