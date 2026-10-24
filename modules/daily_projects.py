@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import json
 from modules.input_validation import parse_int_text
+from modules.task_assignment_mail import enqueue_assignments, executors
 import re
 
 from flask import Blueprint, current_app, jsonify, redirect, request, send_file, url_for
@@ -318,6 +319,7 @@ def save(pid=None):
             raise ValueError('修改原因最多 2000 字')
         when = stamp()
         old = None
+        previous_executors = executors(db, 'daily', pid) if pid is not None else {}
         if pid is not None:
             integer(pid, '项目 ID')
             old = active_project(db, pid)
@@ -406,6 +408,7 @@ def save(pid=None):
             completed_at = old['completed_at']
         db.execute('UPDATE daily_projects SET status=?,completed_at=? WHERE id=?', (status, completed_at, pid))
         record_change(db, pid, 'create' if old is None else 'update', body.get('note', ''), dict(old) if old else {}, dict(active_project(db, pid)))
+        enqueue_assignments(db, 'daily', pid, current_user(), previous_executors)
         db.commit()
         return jsonify(ok=True, id=pid, project=describe(db, active_project(db, pid)))
     except (ValueError, TypeError) as exc:

@@ -95,6 +95,11 @@ def migrate(db):
                 db.execute('UPDATE daily_groups SET label_snapshot=? WHERE stage=?', (label, stage))
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS daily_groups_catalog ON daily_groups(project_id,group_id) WHERE group_id IS NOT NULL')
         email_columns = {row[1] for row in db.execute('PRAGMA table_info(member_email)')}
+        if 'assignment_enabled' not in email_columns:
+            db.execute('ALTER TABLE member_email ADD COLUMN assignment_enabled INTEGER NOT NULL DEFAULT 1 CHECK(assignment_enabled IN (0,1))')
+        job_columns = {row[1] for row in db.execute('PRAGMA table_info(mail_jobs)')}
+        if 'payload_json' not in job_columns:
+            db.execute('ALTER TABLE mail_jobs ADD COLUMN payload_json TEXT')
         if 'verify_attempts' not in email_columns:
             db.execute('ALTER TABLE member_email ADD COLUMN verify_attempts INTEGER NOT NULL DEFAULT 0')
             # Invalidate existing link-based challenges when switching to numeric codes.

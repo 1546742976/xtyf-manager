@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from common import now_str
 from modules.input_validation import clean_text
+from modules.task_assignment_mail import enqueue_assignments, executors
 from modules.task_dates import apply_start_date_request
 from modules.task_types import Actor, JsonObject
 from modules.task_state import BLOCKER_FIELDS, COMPLETION_FIELDS, blocker_values, completion_values, record_blocker_event
@@ -187,6 +188,7 @@ def create_task(
         after = dict(values) | dict(relations)
         _revision(db, task_id, actor, {}, after, 1, "create")
         record_blocker_event(db, task_id, actor, blocker_event, stamp)
+        enqueue_assignments(db, 'vehicle', task_id, actor)
         if manage_transaction:
             db.commit()
         return task_id, 1, None, 200
@@ -203,6 +205,7 @@ def update_task(
     if row is None:
         db.rollback(); return None, "任务不存在", 404
     prior = dict(row)
+    previous_executors = executors(db, 'vehicle', task_id)
     participant_ids = _relations(db, task_id)["participant_ids"]
     management = actor["role"] in ("admin", "manager")
     executor = management or actor['id'] == prior['owner_id'] or actor['id'] in participant_ids
@@ -337,6 +340,7 @@ def update_task(
                 db.execute('INSERT INTO task_progress_updates(task_id,actor_id,actor_name,progress,note,created_at) VALUES(?,?,?,?,?,?)',
                            (task_id, actor['id'], actor['name'], values['progress'], note or '任务状态与进度同步', now_str()))
             record_blocker_event(db, task_id, actor, blocker_event, now_str())
+            enqueue_assignments(db, 'vehicle', task_id, actor, previous_executors)
         if changed or note:
             db.execute("INSERT INTO logs(task_id,member_id,member_name,note,changes,created_at) VALUES(?,?,?,?,?,?)",
                        (task_id, actor["id"], actor["name"], note, "；".join(sorted(changed)), now_str()))

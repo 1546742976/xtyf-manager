@@ -150,14 +150,14 @@ class DailyMailTest(unittest.TestCase):
         self.bind();self.task(owner_id=self.mid)
         morning=self.at.replace(hour=8)
         for at in (morning,morning,self.at,self.at):enqueue_daily(self.db,at)
-        rows=self.db.execute('SELECT kind,day,dedupe_key FROM mail_jobs WHERE member_id=? ORDER BY kind',(self.mid,)).fetchall()
+        rows=self.db.execute('SELECT kind,day,dedupe_key FROM mail_jobs WHERE kind<>"assignment" AND member_id=? ORDER BY kind',(self.mid,)).fetchall()
         self.assertEqual([(row['kind'],row['day'],row['dedupe_key']) for row in rows],
                          [('daily','2026-10-15',f'daily:2026-10-15:{self.mid}'),
                           ('morning','2026-10-15',f'morning:2026-10-15:{self.mid}')])
         # Rebinding or restarting later on the same day must not duplicate either brief.
         self.db.execute('UPDATE member_email SET generation=? WHERE member_id=?',(uuid4().hex,self.mid));self.db.commit()
         enqueue_daily(self.db,morning+timedelta(hours=1));enqueue_daily(self.db,self.at+timedelta(hours=1))
-        self.assertEqual(self.db.execute('SELECT count(*) FROM mail_jobs WHERE member_id=?',(self.mid,)).fetchone()[0],2)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM mail_jobs WHERE kind<>"assignment" AND member_id=?',(self.mid,)).fetchone()[0],2)
 
     def test_morning_and_evening_beijing_windows_include_weekends(self):
         for hour,minute,second,morning,evening in ((7,59,59,False,False),(8,0,0,True,False),
@@ -172,17 +172,17 @@ class DailyMailTest(unittest.TestCase):
         self.bind();self.task(owner_id=self.mid)
         saturday=datetime(2026,10,17,0,tzinfo=timezone.utc)
         enqueue_daily(self.db,saturday)
-        row=self.db.execute('SELECT kind,day FROM mail_jobs WHERE member_id=?',(self.mid,)).fetchone()
+        row=self.db.execute('SELECT kind,day FROM mail_jobs WHERE kind<>"assignment" AND member_id=?',(self.mid,)).fetchone()
         self.assertEqual((row['kind'],row['day']),('morning','2026-10-17'))
 
     def test_scheduler_does_not_catch_up_missed_morning_or_previous_day(self):
         self.bind();self.task(owner_id=self.mid)
         for at in (self.at.replace(hour=7,minute=59),self.at.replace(hour=12),self.at.replace(hour=21)):
             enqueue_daily(self.db,at)
-        self.assertEqual(self.db.execute('SELECT count(*) FROM mail_jobs WHERE member_id=?',(self.mid,)).fetchone()[0],0)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM mail_jobs WHERE kind<>"assignment" AND member_id=?',(self.mid,)).fetchone()[0],0)
         enqueue_daily(self.db,self.at)
         enqueue_daily(self.db,(self.at+timedelta(days=1)).replace(hour=8))
-        rows=self.db.execute('SELECT kind,day FROM mail_jobs WHERE member_id=? ORDER BY id',(self.mid,)).fetchall()
+        rows=self.db.execute('SELECT kind,day FROM mail_jobs WHERE kind<>"assignment" AND member_id=? ORDER BY id',(self.mid,)).fetchall()
         self.assertEqual([(row['kind'],row['day']) for row in rows],[('daily','2026-10-15'),('morning','2026-10-16')])
 
     def test_morning_claim_skips_jobs_outside_their_day_and_window(self):
