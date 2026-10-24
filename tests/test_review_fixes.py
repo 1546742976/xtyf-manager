@@ -46,7 +46,7 @@ class TestReviewFixes(unittest.TestCase):
             'password': 'writer-password', 'role': 'manager'}).get_json()['ok'])
         writer = app_module.app.test_client()
         self.assertTrue(writer.post('/login', json={'username': name, 'password': 'writer-password'}).get_json()['ok'])
-        response = writer.post('/funds/api/records', json={
+        response = writer.post('/funds/api/records', json={'request_id': uuid4().hex,
             'record_type': '进', 'amount': '5.00', 'record_date': '2026-10-13'})
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         payload = response.get_json()

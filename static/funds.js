@@ -16,6 +16,7 @@ var API = '/funds/api/records', sort = {by:'record_date',order:'DESC'}, edM, ct=
 var chartRequest = 0, chartAbort = null, chartPalette = '', chartDirty = false;
 var ME_NAME = window.XTYF_USER.name, ME_USERNAME = window.XTYF_USER.username;
 var CAN_REVIEW = window.XTYF_USER.canReview;
+var fundsCreate = null, fundsCreateBusy = false, fundsFormRequest = null;
 
 document.addEventListener('DOMContentLoaded', function(){
   edM = new bootstrap.Modal('#editMd');
@@ -23,6 +24,7 @@ document.addEventListener('DOMContentLoaded', function(){
   document.getElementById('aApplicant').value = ME_NAME;
   if (CAN_REVIEW) { loadPending(); setInterval(loadPending, 30000); }
   reload(); loadStats();
+  initializeFundsCreate();
   document.getElementById('mainTab').addEventListener('shown.bs.tab', function(e){
     if (e.target.dataset.bsTarget === '#t-charts' && (!ct || chartDirty)) {
       loadChart(ct || 'monthly', document.querySelector('#t-charts .btn-group .active'));
@@ -30,6 +32,63 @@ document.addEventListener('DOMContentLoaded', function(){
     }
   });
 });
+
+function renderFundsCreate(message) {
+  var entries = fundsCreate.pending();
+  document.getElementById('funds-create-fields').disabled = fundsCreateBusy || entries.length > 0;
+  var retry = document.getElementById('funds-create-retry');
+  retry.hidden = !entries.length; retry.disabled = fundsCreateBusy;
+  document.getElementById('funds-create-status').textContent = message || (entries.length
+    ? '结果待确认：' + entries.length + ' 笔原请求已保留，已暂停新增。当前请求：' + entries[0].body.record_type + ' ' + entries[0].body.amount + ' 元，请核对后重试原请求。'
+    : '新增就绪。提交结果不明时，可刷新后重试原请求。');
+}
+
+async function initializeFundsCreate() {
+  try {
+    fundsCreate = FundsCreate.create({storage:localStorage, fetch:BusinessUI.fetch,
+      server:()=>window.XTYF ? (parent.XTYF || window.XTYF).config.serverUrl : location.origin,
+      uuid:()=>Array.from(crypto.getRandomValues(new Uint8Array(16)), x=>x.toString(16).padStart(2,'0')).join('')});
+    var entries = await fundsCreate.connect();
+    if (entries.length) {
+      var body = entries[0].body;
+      var fields = {aT:'record_type',aAmt:'amount',aCat:'category',aSD:'source_dest',aDt:'record_date',
+        aNotes:'notes',aApplicant:'applicant',aInvCnt:'invoice_count',aHandler:'handler'};
+      Object.keys(fields).forEach(id=>{document.getElementById(id).value=body[fields[id]] ?? '';});
+      toggleF(); fundsFormRequest = body.request_id;
+    }
+    renderFundsCreate();
+    document.getElementById('funds-create-retry').onclick = ()=>submitFundsCreate(fundsCreate.pending()[0]);
+    window.addEventListener('storage',()=>{try{renderFundsCreate();}catch(error){fundsToast(error.message,'error');}});
+  } catch(error) {
+    document.getElementById('funds-create-fields').disabled = true;
+    document.getElementById('funds-create-status').textContent = '已暂停新增：' + error.message;
+  }
+}
+
+async function submitFundsCreate(entry) {
+  if (fundsCreateBusy || !entry) return;
+  fundsCreateBusy = true;
+  try {
+    renderFundsCreate('正在核对原请求并提交…');
+    var result = await fundsCreate.send(entry);
+    if (result.state === 'confirmed') {
+      var j = result.receipt;
+      var message = j.ledger_sync === 'failed' ? j.msg : '该创建请求已处理（记录 ' + j.id + '）。最新状态已重新读取。';
+      if (fundsFormRequest === entry.body.request_id) { clearF(); fundsFormRequest = null; }
+      reload(); loadStats(); if(CAN_REVIEW)loadPending();
+      fundsToast(message, j.ledger_sync === 'failed' ? 'error' : 'success');
+      renderFundsCreate(message);
+    } else if (result.state === 'rejected') {
+      renderFundsCreate(result.receipt.msg); fundsToast(result.receipt.msg,'error');
+    } else { renderFundsCreate(result.message); fundsToast(result.message,'error'); }
+  } catch(error) {
+    document.getElementById('funds-create-status').textContent = '请求已保留，请刷新核对：' + error.message;
+  } finally {
+    fundsCreateBusy = false;
+    try { renderFundsCreate(document.getElementById('funds-create-status').textContent); }
+    catch(error) { document.getElementById('funds-create-fields').disabled = true; }
+  }
+}
 
 document.addEventListener('workspace-theme-change', function(){
   if (!ct || chartPalette === document.documentElement.dataset.palette) return;
@@ -117,11 +176,11 @@ async function handleAdd(e){
     d.handler = document.getElementById('aHandler').value.trim();
   }
   try {
-    var r = await BusinessUI.fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
-    var j = await r.json();
-    if(j.code===0){ fundsToast(j.review_status==='待审核' ? '记录已提交，等待财务审核' : '记录已添加','success'); clearF(); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
-    else fundsToast(j.msg || '操作失败','error');
-  } catch(e){ fundsToast('提交失败：'+e.message,'error'); }
+    if (fundsCreateBusy) return;
+    var entry = fundsCreate.prepare(d);
+    fundsFormRequest = entry.body.request_id;
+    await submitFundsCreate(entry);
+  } catch(e){ fundsToast('未发送新增请求：'+e.message,'error'); }
 }
 
 async function edR(id){
@@ -155,7 +214,7 @@ async function saveE(){
     var r = await BusinessUI.fetch(API+'/'+document.getElementById('eId').value,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
     var j = await r.json();
     if(r.status===409){ fundsToast(j.msg||'记录已变更，请刷新后重试','error'); reload(); return; }
-    if(j.code===0){ edM.hide(); fundsToast('记录已更新，审核状态可能需要重新确认','success'); reload(); loadStats(); }
+    if(j.code===0){ edM.hide(); fundsToast(j.ledger_sync==='failed'?j.msg:'记录已更新，审核状态可能需要重新确认',j.ledger_sync==='failed'?'error':'success'); reload(); loadStats(); }
     else fundsToast(j.msg || '操作失败','error');
   } catch(e){ fundsToast('保存失败：'+e.message,'error'); }
 }
@@ -167,7 +226,7 @@ async function delR(id,version){
     var result = await response.json();
     if (response.status===409){ fundsToast(result.msg||'记录已变更，请刷新后重试','error'); reload(); return; }
     if (!response.ok || result.code !== 0) throw new Error(result.msg || '服务端拒绝删除');
-    fundsToast('记录已删除','success');
+    fundsToast(result.ledger_sync==='failed'?result.msg:'记录已删除',result.ledger_sync==='failed'?'error':'success');
     reload(); loadStats();
   } catch(e){ fundsToast('删除失败：'+e.message,'error'); }
 }
@@ -178,7 +237,7 @@ async function reviewRecord(id,version){
     var r = await BusinessUI.fetch(API+'/'+id+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:version})});
     var j = await r.json();
     if(r.status===409){fundsToast(j.msg,'error');reload();return}
-    if(j.code===0){ fundsToast('已审核通过','success'); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
+    if(j.code===0){ fundsToast(j.ledger_sync==='failed'?j.msg:'已审核通过',j.ledger_sync==='failed'?'error':'success'); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
     else fundsToast(j.msg||'操作失败','error');
   }catch(e){ fundsToast('操作失败：'+e.message,'error'); }
 }

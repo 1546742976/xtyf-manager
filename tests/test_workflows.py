@@ -43,11 +43,11 @@ class TestWorkflows(unittest.TestCase):
         self.assertEqual(bad.status_code, 400)
 
     def test_funds_invalid_and_review_permission(self):
-        bad = self.admin.post('/funds/api/records', json={
+        bad = self.admin.post('/funds/api/records', json={'request_id': uuid4().hex,
             'record_type': '进', 'amount': 'NaN', 'record_date': '2026-10-01',
         })
         self.assertEqual(bad.status_code, 400)
-        created = self.writer.post('/funds/api/records', json={
+        created = self.writer.post('/funds/api/records', json={'request_id': uuid4().hex,
             'record_type': '进', 'amount': 123.5, 'record_date': '2026-10-01',
             'source_dest': '单元测试',
         })
@@ -57,7 +57,7 @@ class TestWorkflows(unittest.TestCase):
         self.assertEqual(unauth.status_code, 403)
 
     def test_approved_record_edit_reopens_review(self):
-        created = self.writer.post('/funds/api/records', json={
+        created = self.writer.post('/funds/api/records', json={'request_id': uuid4().hex,
             'record_type': '进', 'amount': 25, 'record_date': '2026-10-02',
         })
         self.assertEqual(created.get_json()['code'], 0)

@@ -82,7 +82,10 @@
       <div class="row justify-content-center"><div class="col-lg-8">
         <div class="card"><div class="card-header">新增资金记录</div>
           <div class="card-body">
+            <p id="funds-create-status" role="status" aria-live="polite">正在检查新增能力…</p>
+            <button id="funds-create-retry" type="button" class="btn btn-outline-primary mb-2" hidden>重试原请求</button>
             <form id="addF" onsubmit="handleAdd(event); return false;">
+              <fieldset id="funds-create-fields" disabled>
               <div class="row mb-2">
                 <div class="col-md-4"><label class="form-label required" for="aT">类型</label>
                   <select class="form-select" id="aT" required onchange="toggleF()"><option value="">请选择</option><option value="进">进账</option><option value="出">支出</option></select></div>
@@ -113,6 +116,7 @@
               <div class="d-flex gap-2">
                 <button type="submit" class="btn btn-primary px-4">提交</button>
                 <button type="reset" class="btn btn-outline-secondary" onclick="clearF()">清空</button></div>
+              </fieldset>
             </form>
           </div>
         </div>
@@ -182,6 +186,7 @@ window.XTYF_USER = {
 </script>
 <script src="{{ url_for('static', filename='workspace.js') }}"></script>
 <script src="{{ url_for('static', filename='money.js') }}"></script>
+<script src="{{ url_for('static', filename='funds-create.js') }}"></script>
 <script src="{{ url_for('static', filename='funds.js') }}"></script>
 <div id="funds-feedback" class="ux-toast" role="status" aria-live="polite" hidden></div>
 </body>

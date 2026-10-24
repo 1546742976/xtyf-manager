@@ -58,6 +58,10 @@ def run():
             if args['path']=='/__preview.pdf':return {'status':200,'headers':{'Content-Type':'application/pdf'},'body':base64.b64encode(pdf_bytes).decode(),'encoding':'base64'}
             headers={**args.get('headers',{}),'X-XTYF-Client-Protocol':'1'}
             response=client.open(args['path'],method=args.get('method','GET'),headers=headers,data=args.get('body'))
+            if args['path']=='/funds/api/records' and args.get('method')=='POST' and state.get('drop_funds_response'):
+                state['drop_funds_response']=False
+                assert response.status_code==200
+                return {'status':200,'headers':{'Content-Type':'text/html'},'body':'<html>synthetic lost receipt</html>','encoding':'text'}
             binary=not response.is_json and not response.mimetype.startswith('text/')
             return {'status':response.status_code,'headers':dict(response.headers),'body':base64.b64encode(response.data).decode() if binary else response.get_data(as_text=True),'encoding':'base64' if binary else 'text'}
         raise ValueError('unexpected native action '+action)
@@ -117,6 +121,26 @@ def run():
                 text=frame.locator('body').inner_text()
                 assert label in text,(path,text[:200])
                 assert page.locator('#page-host iframe').get_attribute('srcdoc'),path
+                if path=='/funds/':
+                    frame.locator('[data-bs-target="#t-add"]').click()
+                    frame.locator('#aT').select_option('进')
+                    frame.locator('#aAmt').fill('12.34')
+                    frame.locator('#aNotes').fill('synthetic native funds recovery')
+                    state['drop_funds_response']=True
+                    frame.locator('#addF [type=submit]').click()
+                    frame.locator('#funds-create-status').filter(has_text='结果待确认').wait_for()
+                    page.evaluate("XTYF.navigate('/funds/',true)")
+                    frame.locator('[data-bs-target="#t-add"]').click()
+                    frame.locator('#funds-create-retry').wait_for()
+                    assert frame.locator('#aNotes').input_value()=='synthetic native funds recovery'
+                    frame.locator('#funds-create-retry').click()
+                    frame.locator('#funds-create-fields:enabled').wait_for()
+                    writes=[json.loads(args['body']) for action,args in state['calls']
+                            if action=='request' and args.get('path')=='/funds/api/records' and args.get('method')=='POST']
+                    assert len(writes)==2 and writes[0]==writes[1],writes
+                    records=client.get('/funds/api/records').get_json()['data']
+                    assert sum(r['notes']=='synthetic native funds recovery' for r in records)==1
+                    results.append('packaged funds creation recovers immutable receipts through authenticated native IPC')
                 if path=='/account':
                     assert frame.locator('#email-form').is_visible()
                     assert frame.locator('#email-code').get_attribute('pattern')=='[0-9]{6}'

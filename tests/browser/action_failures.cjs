@@ -80,9 +80,10 @@ async function api(page,url,data,method='POST') {
     await page.goto(base+'/funds/');await page.waitForFunction(()=>typeof bootstrap!=='undefined');
     await page.locator('[data-bs-target="#t-add"]').click();await page.locator('#aT').selectOption('进');await page.locator('#aAmt').fill('123.45');
     await reject('**/funds/api/records',500);await page.locator('#addF button[type=submit]').click();
-    await page.locator('#funds-feedback').filter({hasText:'模拟操作失败'}).waitFor();assert.equal(await page.locator('#aAmt').inputValue(),'123.45');await idle('#addF button[type=submit]');
+    await page.locator('#funds-feedback').filter({hasText:'结果待确认'}).waitFor();assert.equal(await page.locator('#aAmt').inputValue(),'123.45');
+    assert.ok(await page.locator('#addF button[type=submit]').isDisabled());await idle('#funds-create-retry');
     await page.unroute('**/funds/api/records');
-    const record=(await api(page,'/funds/api/records',{record_type:'进',amount:'5.00',record_date:'2026-10-15'})).body;
+    const record=(await api(page,'/funds/api/records',{request_id:require('node:crypto').randomUUID(),record_type:'进',amount:'5.00',record_date:'2026-10-15'})).body;
     await page.goto(base+'/funds/');await page.locator(`#tbody button[onclick="edR(${record.id})"]`).click();
     await page.locator('#eAmt').fill('88.88');await reject(`**/funds/api/records/${record.id}`,500);
     await page.locator('#editMd [onclick="saveE()"] ').click();await page.locator('#funds-feedback').filter({hasText:'模拟操作失败'}).waitFor();

@@ -13,7 +13,9 @@
 import base64
 import csv
 import io
+import json
 import os
+from contextlib import contextmanager
 from modules.input_validation import clean_text
 import sqlite3
 import tempfile
@@ -27,6 +29,7 @@ from modules.money import to_cents, format_cents, money_fields, money_json
 from modules.csv_security import safe_csv_cell
 from modules.funds_migrations import migrate as migrate_funds_money
 from modules.funds_revisions import migrate as migrate_funds_revisions
+from modules.funds_requests import migrate as migrate_funds_requests, valid_request_id, fingerprint
 from modules.task_validation import InvalidIdError, parse_id
 from modules.invoice_storage import InvoiceFileLock
 
@@ -188,8 +191,18 @@ def stats_payload(stats):
 
 
 # ---- 台账同步：与 API 共用整数分统计，串行快照、原子替换 ----
+@contextmanager
+def ledger_access():
+    if not _ledger_lock.acquire(timeout=5):
+        raise TimeoutError('资金台账同步等待超时')
+    try:
+        yield
+    finally:
+        _ledger_lock.release()
+
+
 def sync_txt():
-    with _ledger_lock:
+    with ledger_access():
         conn = get_funds_db()
         try:
             records = conn.execute('SELECT * FROM records ORDER BY record_date DESC,id DESC').fetchall()
@@ -225,6 +238,7 @@ def init_funds_db():
     try:
         migrate_funds_money(conn)
         migrate_funds_revisions(conn)
+        migrate_funds_requests(conn)
         # The review badge and the ledger list scan these columns on every page
         # load; without indexes both degrade to full table scans.
         conn.executescript("""
@@ -355,33 +369,45 @@ def get_record(rid):
 # ---- 新增记录：申请人自动填当前登录人；未获审核授权的人添加 → 待审核（审核人自动已审核）----
 def add_record():
     data = money_json()
+    request_id = data.get('request_id')
+    if not valid_request_id(request_id):
+        message = '新增资金记录需要防重复提交标识，请刷新适配页面或升级客户端'
+        return jsonify(code=1, msg=message, error=message, reason='idempotency_required'), 400
+
+    def rejected(message):
+        return jsonify(code=1, msg=message, reason='validation_failed', request_id=request_id), 400
+
     rt = data.get("record_type", "")
     if rt not in ("进", "出"):
-        return jsonify({"code": 1, "msg": "类型必须为“进”或“出”"}), 400
+        return rejected('类型必须为“进”或“出”')
 
     try:
         amount = to_cents(data.get("amount", 0), positive=True)
     except ValueError as exc:
-        return jsonify({"code": 1, "msg": str(exc)}), 400
+        return rejected(str(exc))
     try:
         invoice_count = _validated_count(data.get("invoice_count", 0))
     except (TypeError, ValueError):
-        return jsonify({"code": 1, "msg": "发票数目必须是非负整数"}), 400
+        return rejected('发票数目必须是非负整数')
     if not _valid_text_fields(data):
-        return jsonify({"code": 1, "msg": "资金文字字段格式或长度不合法（分类64、来源200、申请人/经手人64、备注2000字）"}), 400
+        return rejected('资金文字字段格式或长度不合法（分类64、来源200、申请人/经手人64、备注2000字）')
 
     rd = data.get("record_date", "")
     if not valid_record_date(rd):
-        return jsonify({"code": 1, "msg": "日期格式不正确（YYYY-MM-DD）"}), 400
+        return rejected('日期格式不正确（YYYY-MM-DD）')
 
     user = current_user()
+    if 'expected_member_id' in data and (type(data['expected_member_id']) is not int
+                                        or data['expected_member_id'] != user['id']):
+        return jsonify(code=1, msg='账号已变化，请使用原账号核对待确认请求', reason='account_changed'), 403
+    payload_hash = fingerprint(data, amount)
     applicant = (data.get("applicant") or "").strip() or user["name"]
     data["applicant"] = applicant
 
     if rt == "出":
         ok, err = validate_expense_fields(data)
         if not ok:
-            return jsonify({"code": 1, "msg": err}), 400
+            return rejected(err)
 
     auto_review = can_review(user)
     review_status = "已审核" if auto_review else "待审核"
@@ -389,21 +415,59 @@ def add_record():
     reviewed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if auto_review else ""
 
     conn = get_funds_db()
-    conn.execute('''INSERT INTO records
-        (record_type,amount_cents,category,source_dest,applicant,invoice_count,handler,record_date,notes,review_status,reviewed_by,reviewed_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (
-        rt, amount, data.get("category", ""),
-        data.get("source_dest", "") if rt == "进" else data.get("source_dest", "").strip(),
-        applicant, invoice_count,
-        data.get("handler", "").strip(), rd, data.get("notes", ""),
-        review_status, reviewed_by, reviewed_at,
-    ))
-    conn.commit()
-    rid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.close()
-    sync_txt()
-    return jsonify({"code": 0, "msg": "添加成功", "id": rid,
-                    "applicant": applicant, "review_status": review_status, "version": 1, **money_fields(amount)})
+    rid = None
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        receipt = conn.execute('SELECT payload_hash,result_json FROM funds_requests WHERE actor_id=? AND request_id=?',
+                               (user['id'], request_id)).fetchone()
+        if receipt:
+            if receipt['payload_hash'] != payload_hash:
+                conn.rollback()
+                message = '该提交标识已用于其他内容，请先核对原请求'
+                return jsonify(code=1, msg=message, error=message, reason='request_id_conflict'), 409
+            result = json.loads(receipt['result_json'])
+        else:
+            rid = conn.execute('''INSERT INTO records
+                (record_type,amount_cents,category,source_dest,applicant,invoice_count,handler,record_date,notes,review_status,reviewed_by,reviewed_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (
+                rt, amount, data.get('category', ''),
+                data.get('source_dest', '') if rt == '进' else data.get('source_dest', '').strip(),
+                applicant, invoice_count, data.get('handler', '').strip(), rd, data.get('notes', ''),
+                review_status, reviewed_by, reviewed_at,
+            )).lastrowid
+            result = dict(code=0, msg='添加成功', id=rid, applicant=applicant,
+                          review_status=review_status, version=1, request_id=request_id, **money_fields(amount))
+            conn.execute('INSERT INTO funds_requests VALUES(?,?,?,?,?)',
+                         (user['id'], request_id, payload_hash, json.dumps(result, ensure_ascii=False),
+                          datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        current_app.logger.error('资金提交失败 stage=database record_id=%s request_id=%s error_type=%s',
+                                 rid, request_id, type(exc).__name__)
+        raise
+    finally:
+        conn.close()
+    result['replayed'] = bool(receipt)
+    return committed_response(result, result['id'], request_id)
+
+
+@funds_bp.get('/api/capabilities')
+def capabilities():
+    return jsonify(code=0, create_idempotency=1, member_id=current_user()['id'])
+
+
+def committed_response(result, record_id, request_id=None):
+    """The database commit is final; projection failures cannot imply rollback."""
+    try:
+        sync_txt()
+        result['ledger_sync'] = 'ok'
+    except Exception as exc:
+        result['ledger_sync'] = 'failed'
+        result['msg'] = ('记录已保存' if request_id else '操作已完成') + '，台账文件同步失败；请勿重复提交'
+        current_app.logger.error('资金同步失败 stage=ledger_sync record_id=%s request_id=%s error_type=%s',
+                                 record_id, request_id, type(exc).__name__)
+    return jsonify(result)
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["PUT"])
@@ -469,9 +533,8 @@ def update_record(rid):
     conn.execute(f"UPDATE records SET {sets},version=version+1 WHERE id=?", [*changes.values(), rid])
     conn.commit()
     conn.close()
-    sync_txt()
-    return jsonify({"code": 0, "msg": "已更新", "version": original["version"] + 1,
-                    "review_required": "review_status" in changes, **money_fields(amount_cents)})
+    return committed_response({"code": 0, "msg": "已更新", "version": original["version"] + 1,
+                               "review_required": "review_status" in changes, **money_fields(amount_cents)}, rid)
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["DELETE"])
@@ -503,8 +566,7 @@ def delete_record(rid):
     conn.execute("DELETE FROM records WHERE id=? AND version=?", (rid, expected))
     conn.commit()
     conn.close()
-    sync_txt()
-    return jsonify({"code": 0, "msg": "已删除"})
+    return committed_response({"code": 0, "msg": "已删除"}, rid)
 
 
 @funds_bp.route("/api/records/<int:rid>/review", methods=["POST"])
@@ -537,8 +599,7 @@ def review_record(rid):
     )
     conn.commit()
     conn.close()
-    sync_txt()
-    return jsonify({"code": 0, "msg": "已审核", "version": expected + 1})
+    return committed_response({"code": 0, "msg": "已审核", "version": expected + 1}, rid)
 
 
 @funds_bp.route("/api/pending_review")

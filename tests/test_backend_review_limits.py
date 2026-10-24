@@ -79,7 +79,7 @@ class BackendLimitsTests(unittest.TestCase):
 
     def test_funds_invalid_date_and_text_are_400(self):
         self.assertEqual(self.client.get('/funds/api/records?date_from=bad').status_code, 400)
-        response = self.client.post('/funds/api/records', json={'record_type':'进','amount':'1','record_date':'2026-10-22','notes':'长'*2001})
+        response = self.client.post('/funds/api/records', json={'request_id': uuid4().hex, 'record_type':'进','amount':'1','record_date':'2026-10-22','notes':'长'*2001})
         self.assertEqual(response.status_code, 400)
 
     def test_quota_is_enforced_after_idempotency(self):

@@ -133,7 +133,7 @@ async function checkPasswordVisibility(page, base) {
     assert.equal((await api(memberPage,'/invoices/api/open_file?rel_path='+encodeURIComponent(invoices[0].rel_path))).status,200);
 
     // A displayed review must remain tied to its original version.
-    const record=(await api(memberPage,'/funds/api/records',{record_type:'进',amount:'5.00',record_date:'2026-10-14'})).body;
+    const record=(await api(memberPage,'/funds/api/records',{request_id:require('node:crypto').randomUUID(),record_type:'进',amount:'5.00',record_date:'2026-10-14'})).body;
     await admin.goto(base+'/funds/');
     await admin.waitForFunction(()=>typeof bootstrap!=='undefined');
     await admin.locator(`#tbody button[onclick^="reviewRecord(${record.id},"]`).waitFor();

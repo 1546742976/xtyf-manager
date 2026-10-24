@@ -64,7 +64,7 @@ class TestFeatureContracts(unittest.TestCase):
         versions = {}
         try:
             for amount in ("1.25", "2.75"):
-                response = self.client.post("/funds/api/records", json={
+                response = self.client.post("/funds/api/records", json={'request_id': uuid4().hex,
                     "record_type": "进", "amount": amount,
                     "record_date": "2026-10-13", "source_dest": marker,
                 })

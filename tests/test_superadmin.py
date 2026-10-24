@@ -30,7 +30,7 @@ class SuperadminTests(unittest.TestCase):
         self.assertEqual(listed['explicit_permissions'], [])
         self.assertEqual(self.owner.post(f'/api/admin/permissions/{self.mid}', json={'permissions': []}).status_code, 409)
         self.assertEqual(self.client.get('/invoices/api/jobs').status_code, 200)
-        record = self.client.post('/funds/api/records', json={
+        record = self.client.post('/funds/api/records', json={'request_id': uuid4().hex,
             'record_type': '进', 'amount': '1.00', 'record_date': '2026-10-24'}).get_json()
         self.assertEqual(record['code'], 0)
         self.assertEqual(record['review_status'], '已审核')

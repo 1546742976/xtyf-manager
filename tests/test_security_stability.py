@@ -69,7 +69,7 @@ class TestSecurityAndStability(unittest.TestCase):
         cents_before = int(baseline["total_in_cents"])
         ids = []
         for raw, expected in [("0.10", "0.10"), ("0.20", "0.20"), ("1.005", "1.01")]:
-            response = self.admin.post("/funds/api/records", json={
+            response = self.admin.post("/funds/api/records", json={'request_id': uuid4().hex,
                 "record_type": "进", "amount": raw, "record_date": "2026-10-13",
                 "source_dest": "模拟金额一致性",
             })
@@ -93,7 +93,7 @@ class TestSecurityAndStability(unittest.TestCase):
         self.assertIn("模拟金额一致性", ledger)
 
     def test_invalid_payloads_return_400_and_do_not_change_funds(self):
-        created = self.admin.post("/funds/api/records", json={
+        created = self.admin.post("/funds/api/records", json={'request_id': uuid4().hex,
             "record_type": "进", "amount": "1.25", "record_date": "2026-10-13",
         }).get_json()
         rid = created["id"]
@@ -104,7 +104,7 @@ class TestSecurityAndStability(unittest.TestCase):
             {"record_type": "进", "amount": "1.00", "record_date": "2026-10-13", "invoice_count": True},
         ):
             with self.subTest(payload=data):
-                result = self.admin.post("/funds/api/records", json=data)
+                result = self.admin.post("/funds/api/records", json={**data, 'request_id': uuid4().hex})
                 self.assertEqual(result.status_code, 400, result.get_json())
         for patch_data in ({"notes": None}, {"source_dest": ["invalid"]},
                            {"invoice_count": 3.7}, {"invoice_count": -1}):
@@ -120,7 +120,7 @@ class TestSecurityAndStability(unittest.TestCase):
 
     def test_review_does_not_overwrite_concurrent_approval(self):
         # A competing writer commits while the HTTP request waits for its write lock.
-        created = self.admin.post("/funds/api/records", json={
+        created = self.admin.post("/funds/api/records", json={'request_id': uuid4().hex,
             "record_type": "进", "amount": "9.90", "record_date": "2026-10-13",
         }).get_json()
         rid = created["id"]
@@ -163,7 +163,7 @@ class TestSecurityAndStability(unittest.TestCase):
 
     def test_csv_exports_quote_formula_cells(self):
         injected = "=HYPERLINK(\"https://example.invalid\",\"click\")"
-        created = self.admin.post("/funds/api/records", json={
+        created = self.admin.post("/funds/api/records", json={'request_id': uuid4().hex,
             "record_type": "进", "amount": "2.50", "record_date": "2026-10-13",
             "applicant": injected, "notes": "\t+SUM(1,2)",
         }).get_json()
