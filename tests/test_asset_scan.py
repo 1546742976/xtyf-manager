@@ -1,6 +1,7 @@
 """Synthetic purchase labels; no user order numbers or real inventory."""
 
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 import test_assets as fixture
@@ -35,17 +36,30 @@ class ScanTest(unittest.TestCase):
         self.assertEqual(value["fields"]["pdi"], "TEST")
         for quantity in ("0", "-2", "1.5", "3oops", ""):
             self.assertIsNone(parse_label("{pc:C12345,qty:" + quantity + "}")["label_quantity"])
-        for raw in ("{pc:C12345,pc:C23456,qty:1}", "{pc:bad,qty:1}", '__import__("os")', "{pc:C1,bad}"):
+        for raw in ("{pc:C12345,pc:C23456,qty:1}", "{pc:bad,qty:1}", "{pc:C1,bad}"):
+            value = parse_label(raw)
+            self.assertEqual(value["type"], "external")
+            self.assertEqual(value["raw"], raw)
+            self.assertTrue(value["parse_error"])
+        self.assertEqual(parse_label('__import__("os")')["type"], "external")
+        for raw in ("", "   ", "a" * 4097, None):
             with self.assertRaises(Invalid):
                 parse_label(raw)
 
     def test_resolve_and_permissions(self):
-        r = self.member.post("/api/assets/scan/resolve", json={"raw": self.receipt()["raw"]}).get_json()
+        with patch("modules.asset_scan.lookup_lcsc", return_value={
+            "configured": True, "status": "unavailable", "product": None,
+        }):
+            r = self.member.post("/api/assets/scan/resolve", json={"raw": self.receipt()["raw"]}).get_json()
         self.assertIsNone(r["item"])
-        self.assertFalse(r["supplier_lookup"]["configured"])
+        self.assertTrue(r["supplier_lookup"]["configured"])
+        self.assertEqual(r["supplier_lookup"]["status"], "unavailable")
         self.post(self.member, "/api/assets/identifiers", dict(item_id=self.screw, code="C12345", reason="测试"), 403)
         self.bind()
-        r = self.member.post("/api/assets/scan/resolve", json={"raw": "C12345"}).get_json()
+        with patch("modules.asset_scan.lookup_lcsc", return_value={
+            "configured": True, "status": "unavailable", "product": None,
+        }):
+            r = self.member.post("/api/assets/scan/resolve", json={"raw": "C12345"}).get_json()
         self.assertEqual(r["item"]["id"], self.screw)
 
     def test_receipt_idempotency_and_history(self):

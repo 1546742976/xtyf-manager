@@ -1,38 +1,77 @@
 {% extends "base.html" %}
-{% block title %}资产管理{% endblock %}
+{% block title %}物料管理{% endblock %}
 {% block content %}
 <section class="asset-workspace" aria-labelledby="asset-title">
-  <header class="asset-heading">
-    <div><p class="asset-eyebrow">团队资源 / INVENTORY</p><h1 id="asset-title">资产管理</h1><p class="asset-muted">按型号统计，按校区存放。每一次借还与领用都有记录。</p></div>
-    <button class="btn" id="asset-refresh" type="button">刷新数据</button>
+  <header class="asset-heading asset-page-header">
+    <div>
+      <p class="asset-eyebrow">INVENTORY / 团队物料工作台</p>
+      <a id="asset-back" href="/assets" class="asset-back" hidden>← 返回物料列表</a>
+      <h1 id="asset-title">物料管理</h1>
+      <p id="asset-description" class="asset-muted">从一颗螺丝到一台设备，让每一份物料都有去处。</p>
+    </div>
+    <div class="asset-header-actions">
+      <button class="btn" id="asset-scan-general" type="button" data-asset-scan-task="general" {% if not asset_units_enabled %}hidden{% endif %}>扫一扫</button>
+      <button class="btn" id="asset-refresh" type="button"><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></svg>刷新</button>
+      <button class="btn primary" id="asset-create" type="button" hidden><span aria-hidden="true">＋</span> 新增 / 扫码入库</button>
+    </div>
   </header>
-  <nav class="asset-tabs" aria-label="资产导航">
-    <a class="btn" href="/assets">全部物品</a><a class="btn" href="/assets?view=mine">我的借用</a>
-    <button class="btn" id="asset-objects" type="button" hidden>使用对象</button><button class="btn" id="asset-takes" type="button" hidden>单件盘点</button>
+  <div class="asset-nav-bar">
+  <nav class="asset-tabs asset-main-nav" aria-label="物料管理主导航">
+    <a class="asset-main-link" data-asset-nav="all" href="/assets">物料仓库</a>
+    <a class="asset-main-link" data-asset-nav="mine" href="/assets?view=mine">我的借用</a>
+  </nav>
+  <div id="asset-admin-tools" class="asset-admin-tools" hidden>
+    <span class="asset-tools-label">管理工具</span>
+    <button class="btn" id="asset-objects" type="button" hidden>使用对象</button>
+    <button class="btn" id="asset-takes" type="button" hidden>单件盘点</button>
     <button class="btn" id="asset-campuses" type="button" hidden>校区管理</button>
     <button class="btn" id="asset-categories" type="button" hidden>类别管理</button>
-    <button class="btn primary" id="asset-create" type="button" hidden>新增物品</button>
+  </div>
+  </div>
+  <nav id="asset-view-filters" class="asset-view-filters" aria-label="按物料使用方式筛选" aria-describedby="asset-summary-scope">
+    <button type="button" class="asset-view-button" data-asset-view="all" aria-pressed="true"><span class="asset-metric-top"><span>全部物料</span><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5ZM3 8v9l9 5 9-5V8M12 13v9"/></svg></span><strong class="asset-view-count">–</strong><span class="asset-metric-note">种物料 · 查看全部</span></button>
+    <button type="button" class="asset-view-button" data-asset-view="equipment" aria-pressed="false"><span class="asset-metric-top"><span>设备 / 工具</span><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V4h8v3M3 12h18M9 12v3h6v-3"/></svg></span><strong class="asset-view-count">–</strong><span class="asset-metric-note">借用后归还</span></button>
+    <button type="button" class="asset-view-button" data-asset-view="quantity" aria-pressed="false"><span class="asset-metric-top"><span>数量耗材</span><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4M10 10h4v4h-4z"/></svg></span><strong class="asset-view-count">–</strong><span class="asset-metric-note">按数量登记领用</span></button>
+    <button type="button" class="asset-view-button" data-asset-view="supply" aria-pressed="false"><span class="asset-metric-top"><span>自由取用</span><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16l1 10H3l1-10ZM7 10V6a5 5 0 0 1 10 0v4M9 15h6"/></svg></span><strong class="asset-view-count">–</strong><span class="asset-metric-note">只需关注是否充足</span></button>
+    <button type="button" class="asset-view-button" data-asset-view="attention" aria-pressed="false"><span class="asset-metric-top"><span>需要补货</span><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 10 18H2L12 3ZM12 9v5m0 3v1"/></svg></span><strong class="asset-view-count">–</strong><span class="asset-metric-note">缺货或已标记不足</span></button>
   </nav>
-  <p id="asset-status" role="status" aria-live="polite" tabindex="-1"></p>
+  <div class="asset-feedback-row">
+    <p id="asset-summary-scope" class="asset-muted">分类数量随搜索、校区和类别筛选更新。</p>
+    <p id="asset-status" role="status" aria-live="polite" tabindex="-1"></p>
+  </div>
   <div id="asset-pending" class="asset-pending" role="alert" hidden>
     <span id="asset-pending-message"></span>
     <button class="btn" id="asset-pending-retry" type="button">重试上次提交</button>
   </div>
-  <form id="asset-filter" class="asset-filters">
-    <label>名称或规格<input name="q" type="search" maxlength="120" placeholder="例如：M3 螺丝、3508 电机"></label>
-    <label>校区<select name="campus_id"><option value="">全部校区</option></select></label>
-    <label>类别<select name="category"><option value="">全部类别</option></select></label>
-    <button class="btn" type="submit">筛选</button>
-  </form>
+  <section id="asset-inventory-panel" class="asset-inventory-panel" aria-label="物料内容">
+  <div id="asset-discovery" class="asset-discovery">
+    <form id="asset-filter" class="asset-filters" role="search">
+      <div class="asset-search"><div class="asset-search-label"><label for="asset-search-query">搜索物料</label><button type="button" class="asset-text-button" data-asset-scan-task="search" {% if not asset_units_enabled %}hidden{% endif %}>扫码查找</button></div><span class="asset-search-field"><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input id="asset-search-query" name="q" type="search" maxlength="120" placeholder="搜索名称、型号或规格…"></span></div>
+      <label>校区<select name="campus_id"><option value="">全部校区</option></select></label>
+      <label>类别<select name="category"><option value="">全部类别</option></select></label>
+      <button class="btn primary" type="submit">查找</button>
+      <button class="btn asset-reset" id="asset-filter-reset" type="button">清空筛选</button>
+    </form>
+  </div>
+  <div id="asset-results-heading" class="asset-results-heading">
+    <div><h2>库存清单</h2><p id="asset-result-summary" class="asset-result-summary" aria-live="polite"></p></div>
+    <span class="asset-list-hint">点击名称查看库存与流转记录</span>
+  </div>
+  <section id="asset-category-organizer" class="asset-category-organizer" aria-label="整理库存类别" hidden>
+    <div class="asset-heading"><div><h3>整理库存类别</h3><p id="asset-category-selection" class="asset-muted" aria-live="polite"></p></div><button class="btn" type="button" data-action="category-organize-close">完成整理</button></div>
+    <div class="asset-actions"><button class="btn" type="button" data-action="category-select-page">选择本页</button><button class="btn" type="button" data-action="category-clear">清空选择</button><button class="btn primary" type="button" data-action="category-assign">设置已选物料类别</button></div>
+    <details><summary>查看已选物料</summary><ul id="asset-category-selected-list"></ul></details>
+  </section>
   <div id="asset-content" aria-busy="true"></div>
+  </section>
   <section id="asset-mine-units" class="asset-section asset-unit-drawer" aria-labelledby="asset-unit-title" hidden></section>
 </section>
 <dialog id="asset-add-dialog" class="asset-dialog" aria-labelledby="asset-add-title">
-  <header class="asset-heading"><h2 id="asset-add-title">新增物品</h2><button class="btn" id="asset-add-close" type="button">取消</button></header>
-  <p>选择登记方式，核对资料和数量后再保存。</p>
-  <div class="asset-actions">
-    <button class="btn primary" id="asset-add-manual" type="button" hidden>手动填写</button>
-    <button class="btn" id="asset-scan" type="button" {% if not asset_units_enabled %}hidden{% endif %}>扫码登记</button>
+  <header class="asset-heading"><h2 id="asset-add-title">新增 / 扫码入库</h2><button class="btn" id="asset-add-close" type="button">关闭</button></header>
+  <p class="asset-muted">选择手头的物料情况，进入对应流程。</p>
+  <div class="asset-entry-choices">
+    <button class="asset-entry-choice" id="asset-add-manual" type="button" hidden><strong>手动新建物料 <span aria-hidden="true">→</span></strong><span>还没有物料档案？填写名称、规格和管理方式。</span></button>
+    <button class="asset-entry-choice" id="asset-scan" type="button" {% if not asset_units_enabled %}hidden{% endif %}><strong>扫码入库 <span aria-hidden="true">→</span></strong><span>扫描采购包装，查询商品资料，核对实收数量与校区后入库。</span></button>
   </div>
   <p id="asset-add-guidance" class="asset-muted"></p>
 </dialog>
@@ -40,27 +79,34 @@
   <form id="asset-form">
     <header class="asset-heading"><h2 id="asset-dialog-title">资产操作</h2><button class="btn" type="button" id="asset-close">取消</button></header>
     <div id="asset-fields" class="asset-fields"></div>
-    <p id="asset-form-status" role="alert" tabindex="-1"></p>
-    <footer><button class="btn primary" id="asset-save" type="submit">确认保存</button></footer>
+    <footer class="asset-dialog-footer"><p id="asset-form-status" role="alert" tabindex="-1"></p><div class="asset-footer-actions"><button class="btn" id="asset-form-cancel" type="button">取消</button><button class="btn primary" id="asset-save" type="submit">确认保存</button></div></footer>
   </form>
+</dialog>
+<dialog id="asset-directory-dialog" class="asset-dialog" aria-labelledby="asset-directory-title">
+  <header class="asset-heading"><h2 id="asset-directory-title">目录管理</h2><button class="btn" id="asset-directory-close" type="button">关闭</button></header>
+  <p class="asset-muted">维护可选目录；停用项保留历史记录。</p>
+  <div id="asset-directory-content"></div>
 </dialog>
 <dialog id="asset-unit-drawer" class="asset-dialog asset-unit-drawer" aria-labelledby="asset-unit-title">
   <header class="asset-heading"><h2 id="asset-unit-title">单件管理</h2><button class="btn" id="asset-unit-close" type="button">关闭</button></header>
-  <label>实物校区<select id="asset-unit-campus"><option value="">全部校区</option></select></label>
-  <p id="asset-unit-status" role="status"></p><p id="asset-unit-selected" aria-live="polite"></p>
-  <div id="asset-unit-actions" class="asset-actions"></div><div id="asset-unit-content"></div><div id="asset-unit-history"></div>
+  <div class="asset-unit-toolbar"><label>实物校区<select id="asset-unit-campus"><option value="">全部校区</option></select></label><p id="asset-unit-status" role="status"></p></div>
+  <div class="asset-unit-selection"><p id="asset-unit-selected" aria-live="polite"></p><div id="asset-unit-actions" class="asset-actions"></div></div><div id="asset-unit-content"></div><div id="asset-unit-history"></div>
 </dialog>
-<dialog id="asset-scan-dialog" class="asset-dialog" aria-labelledby="asset-scan-title">
-  <header class="asset-heading"><h2 id="asset-scan-title">扫码工作台</h2><button type="button" class="btn" id="asset-scan-close">关闭</button></header>
-  <form id="asset-scan-form" class="asset-fields"><label>标签原文或商品编号<textarea id="asset-scan-raw" rows="3" maxlength="4096" required></textarea></label><button class="btn" type="submit">识别</button></form>
-  <label>连续扫码<select id="asset-scan-mode"><option value="query">查询／单包装预览</option><option value="units">收集单件（借还／装拆）</option><option value="receipts">收集包装（批量入库）</option></select></label><label>扫码枪结束规则<select id="asset-scan-end"><option value="Enter">Enter</option><option value="Tab">Tab</option><option value="manual">手动点击识别</option></select></label><div id="asset-scan-queue"></div><div id="asset-scan-camera"></div><p id="asset-scan-status" role="status"></p><div id="asset-scan-preview"></div>
+<dialog id="asset-scan-dialog" class="asset-dialog asset-dialog-wide" aria-labelledby="asset-scan-title">
+  <header class="asset-heading"><div><p class="asset-eyebrow">SCAN / 标签识别</p><h2 id="asset-scan-title">扫一扫</h2></div><button type="button" class="btn" id="asset-scan-close">关闭</button></header>
+  <label class="asset-scan-task">这次要做什么<select id="asset-scan-mode"><option value="general">先识别，再选择操作</option><option value="search">查找物料</option><option value="receive">采购入库</option><option value="borrow">借用设备 / 工具</option><option value="return">归还设备 / 工具</option><option value="count">现场盘点</option><option value="move">移动 / 校区调拨</option></select></label>
+  <div class="asset-scan-inputs" role="group" aria-label="扫码方式"><button type="button" class="btn" data-scan-input="camera" aria-pressed="false">摄像头</button><button type="button" class="btn" data-scan-input="gun" aria-pressed="true">扫码枪 / 粘贴</button></div>
+  <div id="asset-scan-camera" hidden></div>
+  <form id="asset-scan-form" class="asset-fields"><label>标签原文或商品编号<textarea id="asset-scan-raw" rows="3" maxlength="4096" placeholder="扫码或粘贴包装二维码、厂家序列号、C 编号、U: 单件标签或 M: 物料标签" required></textarea></label><div class="asset-actions"><button class="btn primary" type="submit">识别标签</button><span class="asset-muted">识别不会修改库存</span></div></form>
+  <details id="asset-scan-gun-settings" class="asset-form-section"><summary>扫码枪设置</summary><label>扫码结束按键<select id="asset-scan-end"><option value="Enter">Enter</option><option value="Tab">Tab</option><option value="manual">手动点击识别</option></select></label></details>
+  <p id="asset-scan-status" role="status" aria-live="polite"></p><div id="asset-scan-preview"></div><div id="asset-scan-queue"></div>
 </dialog>
-<dialog id="asset-lifecycle-dialog" class="asset-dialog"><header class="asset-heading"><h2>实物管理</h2><button class="btn" id="asset-lifecycle-close">关闭</button></header><p id="asset-lifecycle-status" role="status"></p><div id="asset-lifecycle-content"></div></dialog>
-<dialog id="asset-label-dialog" class="asset-dialog" aria-labelledby="asset-label-title">
+<dialog id="asset-lifecycle-dialog" class="asset-dialog asset-dialog-wide" aria-labelledby="asset-lifecycle-title"><header class="asset-heading"><h2 id="asset-lifecycle-title">实物管理</h2><button class="btn" id="asset-lifecycle-close">关闭</button></header><p id="asset-lifecycle-status" role="status"></p><div id="asset-lifecycle-content"></div></dialog>
+<dialog id="asset-label-dialog" class="asset-dialog asset-dialog-wide" aria-labelledby="asset-label-title">
 <header class="asset-heading"><h2 id="asset-label-title">标签打印预览</h2><button class="btn" id="asset-label-close">关闭</button></header>
-<form id="asset-label-form" class="asset-fields"><label>纸张<select name="paper"><option value="a4">A4 标签纸</option><option value="thermal">热敏纸</option></select></label><label>标签宽度（mm）<input name="width" type="number" min="40" max="190" value="60" required></label><label>标签高度（mm）<input name="height" type="number" min="25" max="270" value="35" required></label><button class="btn" type="submit">更新预览／PDF</button></form>
-<p id="asset-label-status" role="status"></p><a id="asset-label-download" class="btn" download="asset-labels.pdf" hidden>下载打印 PDF</a>
-<nav id="asset-label-pages" class="asset-actions" aria-label="PDF 分页" hidden><button id="asset-label-prev" class="btn">上一页</button><span id="asset-label-page"></span><button id="asset-label-next" class="btn">下一页</button></nav><div id="asset-label-preview"></div>
+<p id="asset-label-summary" class="asset-form-context"></p>
+<div class="asset-label-layout"><form id="asset-label-form" class="asset-fields"><h3>设置纸张与尺寸</h3><label>打印纸张<select name="paper"><option value="a4">A4 标签纸</option><option value="thermal">热敏标签纸</option></select></label><div class="asset-form-grid"><label>标签宽度（mm）<input name="width" type="number" min="40" max="190" value="60" required></label><label>标签高度（mm）<input name="height" type="number" min="25" max="270" value="35" required></label></div><button class="btn" type="submit">更新打印预览</button><p class="asset-muted">下载后按实际尺寸打印，关闭“适合页面”或缩放。</p></form><section><h3>实际 PDF 预览</h3><nav id="asset-label-pages" class="asset-actions" aria-label="PDF 分页" hidden><button id="asset-label-prev" class="btn">上一页</button><span id="asset-label-page"></span><button id="asset-label-next" class="btn">下一页</button></nav><div id="asset-label-preview"></div></section></div>
+<div class="asset-label-download"><p id="asset-label-status" role="status"></p><a id="asset-label-download" class="btn primary" download="asset-labels.pdf" hidden>下载打印 PDF</a></div>
 </dialog>
 {% endblock %}
 {% block scripts %}<script src="{{ url_for('static', filename='assets.js') }}"></script>{% if asset_units_enabled %}<script src="{{ url_for('static', filename='vendor/asset-tools/zxing.js') }}"></script><script src="{{ url_for('static', filename='vendor/asset-tools/barcode.js') }}"></script>{% for script in ['asset-units.js','asset-scan.js','asset-camera.js','asset-labels.js','asset-lifecycle.js'] %}<script src="{{ url_for('static', filename=script) }}"></script>{% endfor %}{% endif %}{% endblock %}

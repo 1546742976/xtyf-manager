@@ -159,3 +159,72 @@ class UnitsTest(unittest.TestCase):
             self.assertEqual(
                 app_module.get_db().execute("SELECT outstanding FROM asset_loans WHERE id=?", (loan,)).fetchone()[0], 1
             )
+
+    def _assert_migration_with_inactive_borrower(self, deleted):
+        self.post(
+            self.admin,
+            "/api/assets/operations",
+            dict(action="receive", item_id=self.item, campus_id=self.campus, quantity=2, reason="旧库存"),
+        )
+        legacy_loan_id = self.post(
+            self.member,
+            "/api/assets/operations",
+            dict(action="borrow", item_id=self.item, campus_id=self.campus, quantity=1, reason="旧借单"),
+        )["loan_id"]
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            old_loan = dict(db.execute("SELECT * FROM asset_loans WHERE id=?", (legacy_loan_id,)).fetchone())
+            db.execute(
+                "UPDATE members SET name=?,is_active=0,deleted_at=? WHERE id=?",
+                ("已更名的历史成员", "2026-10-22 12:00:00" if deleted else None, self.member_id),
+            )
+            db.commit()
+
+        def migrate(action, **fields):
+            item = self.admin.get(f"/api/assets/items/{self.item}").get_json()["item"]
+            return self.post(
+                self.admin,
+                "/api/assets/units/migrate",
+                dict(item_id=self.item, action=action, version=item["version"], reason="人工核对", **fields),
+            )
+
+        migrate("start")
+        migrate("add", campus_id=self.campus, quantity=1)
+        migrate("add", campus_id=self.campus, quantity=1, loan_id=legacy_loan_id)
+        completed = migrate("finish")
+        self.assertEqual(len(completed["unit_ids"]), 2)
+        units = self.get_units(self.item)
+        held = next(unit for unit in units if unit["keeper_id"] == self.member_id)
+        free = next(unit for unit in units if unit["keeper_id"] is None)
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            migrated = db.execute(
+                "SELECT member_id,member_name,closed_at FROM asset_unit_loans WHERE unit_id=?", (held["id"],)
+            ).fetchone()
+            self.assertEqual(
+                (migrated["member_id"], migrated["member_name"], migrated["closed_at"]),
+                (self.member_id, old_loan["member_name"], None),
+            )
+            self.assertEqual(
+                db.execute("SELECT outstanding FROM asset_loans WHERE id=?", (legacy_loan_id,)).fetchone()[0], 1
+            )
+            self.assertEqual(
+                db.execute("SELECT COUNT(*) FROM asset_events WHERE item_id=? AND action='unit_migration'",
+                           (self.item,)).fetchone()[0], 1
+            )
+
+        # Migration must not weaken active-member checks on new custody.
+        self.operate("borrow", [free], self.admin, member_id=self.member_id, status=409)
+        # Administrators can resolve historical custody without re-enabling the account.
+        self.operate("return", [held], self.admin, campus_id=self.campus)
+        with app_module.app.app_context():
+            closed = app_module.get_db().execute(
+                "SELECT closed_reason FROM asset_unit_loans WHERE unit_id=?", (held["id"],)
+            ).fetchone()
+            self.assertEqual(closed[0], "return")
+
+    def test_migration_completes_with_disabled_legacy_borrower(self):
+        self._assert_migration_with_inactive_borrower(deleted=False)
+
+    def test_migration_completes_with_soft_deleted_legacy_borrower(self):
+        self._assert_migration_with_inactive_borrower(deleted=True)

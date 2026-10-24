@@ -12,8 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  python:
-    name: Python unit + API regression (${{ matrix.os }})
+  python-checks:
+    name: Python syntax, lint and migration (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -43,26 +43,73 @@ jobs:
         run: python tests/upgrade_from_main.py
       - name: Python syntax check
         run: python -m compileall -q app.py common.py modules tests deploy
-      - name: Invoice correction and PDF preview regression
-        run: python -m unittest discover -s tests -p 'test_invoice_regression.py' -v
-      - name: Asset ledger correction, payload and concurrency regression
-        run: python -m unittest discover -s tests -p 'test_assets.py' -v
       - name: 'Lint (ruff: syntax, unused imports/variables)'
         run: ruff check app.py common.py modules deploy tests
-      - name: Run unit and integration tests with branch coverage
-        run: coverage run --branch --source=app,common,modules,deploy -m unittest discover -s tests -v
-      - name: Coverage report
+
+  python:
+    name: Python tests (${{ matrix.os }} / ${{ matrix.shard }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        shard: [tasks, members, finance, assets, collaboration, platform]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run module tests with branch coverage
+        run: coverage run --branch --parallel-mode --source=app,common,modules,deploy tests/ci_shards.py ${{ matrix.shard }}
+      - name: Upload shard coverage data
         if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-data-${{ matrix.os }}-${{ matrix.shard }}
+          path: .coverage.*
+          if-no-files-found: error
+          include-hidden-files: true
+
+  python-coverage:
+    name: Python combined branch coverage (${{ matrix.os }})
+    needs: python
+    if: always()
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install coverage
+        run: python -m pip install coverage==7.16.2
+      - name: Download module coverage data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: python-coverage-data-${{ matrix.os }}-*
+          merge-multiple: true
+      - name: Combine coverage and enforce the original 65% threshold
         shell: bash
         run: |
           set -euo pipefail
+          coverage combine
           coverage report -m
           coverage xml -o coverage.xml
           coverage json -o coverage.json
-          python -c 'import json,os; p=json.load(open("coverage.json"))["totals"]["percent_covered_display"]; open(os.environ["GITHUB_STEP_SUMMARY"],"a").write("## Python branch coverage\n\nTotal: **"+p+"%**\n")'
+          python -c 'import json,os; p=json.load(open("coverage.json"))["totals"]["percent_covered_display"]; open(os.environ["GITHUB_STEP_SUMMARY"],"a").write("## Python branch coverage (combined shards)\n\nTotal: **"+p+"%**\n")'
           coverage report --fail-under=65
-
-      - name: Upload coverage XML
+      - name: Upload combined coverage XML
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -85,37 +132,136 @@ jobs:
           for file in static/*.js; do node --check "$file"; done
       - name: Run browser logic unit tests
         run: node --test tests/js/*.test.cjs
-  
-  browser:
-    name: Browser end-to-end (Chromium + WebKit)
+
+  browser-image:
+    name: Prepare reusable browser container (GHCR)
+    # Never publish untrusted code from forks; they use the vendor image fallback.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.tag.outputs.image }}
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve CI image tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=$(sha256sum .github/ci/browser.Dockerfile requirements.txt requirements-dev.txt | sha256sum | cut -c1-16)
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}-ci-browser:ci-${TAG}"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "CI image: $IMAGE"
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check existing published image
+        id: existing
+        shell: bash
+        run: |
+          if docker manifest inspect "${{ steps.tag.outputs.image }}" > /dev/null 2>&1; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+            echo "Reusing prebuilt CI image"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo "Image missing, one build is needed"
+          fi
+      - uses: docker/setup-buildx-action@v3
+        if: steps.existing.outputs.present != 'true'
+      - name: Build and publish the missing image
+        if: steps.existing.outputs.present != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .github/ci/browser.Dockerfile
+          push: true
+          tags: ${{ steps.tag.outputs.image }}
+          cache-from: type=gha,scope=xtyf-browser-ci
+          cache-to: type=gha,mode=max,scope=xtyf-browser-ci
+
+  browser:
+    name: Browser end-to-end (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: foundation-core
+            suites: 'review_fixes pr22_merge'
+          - group: foundation-login
+            suites: 'action_failures login_mobile'
+          - group: tasks-core
+            suites: 'task_center task_schedule'
+          - group: tasks-mail
+            suites: 'daily_mail'
+          - group: tasks-repairs
+            suites: 'seven_repairs seven_repairs_review'
+          - group: ui-core
+            suites: 'palette_workspace local_collaboration account_avatar ui_regressions'
+          - group: ui-clients
+            suites: 'account_invoice_ui client_updates_avatar client_connection'
+          - group: assets-ledger
+            suites: 'assets'
+          - group: assets-serialized
+            suites: 'assets_serialized'
+          - group: assets-intake
+            suites: 'assets_intake assets_catalog_paging'
+    needs: browser-image
+    # A missing image for a fork should not prevent the read-only fallback path.
+    if: ${{ always() && (needs.browser-image.result == 'success' || needs.browser-image.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.browser-image.outputs.image || 'mcr.microsoft.com/playwright:v1.57.0-noble' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use preinstalled browser and Python dependencies
+        if: needs.browser-image.result == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ln -s /opt/xtyf-node/node_modules node_modules
+          python --version
+          node --version
+          node -e "require('playwright')"
       - uses: actions/setup-python@v5
+        if: needs.browser-image.result == 'skipped'
         with:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
-      - name: Install Python test dependencies
-        run: python -m pip install -r requirements-dev.txt
       - uses: actions/setup-node@v4
+        if: needs.browser-image.result == 'skipped'
         with:
           node-version: '22'
-      - name: Install pinned Playwright and browser engines
+      - name: Fallback project dependencies for external PRs
+        if: needs.browser-image.result == 'skipped'
+        shell: bash
         run: |
+          python -m pip install -r requirements-dev.txt
           npm install --no-save --package-lock=false playwright@1.57.0 bootstrap@5.3.3 bootstrap-icons@1.11.3
-          npx playwright install --with-deps chromium webkit
       - name: Run browser integration and mobile checks
         shell: bash
         env:
           REVIEW_PYTHON: python
+          SUITES: ${{ matrix.suites }}
         run: |
           set -euo pipefail
           failures=0
-          for suite in review_fixes pr22_merge task_center task_schedule daily_mail action_failures login_mobile palette_workspace local_collaboration account_avatar account_invoice_ui client_updates_avatar client_connection seven_repairs seven_repairs_review assets assets_serialized ui_regressions; do
+          for suite in $SUITES; do
             echo "::group::Browser test: ${suite}"
             if ! node "tests/browser/${suite}.cjs"; then
               echo "::error::Browser suite ${suite} failed"
@@ -128,7 +274,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-e2e-diagnostics
+          name: browser-e2e-diagnostics-${{ matrix.group }}
           path: |
             .venv/*-check/*.png
             .venv/*-check/*.json
@@ -136,6 +282,7 @@ jobs:
             .build-tools/*-check/*.json
             .build-tools/seven-repairs-20261018/browser/*.png
             .build-tools/seven-repairs-20261018/browser/*.json
+            .build-tools/assets-review-fixes/*.png
+            .build-tools/assets-review-fixes/*.json
           include-hidden-files: true
           if-no-files-found: ignore
-

@@ -17,6 +17,8 @@
 
 访问 **http://127.0.0.1:8520**（可通过 `PORT` 修改本地端口）。首次创建空库时会创建 `admin` 账户：使用 `PROGRESS_INITIAL_ADMIN_PASSWORD` 指定独立初始密码，或者从仅当前系统账户可读写的 `initial-admin-password.txt` 获取随机初始凭据（可用 `PROGRESS_INITIAL_CREDENTIALS_PATH` 指定路径）。首次登录必须改密，交付并改密后应删除该文件。已有数据库和账户不会因此重置。
 
+Windows 双击 **`start.bat`** 可同时启动 HTTP 服务和手机扫码用的 HTTPS 入口，默认端口分别为 `8520`、`8521`。启动器自动选择物理网卡的局域网 IPv4，也可运行 `start.bat --ip <电脑局域网IPv4>` 显式指定。手机首次使用需按[资产管理的手机扫码设置](docs/usage/资产管理.md#手机通过局域网调试摄像头)安装本地公开证书。在启动窗口按 `Ctrl+C` 会同时停止两处入口，原有数据库环境变量继续生效。若 HTTP 服务已由其他终端启动，则只运行 `python deploy/local_https.py --ip <电脑局域网IPv4>` 添加 HTTPS 入口，不再重复运行 `start.bat`。
+
 **不要将真实 `data.db`、`data/`、`secret.key`、发票或成员密码提交至 Git。**
 
 ## 已实现功能（以 main 源码为准）
@@ -65,6 +67,10 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 完整功能覆盖矩阵、运行命令与不包括的浏览器 E2E 范围，见
 [测试与 GitHub Actions](docs/technical/测试与CI.md)。
 
+## 更新公告与发布日志
+
+登录后的顶部显示“网站已更新”公告，点击可进入 `/updates` 时间轴查看构建时缓存的最近 200 条 Git Commit 记录；成员也可通过侧栏随时打开更新日志。公告按用户和浏览器记录已读的部署 commit，并在页面保持打开时每分钟检查一次新版本。服务器无须访问 GitHub 或保留 `.git`；当发布包由 `deploy/package_release.py` 生成时自动写入 `site-release.json`。更多信息见 [更新公告与发布日志](docs/technical/更新公告与发布日志.md)。
+
 ## 部署与数据安全
 
 已有服务器升级可使用无参数流程：本地运行 `python deploy/package_release.py` 打包当前 commit，手动上传并解压后，在服务器解压目录运行 `sudo python3 deploy/update_release.py`。更新脚本会停服备份、在副本上迁移、切换部署并检查启动；失败时尝试恢复旧运行目录。详见[打包与服务器更新](docs/technical/打包与服务器更新.md)。
@@ -73,7 +79,7 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 
 `deploy/backup.sh` 可以分别备份进度库、资金库，并在周日打包发票，但**不包含任务截图和密钥组成的同一恢复点**。生产升级之前应暂停写入，对所有数据库、附件、发票和密钥制作一致性备份并先演练恢复。详见[发布检查与数据恢复](docs/technical/发布检查与数据恢复.md)。
 
-现行服务使用 HTTP；HTTP 不提供传输加密，限制访问网络、权限和敏感数据传播是部署方必须处理的风险。这里不新增 HTTPS 开发任务。
+现行业务服务默认使用 HTTP。手机摄像头本地调试可使用上述 HTTPS 入口；正式服务器的 HTTPS 仍由部署方配置，本地调试代理不承担生产部署。
 
 ## 文档导航
 

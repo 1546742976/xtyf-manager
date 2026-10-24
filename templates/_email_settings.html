@@ -1,8 +1,24 @@
 {% if not me.must_change_password %}
-<section class="panel ux-account-email"><h2>每日任务邮件</h2><p>验证邮箱后，每天北京时间 08:00 收到个人任务早报，22:00 收到团队项目晚报，包含周末。两类邮件只收录进行中、阻塞或未开始但已逾期的造车任务和日常项目；已完成（包括当天完成）、已取消、已删除事项始终排除。逾期指截止日期早于发送当天（北京时间），今天截止不算逾期。个人范围无符合提醒条件的事项时不发送早报，全团队无符合提醒条件的事项时不发送晚报。仅对您负责且超过 48 小时未更新的任务或项目组提示催更。如需暂停两类邮件，请联系管理员。</p>
+<section class="panel ux-account-email"><h2>邮件提醒设置</h2><p>验证码按需发送。个人汇总在北京时间 08:00 发送，选择 0.5 天时还会在 20:00 检查；团队汇总于 22:00、倒计时提醒于 08:00 检查。系统按每位成员设置的周期发送，未验证邮箱、提醒暂停或没有符合条件的任务时不会发送汇总。</p>
 <p id="email-state" role="status">正在加载邮箱状态…</p>
 <form id="email-form" class="ux-account-form"><label for="email-address">收件邮箱</label><input id="email-address" name="email" type="email" maxlength="254" autocomplete="email" required><button type="submit" class="btn">发送／重发 6 位验证码</button><p>修改邮箱会停止向原地址发送，新地址验证后恢复。60 秒后可重发，每小时最多 5 次。</p><p id="email-result" role="status" aria-live="polite"></p></form>
 <form id="email-code-form" class="ux-account-form" hidden><p id="email-code-address"></p><label for="email-code">邮件验证码</label><input id="email-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="请输入 6 位数字" required><button type="submit" class="btn primary">验证并绑定邮箱</button><p>验证码 30 分钟有效，输错 5 次后需重新发送。</p><p id="email-code-result" role="status" aria-live="polite"></p></form>
+<form id="email-preferences-form" class="ux-account-form">
+  <h3>个人提醒频率</h3>
+  <label><input type="checkbox" name="morning_enabled"> 接收个人任务详细汇总</label>
+  <label for="email-personal-days">发送间隔（0.5–7 天，每次调整 0.5 天）</label>
+  <input id="email-personal-days" type="number" name="morning_interval_days" min="0.5" max="7" step="0.5" required>
+  <h3>团队提醒频率</h3>
+  <label><input type="checkbox" name="daily_enabled"> 接收团队项目详细汇总</label>
+  <label for="email-team-days">发送间隔（1–14 天）</label>
+  <input id="email-team-days" type="number" name="daily_interval_days" min="1" max="14" step="1" required>
+  <h3>首页倒计时</h3>
+  <label><input type="checkbox" name="countdown_enabled"> 接收管理员设置的首页目标倒计时邮件（默认关闭）</label>
+  <label for="email-countdown-days">发送间隔（1–14 天）</label>
+  <input id="email-countdown-days" type="number" name="countdown_interval_days" min="1" max="14" step="1" required>
+  <button type="submit" class="btn primary">保存邮件偏好</button>
+  <p id="email-preferences-result" role="status" aria-live="polite"></p>
+</form>
 <button type="button" class="btn" id="email-refresh">刷新验证状态</button>
 {% if me.role=='admin' %}<a class="btn" href="/admin/mail">管理邮件提醒</a>{% endif %}</section>
 {% endif %}

@@ -58,23 +58,23 @@ async function main(){
     await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();
     await page.locator('#asset-form [name=name]').fill('测试电机 '+label);
     await page.locator('#asset-form [name=specification]').fill('3508 <测试>');
+    await page.locator('#asset-form [name=returnable_mode]').selectOption('quantity');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     // This suite retains the pre-migration quantity/loan contract. New unit behavior
     // is tested separately in assets_serialized; only this disposable DB is seeded.
     const legacy=(await(await api.get('/api/assets/items?q='+encodeURIComponent('测试电机 '+label))).json()).items[0];
-    execFileSync(process.env.REVIEW_PYTHON||'python',['-c',"import pathlib,sqlite3,sys; p=pathlib.Path(sys.argv[1]); assert p.name=='data.db' and p.parent.name.startswith('xtyf-browser-review-'); db=sqlite3.connect(p); db.execute(\"UPDATE asset_items SET tracking='legacy' WHERE id=?\",(int(sys.argv[2]),)); db.commit(); db.close()",path.join(fixtureRoot,'data.db'),String(legacy.id)]);
     await page.reload();await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.getByRole('link',{name:'测试电机 '+label,exact:true}).click();
     await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     const id=Number(new URL(page.url()).searchParams.get('id'));
     const eastCard=page.locator('.asset-card').filter({has:page.getByRole('heading',{name:'合成东校区',exact:true})});
-    await eastCard.getByRole('button',{name:'入库',exact:true}).click();
+    await eastCard.getByRole('button',{name:'补货入库',exact:true}).click();
     await page.locator('#asset-form [name=quantity]').fill('10');await page.locator('#asset-form [name=reason]').fill('合成入库');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await eastCard.getByText('总量 · 在库 10 / 借出 0',{exact:true}).waitFor();
-    await eastCard.getByRole('button',{name:'借用',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('3');
+    await eastCard.getByRole('button',{name:'登记借用',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('3');
     await page.locator('#asset-close').click();assert.equal((await (await api.get(`/api/assets/items/${id}`)).json()).campuses.find(c=>c.id===campus).available,10);
-    await eastCard.getByRole('button',{name:'借用',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('3');
+    await eastCard.getByRole('button',{name:'登记借用',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('3');
     // A committed response is lost: retry must return the existing result.
     await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成借用验证');
     let lost=true;
@@ -97,18 +97,18 @@ async function main(){
     await eastCard.getByText('总量 · 在库 7 / 借出 3',{exact:true}).waitFor();
     assert.equal((await (await api.get(`/api/assets/events?item_id=${id}`)).json()).events.filter(e=>e.action==='borrow').length,borrowEventsBefore);
     await page.unroute('**/api/assets/operations');
-    await page.getByRole('link',{name:'我的借用',exact:true}).click();
+    await page.getByRole('link',{name:'我的借用',exact:true}).click();await page.locator('[data-asset-mine-view=quantity]').click();
     await page.locator('#asset-content [data-action=return]').first().click();
     await page.locator('#asset-form [name=quantity]').fill('1');await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成归还验证');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.locator('#asset-content .asset-card').filter({has:page.getByRole('link',{name:'测试电机 '+label,exact:true})}).getByText('未还 2 个',{exact:true}).waitFor();
     await page.locator('#asset-content[aria-busy=false]').waitFor();
     await page.goto(base+`/assets/detail?id=${id}`);await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.reload();await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
-    await eastCard.getByRole('button',{name:'校区调拨',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('2');
+    await eastCard.locator('summary').click();await eastCard.getByRole('button',{name:'校区调拨',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('2');
     await page.locator('#asset-form [name=target_campus_id]').selectOption(String(west));await page.locator('#asset-form [name=reason]').fill('合成调拨');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await eastCard.getByText('总量 · 在库 6 / 借出 2',{exact:true}).waitFor();
-    await page.locator('#asset-event-campus').selectOption(String(west));
+    await page.locator('[data-asset-detail-view=history]').click();await page.locator('#asset-event-campus').selectOption(String(west));
     await page.waitForFunction(()=>document.querySelectorAll('.asset-log li').length===1);
     await page.locator('.asset-log').getByText('合成调拨',{exact:true}).waitFor();
     const loans=(await (await api.get(`/api/assets/loans?item_id=${id}`)).json()).loans;
@@ -122,9 +122,10 @@ async function main(){
     await page.locator('#asset-categories').click();await page.getByRole('button',{name:'新增类别',exact:true}).click();
     await page.getByLabel('名称',{exact:true}).fill('登记分类 '+label);await page.locator('#asset-save').click();
     await page.locator('#asset-dialog').waitFor({state:'hidden'});
-    await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();await page.getByLabel('名称',{exact:true}).fill('自助耗材 '+label);
+    await page.locator('#asset-directory-close').click();await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();await page.getByLabel('名称',{exact:true}).fill('自助耗材 '+label);
     await page.locator('#asset-form [name=category]').selectOption('登记分类 '+label);
     await page.locator('#asset-form [name=kind]').selectOption('consumable');
+    await page.locator('#asset-form [name=consumable_mode]').selectOption('quantity');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.getByRole('link',{name:'自助耗材 '+label,exact:true}).waitFor();
     const supply=(await (await api.get('/api/assets/items?q='+encodeURIComponent('自助耗材 '+label))).json()).items[0];
@@ -135,8 +136,8 @@ async function main(){
     await page.goto(base+'/assets');await page.getByRole('link',{name:'自助耗材 '+label,exact:true}).waitFor();
     await page.locator('#asset-create').click();
     assert.equal(await page.locator('#asset-add-manual').isVisible(),false);
-    await page.locator('#asset-scan').click();await page.locator('#asset-scan-raw').fill('M:'+supply.id);await page.locator('#asset-scan-raw').press('Enter');
-    await page.locator('#scan-receive').waitFor();assert.equal(await page.locator('#scan-create').count(),0);await page.locator('#asset-scan-close').click();
+    await page.locator('#asset-scan').click();await page.locator('#asset-scan-mode').selectOption('general');await page.locator('#asset-scan-raw').fill('M:'+supply.id);await page.locator('#asset-scan-raw').press('Enter');
+    await page.locator('#asset-scan-preview [data-scan-action=receive]').waitFor();assert.equal(await page.locator('#asset-scan-preview [data-scan-action=create]').count(),0);await page.locator('#asset-scan-close').click();await page.locator('#asset-add-dialog[open]').waitFor();await page.locator('#asset-add-close').click();
     assert.equal(await page.locator('#asset-categories').isVisible(),false);
     const supplyCard=page.locator('.asset-card').filter({has:page.getByRole('link',{name:'自助耗材 '+label,exact:true})});
     await page.locator('#asset-filter [name=campus_id]').selectOption(String(campus));
@@ -145,11 +146,13 @@ async function main(){
     await supplyCard.locator('.asset-count').filter({hasText:'5'}).waitFor();
     await page.locator('#asset-filter [name=campus_id]').selectOption(String(campus));
     await supplyCard.locator('.asset-count').filter({hasText:'10'}).waitFor();
-    // The card surface, not just its button, opens registration. The title remains a detail link.
+    // A stock-value tap must not open a destructive operation; use an explicit action.
     await supplyCard.locator('.asset-count').click();
+    assert.equal(await page.locator('#asset-dialog').isVisible(),false);
+    await supplyCard.locator('[data-action=register]').click();
     assert.equal(await page.locator('#asset-form [name=campus_id]').inputValue(),String(campus));
-    await page.getByLabel('数量',{exact:true}).fill('2');
-    await page.getByLabel('登记时间（北京时间）',{exact:true}).fill('2026-01-01T09:30');
+    await page.locator('#asset-form [name=quantity]').fill('2');
+    await page.locator('#asset-form details summary').filter({hasText:'补登记时间'}).click();await page.getByLabel('登记时间（北京时间）',{exact:true}).fill('2026-01-01T09:30');
     await page.locator('#asset-save').click();
     assert.equal(await page.locator('#asset-dialog').isVisible(),true);
     assert.equal(await page.locator('#asset-form [name=reason]').evaluate(el=>el.validity.valueMissing),true);
@@ -157,12 +160,13 @@ async function main(){
     await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成装配领用验证');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await supplyCard.locator('.asset-count').filter({hasText:'8'}).waitFor();
-    await supplyCard.getByRole('button',{name:'调整数量',exact:true}).click();
-    await page.getByLabel('调整后的在库数量',{exact:true}).fill('12');
+    await supplyCard.locator('.asset-row-more summary').click();await supplyCard.locator('[data-action=quantity]').click();
+    await page.locator('#asset-form [name=quantity]').fill('12');
     await page.getByLabel('原因（必填）',{exact:true}).fill('合成盘点');
     await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await supplyCard.locator('.asset-count').filter({hasText:'12'}).waitFor();
     await supplyCard.getByRole('link',{name:'自助耗材 '+label,exact:true}).click();
+    await page.locator('[data-asset-detail-view=history]').click();
     await page.getByText('登记时间：2026-01-01 09:30:00（北京时间）',{exact:true}).waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
     await page.screenshot({path:path.join(output,label+'-registration.png'),fullPage:true});
@@ -206,7 +210,7 @@ async function main(){
     await frame.getByRole('link',{name:'测试电机 chromium',exact:true}).click();
     await frame.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     const east=frame.locator('.asset-card').filter({has:frame.getByRole('heading',{name:'合成东校区',exact:true})});
-    await east.getByRole('button',{name:'借用',exact:true}).click();
+    await east.getByRole('button',{name:'登记借用',exact:true}).click();
     await frame.getByLabel('用途／备注（必填）',{exact:true}).fill('合成本地客户端借用');
     state.offline=true;await frame.locator('#asset-save').click();
     await frame.locator('#asset-form-status').filter({hasText:'结果尚未确认'}).waitFor();

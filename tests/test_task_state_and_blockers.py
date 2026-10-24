@@ -22,7 +22,10 @@ class TaskStateAndBlockerTests(unittest.TestCase):
         return response.get_json()['id']
 
     def task(self, tid):
-        return next(t for t in self.admin.get('/api/data').get_json()['tasks'] if t['id'] == tid)
+        response = self.admin.get('/api/data')
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertIn('tasks', response.get_json())
+        return next(t for t in response.get_json()['tasks'] if t['id'] == tid)
 
     def update(self, tid, **fields):
         return self.admin.post(f'/api/task/{tid}', json={'version': self.task(tid)['version'], **fields})

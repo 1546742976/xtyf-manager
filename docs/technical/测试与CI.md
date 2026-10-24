@@ -18,9 +18,13 @@ node --test tests/js/*.test.cjs
 ## 自动检查
 
 .github/workflows/ci.yml **仅在目标分支为 main 的 PR 创建或更新时运行**；直接推送、提交或合并到 main 不会触发该工作流，也不再自动响应 workflow_dispatch。
-Python 使用 Ubuntu/Windows 双平台矩阵，JavaScript 使用独立 job，任何 job 失败即 CI 失败。
-Python 使用分支覆盖率统计，结果写入 Actions Summary，并上传 coverage.xml Artifact。
-Artifact 名称按系统区分，覆盖率门槛继续保持 65%。
+Python 回归测试按文件所属模块拆成 6 个互斥 shard：`tasks`、`members`、`finance`、`assets`、`collaboration`、`platform`，每组都在 Ubuntu/Windows 上并行执行。分组由 `tests/ci_shards.py` 维护，自动收集全部 `tests/test_*.py`；新增文件如果不匹配任何已知前缀，则归入 `platform`，避免漏测。原有发票和资产专项回归包含在对应 shard 中，不再在全量测试之前重复执行。每个 shard 独立运行 `coverage run --parallel-mode --branch`，用独立 Artifact 保存 `.coverage.*`。
+
+`python-coverage` 汇总 Job 在每个平台下载对应所有 shard 的数据，经 `coverage combine` 合并后统一运行分支覆盖率报告和 **65%** 门槛检查；生成按系统区分的 `python-coverage-<os>` XML Artifact 和 Actions Summary，**不是按单一 shard 的覆盖率设置门槛**。Python 语法、Ruff 和精确 main 基线的 SQLite 升级检查保留为独立的 Ubuntu/Windows 双平台 Job。
+
+JavaScript 单元测试仍单独执行；当前 **20 个浏览器测试脚本**按基础功能、任务、UI/客户端、资产拆成 10 组并行 Job，包含 `ui_regressions`、`assets_intake` 和 `assets_catalog_paging`，保留 Chromium、WebKit、测试失败判定及每组独立的诊断 Artifact。`diagnostics.cjs` 和 `asset_*_checks.cjs` 为套件调用的辅助模块，不计作独立套件。所有测试分组均须成功才能合并。
+
+本地可执行任意 Python 分组，例如 `python tests/ci_shards.py tasks`（不需要 GitHub Actions 环境）；完整本地覆盖率仍使用上文 `unittest discover` 命令。
 
 ### PR 中的真实旧版本升级测试
 

@@ -174,6 +174,8 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     checks.push('dashboard daily block below work hints on right at 1280/1606; no overflow at seven widths');
 
     // Personal work comes first; each group retains composite urgency ranking.
+    // Daily cards load independently; wait for the task/account snapshot as well.
+    await page.waitForFunction(() => Boolean(state.me?.id));
     const homeRanking = await page.evaluate(() => {
       const self = Number(state.me.id);
       state.tasks = [

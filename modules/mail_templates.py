@@ -248,9 +248,8 @@ def render_verification_html(code):
                '<p style="margin:14px 0 12px;font-size:13px;color:#9b531b">'
                '验证码 30 分钟内有效，请勿转发给他人。</p>'
                '<p style="margin:0 0 12px;font-size:13px;line-height:1.8;'
-               'color:#52647c">验证后每天北京时间 08:00 接收个人任务早报、'
-               '22:00 接收团队项目晚报（包含周末）；仅收录进行中、阻塞或未开始但已逾期的事项，'
-               '无符合提醒条件的事项时跳过对应日报。</p>'
+               'color:#52647c">验证后可在个人账户中分别调整个人、团队及倒计时邮件的发送频率。'
+               '无符合提醒条件的任务时将跳过汇总邮件。</p>'
                '<p style="margin:0;font-size:12px;color:#718098">'
                '如非本人操作，请忽略此邮件。系统不会通过邮件向您索取密码。</p>')
     return _document('邮箱验证码', '账户安全 / 邮箱绑定',

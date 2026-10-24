@@ -11,6 +11,83 @@ from modules.mail_service import configured, settings, verification_code, verifi
 
 bp = Blueprint('email', __name__)
 
+PREF_DEFAULTS = {
+    'morning_interval_hours': 72, 'daily_interval_days': 7,
+    'countdown_interval_days': 7, 'morning_enabled': True,
+    'daily_enabled': True, 'countdown_enabled': False,
+}
+PREF_FIELDS = tuple(PREF_DEFAULTS)
+
+
+def email_preferences(row):
+    if row is None:
+        return dict(PREF_DEFAULTS)
+    return {name: bool(row[name]) if name.endswith('_enabled') else row[name]
+            for name in PREF_FIELDS}
+
+
+def save_preferences(mid, body):
+    if not isinstance(body, dict) or set(body) != set(PREF_FIELDS):
+        return failure('请完整提交三类邮件的间隔及启用状态')
+    for name in ('morning_enabled', 'daily_enabled', 'countdown_enabled'):
+        if type(body[name]) is not bool:
+            return failure('启用状态必须为布尔值')
+    hours, daily, countdown = (body[key] for key in (
+        'morning_interval_hours', 'daily_interval_days', 'countdown_interval_days'))
+    if (type(hours) is not int or hours < 12 or hours > 168 or hours % 12 != 0
+            or type(daily) is not int or not 1 <= daily <= 14
+            or type(countdown) is not int or not 1 <= countdown <= 14):
+        return failure('个人间隔限 0.5–7 天（步进 0.5 天），团队及倒计时间隔限 1–14 天')
+    db = get_db()
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        if not db.execute('SELECT 1 FROM members WHERE id=?', (mid,)).fetchone():
+            db.rollback()
+            return failure('成员不存在', 404)
+        previous = email_preferences(
+            db.execute('SELECT * FROM member_email WHERE member_id=?', (mid,)).fetchone())
+        db.execute("INSERT OR IGNORE INTO member_email(member_id,address,generation,requested_at) "
+                   "VALUES(?,'','',0)", (mid,))
+        db.execute(
+            'UPDATE member_email SET ' + ','.join(f'{key}=?' for key in PREF_FIELDS) + ' WHERE member_id=?',
+            (*[int(body[key]) if key.endswith('_enabled') else body[key] for key in PREF_FIELDS], mid))
+        # Only invalidate the categories actually changed, never verification codes.
+        changed = []
+        if any(previous[key] != body[key] for key in ('morning_interval_hours','morning_enabled')):
+            changed.extend(('morning','morning_pm'))
+        if any(previous[key] != body[key] for key in ('daily_interval_days','daily_enabled')):
+            changed.append('daily')
+        if any(previous[key] != body[key] for key in ('countdown_interval_days','countdown_enabled')):
+            changed.append('countdown')
+        if changed:
+            placeholders = ','.join('?' for _ in changed)
+            db.execute(
+                f"UPDATE mail_jobs SET state='skipped',error='成员邮件偏好已变更',finished_at=? "
+                f"WHERE member_id=? AND state='pending' AND kind IN ({placeholders})",
+                (epoch_now(), mid, *changed))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return jsonify(ok=True, preferences=email_preferences(
+        db.execute('SELECT * FROM member_email WHERE member_id=?', (mid,)).fetchone()))
+
+
+@bp.post('/api/account/email/preferences')
+@login_required
+def save_own_preferences():
+    return save_preferences(current_user()['id'], request.get_json(silent=True))
+
+
+@bp.post('/api/admin/mail/<int:mid>/preferences')
+@login_required
+def save_member_preferences(mid):
+    if not admin():
+        return failure('仅管理员可操作', 403)
+    if mid > 2**63 - 1:
+        return failure('成员不存在', 404)
+    return save_preferences(mid, request.get_json(silent=True))
+
 
 def admin():
     return current_user()['role'] == 'admin'
@@ -19,13 +96,14 @@ def admin():
 @bp.get('/api/account/email')
 @login_required
 def get_email():
-    row = get_db().execute('SELECT address,verified,paused,requested_at,expires_at,token_hash,verify_attempts FROM member_email WHERE member_id=?', (current_user()['id'],)).fetchone()
+    row = get_db().execute('SELECT * FROM member_email WHERE member_id=?', (current_user()['id'],)).fetchone()
     email = None
     if row:
         email = {key: row[key] for key in ('address', 'verified', 'paused', 'requested_at', 'expires_at')}
         email['pending'] = bool(not row['verified'] and row['token_hash'] and row['expires_at']
                                 and row['expires_at'] > epoch_now() and row['verify_attempts'] < 5)
-    return jsonify(ok=True, email=email, available=configured(), mode=settings()['mode'])
+    return jsonify(ok=True, email=email, preferences=email_preferences(row),
+                   available=configured(), mode=settings()['mode'])
 
 
 @bp.post('/api/account/email/request')
@@ -88,7 +166,7 @@ def verify():
         return failure('验证码错误次数过多，请重新发送' if attempts >= 5 else f'验证码错误，还可尝试 {5-attempts} 次')
     db.execute('UPDATE member_email SET verified=1,token_hash=NULL,verify_attempts=0 WHERE member_id=?', (mid,))
     db.commit()
-    return jsonify(ok=True, message='邮箱已验证；每日提醒' + ('仍由管理员暂停' if row['paused'] else '已开启'))
+    return jsonify(ok=True, message='邮箱已验证；邮件提醒' + ('仍由管理员暂停' if row['paused'] else '将按您的偏好发送'))
 
 
 @bp.get('/admin/mail')
@@ -109,7 +187,14 @@ def admin_status():
         page = max(1, min(int(request.args.get('page', '1')), 100000))
     except ValueError:
         return failure('页码不合法')
-    members = [dict(r) for r in db.execute('SELECT m.id,m.name,m.is_active,m.deleted_at,e.address,e.verified,e.paused FROM members m LEFT JOIN member_email e ON e.member_id=m.id ORDER BY m.id')]
+    members = [dict(r) for r in db.execute('SELECT m.id,m.name,m.is_active,m.deleted_at,e.address,e.verified,e.paused,'
+                                            'e.morning_interval_hours,e.daily_interval_days,e.countdown_interval_days,'
+                                            'e.morning_enabled,e.daily_enabled,e.countdown_enabled '
+                                            'FROM members m LEFT JOIN member_email e ON e.member_id=m.id ORDER BY m.id')]
+    for member in members:
+        member['preferences'] = email_preferences(member if member['address'] is not None else None)
+        for field in PREF_FIELDS:
+            member.pop(field, None)
     jobs = [dict(r) for r in db.execute('SELECT j.id,j.member_id,m.name,j.kind,j.day,j.state,j.attempts,j.error,j.created_at,j.finished_at FROM mail_jobs j JOIN members m ON m.id=j.member_id ORDER BY j.id DESC LIMIT 31 OFFSET ?', ((page-1)*30,))]
     return jsonify(ok=True, members=members, jobs=jobs[:30], has_more=len(jobs)>30, page=page, mode=settings()['mode'], available=configured())
 

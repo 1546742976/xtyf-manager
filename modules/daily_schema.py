@@ -40,7 +40,13 @@ CREATE TABLE IF NOT EXISTS member_email (
  member_id INTEGER PRIMARY KEY REFERENCES members(id), address TEXT NOT NULL,
  verified INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0,
  generation TEXT NOT NULL, token_hash TEXT, expires_at REAL, requested_at REAL NOT NULL,
-  verify_attempts INTEGER NOT NULL DEFAULT 0
+  verify_attempts INTEGER NOT NULL DEFAULT 0,
+ morning_interval_hours INTEGER NOT NULL DEFAULT 72 CHECK(morning_interval_hours BETWEEN 12 AND 168 AND morning_interval_hours % 12 = 0),
+ daily_interval_days INTEGER NOT NULL DEFAULT 7 CHECK(daily_interval_days BETWEEN 1 AND 14),
+ countdown_interval_days INTEGER NOT NULL DEFAULT 7 CHECK(countdown_interval_days BETWEEN 1 AND 14),
+ morning_enabled INTEGER NOT NULL DEFAULT 1 CHECK(morning_enabled IN (0,1)),
+ daily_enabled INTEGER NOT NULL DEFAULT 1 CHECK(daily_enabled IN (0,1)),
+ countdown_enabled INTEGER NOT NULL DEFAULT 0 CHECK(countdown_enabled IN (0,1))
 );
 CREATE TABLE IF NOT EXISTS mail_jobs (
  id INTEGER PRIMARY KEY, member_id INTEGER NOT NULL REFERENCES members(id), kind TEXT NOT NULL,
@@ -85,6 +91,16 @@ def migrate(db):
             db.execute('ALTER TABLE member_email ADD COLUMN verify_attempts INTEGER NOT NULL DEFAULT 0')
             # Invalidate existing link-based challenges when switching to numeric codes.
             db.execute('UPDATE member_email SET token_hash=NULL,expires_at=0 WHERE verified=0 AND token_hash IS NOT NULL')
+        for name, definition in (
+            ('morning_interval_hours', 'INTEGER NOT NULL DEFAULT 72 CHECK(morning_interval_hours BETWEEN 12 AND 168 AND morning_interval_hours % 12 = 0)'),
+            ('daily_interval_days', 'INTEGER NOT NULL DEFAULT 7 CHECK(daily_interval_days BETWEEN 1 AND 14)'),
+            ('countdown_interval_days', 'INTEGER NOT NULL DEFAULT 7 CHECK(countdown_interval_days BETWEEN 1 AND 14)'),
+            ('morning_enabled', 'INTEGER NOT NULL DEFAULT 1 CHECK(morning_enabled IN (0,1))'),
+            ('daily_enabled', 'INTEGER NOT NULL DEFAULT 1 CHECK(daily_enabled IN (0,1))'),
+            ('countdown_enabled', 'INTEGER NOT NULL DEFAULT 0 CHECK(countdown_enabled IN (0,1))'),
+        ):
+            if name not in email_columns:
+                db.execute(f'ALTER TABLE member_email ADD COLUMN {name} {definition}')
         db.commit()
     except Exception:
         db.rollback()

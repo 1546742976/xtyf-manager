@@ -1,6 +1,7 @@
 """Personal morning and team evening briefs with a durable SMTP queue."""
 import hashlib
 import hmac
+from html import escape as html_escape
 import os
 import smtplib
 import ssl
@@ -73,8 +74,27 @@ def beijing_time(at):
 
 def daily_window(at, day=None, kind='daily'):
     at = beijing_time(at)
-    in_window = 8 <= at.hour < 12 if kind == 'morning' else at.hour >= 22
-    return in_window and (day is None or day == at.date().isoformat())
+    windows = {'morning': (8, 12), 'morning_pm': (20, 22),
+               'daily': (22, 24), 'countdown': (8, 12)}
+    start, end = windows.get(kind, windows['daily'])
+    return start <= at.hour < end and (day is None or day == at.date().isoformat())
+
+
+def cadence_due(db, member_id, kind, interval_hours, at, countdown_version=None):
+    """Measure from last accepted/uncertain delivery, not from empty skipped reports."""
+    kinds = ('morning', 'morning_pm') if kind in ('morning', 'morning_pm') else (kind,)
+    placeholders = ','.join('?' for _ in kinds)
+    params = [member_id, *kinds]
+    version_clause = ''
+    if kind == 'countdown':
+        version_clause = " AND dedupe_key LIKE ?"
+        params.append(f'countdown:v{countdown_version}:%')
+    last = db.execute(
+        f"SELECT max(COALESCE(finished_at,created_at)) FROM mail_jobs "
+        f"WHERE member_id=? AND kind IN ({placeholders}) "
+        f"AND state IN ('sent','simulated','unknown')" + version_clause, params).fetchone()[0]
+    return last is None or at.timestamp() - last >= interval_hours * 3600
+
 
 
 def stale(last, progress, at):
@@ -209,8 +229,8 @@ def digest_content(db, mid, at, kind='daily'):
             if group['nudge']:
                 text += f'\n请更新进度：您负责的{group["label"]}组已超过 48 小时未更新。'
         lines.extend([text + blocker_text(project), project['url'], ''])
-    footer = ('截至发送时您负责或参与且符合提醒条件的事项；每日北京时间 08:00 汇总，包含周末。'
-              if morning else '截至发送时全团队符合提醒条件的事项；每日北京时间 22:00 汇总，包含周末。')
+    footer = ('截至发送时您负责或参与且符合提醒条件的事项；按设定周期在北京时间 08:00（12 小时间隔时还包括 20:00）汇总，包含周末。'
+              if morning else '截至发送时全团队符合提醒条件的事项；按设定周期在北京时间 22:00 汇总，包含周末。')
     footer += ('仅包含进行中、阻塞，以及未开始但已逾期的事项。逾期指截止日期早于发送当天（北京时间），'
                '今天截止不算逾期。已完成（包括当天完成）、已取消和已删除事项始终排除。时间均为北京时间。')
     footer += '仅对您负责且超过 48 小时未更新的事项提示催更。如需暂停，请联系管理员。'
@@ -219,16 +239,40 @@ def digest_content(db, mid, at, kind='daily'):
     return '\n'.join(lines), markup
 
 
+def active_countdown(db, at):
+    row = db.execute('SELECT title,target_date,version FROM workspace_countdown WHERE id=1').fetchone()
+    if not row or not row['title'] or not row['target_date']:
+        return None
+    days = (datetime.strptime(row['target_date'], '%Y-%m-%d').date() - beijing_time(at).date()).days
+    return (row, days) if days > 0 else None
+
+
 def enqueue_daily(db, at):
     at = beijing_time(at)
-    kind = next((kind for kind in ('morning', 'daily') if daily_window(at, kind=kind)), None)
-    if kind is None:
+    kinds = tuple(kind for kind in ('morning', 'morning_pm', 'daily', 'countdown')
+                  if daily_window(at, kind=kind))
+    if not kinds:
         return
     day, epoch = at.date().isoformat(), at.timestamp()
     db.execute('BEGIN IMMEDIATE')
     try:
-        for row in db.execute('SELECT e.* FROM member_email e JOIN members m ON m.id=e.member_id WHERE e.verified=1 AND e.paused=0 AND m.is_active=1 AND m.deleted_at IS NULL'):
-            queue(db, row['member_id'], kind, day, row['generation'], epoch, f'{kind}:{day}:{row["member_id"]}')
+        countdown = active_countdown(db, at) if 'countdown' in kinds else None
+        for row in db.execute('SELECT e.* FROM member_email e JOIN members m ON m.id=e.member_id '
+                              'WHERE e.verified=1 AND e.paused=0 AND m.is_active=1 AND m.deleted_at IS NULL'):
+            mid = row['member_id']
+            if 'morning' in kinds and row['morning_enabled'] and cadence_due(
+                    db, mid, 'morning', row['morning_interval_hours'], at):
+                queue(db, mid, 'morning', day, row['generation'], epoch, f'morning:{day}:{mid}')
+            if 'morning_pm' in kinds and row['morning_enabled'] and row['morning_interval_hours'] == 12 and cadence_due(
+                    db, mid, 'morning_pm', 12, at):
+                queue(db, mid, 'morning_pm', day, row['generation'], epoch, f'morning_pm:{day}:{mid}')
+            if 'daily' in kinds and row['daily_enabled'] and cadence_due(
+                    db, mid, 'daily', row['daily_interval_days'] * 24, at):
+                queue(db, mid, 'daily', day, row['generation'], epoch, f'daily:{day}:{mid}')
+            if countdown and row['countdown_enabled'] and cadence_due(
+                    db, mid, 'countdown', row['countdown_interval_days'] * 24, at, countdown[0]['version']):
+                queue(db, mid, 'countdown', day, row['generation'], epoch,
+                      f'countdown:v{countdown[0]["version"]}:{day}:{mid}')
         db.commit()
     except Exception:
         db.rollback(); raise
@@ -287,7 +331,8 @@ def claim(db, at):
     db.execute('BEGIN IMMEDIATE')
     try:
         db.execute("UPDATE mail_jobs SET state='unknown',error='发送进程中断，结果未知',finished_at=? WHERE state='sending' AND claimed_at<?", (epoch, epoch-1800))
-        for kind, label, start, end in (('morning', '早报', 8, 12), ('daily', '晚报', 22, 24)):
+        for kind, label, start, end in (('morning', '早报', 8, 12), ('morning_pm', '晚间个人简报', 20, 22),
+                                        ('daily', '晚报', 22, 24), ('countdown', '倒计时', 8, 12)):
             db.execute("UPDATE mail_jobs SET state='skipped',error=?,finished_at=? WHERE kind=? AND state='pending' "
                        "AND (day<>? OR ? < ? OR ? >= ?)",
                        (f'已超出当日{label}窗口', epoch, kind, at.date().isoformat(), at.hour, start, at.hour, end))
@@ -304,8 +349,9 @@ def process_job(db, job, at, transport=None):
     at = beijing_time(at)
     epoch, state, error, next_at = at.timestamp(), 'sent', '', at.timestamp()
     try:
-        if job['kind'] in ('morning', 'daily') and not daily_window(at, job['day'], kind=job['kind']):
-            raise DeliveryError('已超出当日' + ('早报' if job['kind'] == 'morning' else '晚报') + '窗口', 'skipped')
+        if job['kind'] in ('morning', 'morning_pm', 'daily', 'countdown') and not daily_window(
+                at, job['day'], kind=job['kind']):
+            raise DeliveryError('已超出当天发送窗口', 'skipped')
         member = db.execute('SELECT e.*,m.is_active,m.deleted_at FROM member_email e JOIN members m ON m.id=e.member_id WHERE e.member_id=?', (job['member_id'],)).fetchone()
         if not member or not member['is_active'] or member['deleted_at'] or member['generation'] != job['generation']:
             raise DeliveryError('账户或邮箱已变化', 'skipped')
@@ -318,17 +364,48 @@ def process_job(db, job, at, transport=None):
                 raise DeliveryError('验证已完成或过期', 'skipped')
             code = verification_code(member['generation'])
             message['Subject'] = '巡天御风｜邮箱验证码'
-            text = f'您的邮箱验证码是：{code}\n请在网站的个人账户页面输入验证码，30 分钟内有效。请勿转发给他人。\n验证后每天北京时间 08:00 接收个人任务早报、22:00 接收团队项目晚报（包含周末）；仅收录进行中、阻塞或未开始但已逾期的事项，无符合提醒条件的事项时跳过对应日报。如非本人操作请忽略。'
+            text = f'您的邮箱验证码是：{code}\n请在网站的个人账户页面输入验证码，30 分钟内有效。请勿转发给他人。\n验证后可在个人账户中设置个人、团队及倒计时邮件的提醒频率；无符合提醒条件的事项时将跳过汇总邮件。如非本人操作请忽略。'
             markup = render_verification_html(code)
         else:
             if not member['verified'] or member['paused']:
                 raise DeliveryError('邮箱未验证或提醒已暂停', 'skipped')
-            content = digest_content(db, job['member_id'], at, kind=job['kind'])
-            if not content and job['kind'] in ('morning', 'daily'):
-                raise DeliveryError('个人范围没有符合提醒条件的事项' if job['kind'] == 'morning' else '全团队没有符合提醒条件的事项', 'skipped')
-            text, markup = content or ('测试邮件：当前没有团队符合提醒条件的事项。', render_test_html())
-            subjects = {'morning': '巡天御风｜个人任务早报｜', 'daily': '巡天御风｜团队项目晚报｜'}
-            message['Subject'] = subjects.get(job['kind'], '巡天御风｜测试邮件｜') + job['day']
+            periodic = job['kind'] in ('morning', 'morning_pm', 'daily', 'countdown')
+            countdown = active_countdown(db, at) if job['kind'] == 'countdown' else None
+            if periodic:
+                field = 'morning_enabled' if job['kind'].startswith('morning') else (
+                    'daily_enabled' if job['kind'] == 'daily' else 'countdown_enabled')
+                if not member[field]:
+                    raise DeliveryError('该类邮件已关闭', 'skipped')
+                if job['kind'] == 'morning_pm' and member['morning_interval_hours'] != 12:
+                    raise DeliveryError('个人简报间隔已更改', 'skipped')
+                if job['kind'] == 'countdown' and (not countdown or not job['dedupe_key'].startswith(
+                        f'countdown:v{countdown[0]["version"]}:')):
+                    raise DeliveryError('倒计时目标已变化或结束', 'skipped')
+                hours = (member['morning_interval_hours'] if job['kind'].startswith('morning')
+                         else member['daily_interval_days'] * 24 if job['kind'] == 'daily'
+                         else member['countdown_interval_days'] * 24)
+                if not cadence_due(db, job['member_id'], job['kind'], hours, at,
+                                   countdown[0]['version'] if countdown else None):
+                    raise DeliveryError('尚未达到成员设定的发送间隔', 'skipped')
+            if job['kind'] == 'countdown':
+                target, days = countdown
+                title = html_escape(target['title'])
+                url = html_escape(settings()['base_url'] + '/', quote=True)
+                text = (f'首页目标倒计时：{target["title"]}\n'
+                        f'目标日期：{target["target_date"]}\n'
+                        f'距离目标还有 {days} 天\n{settings()["base_url"]}/')
+                markup = (f'<html><body><h2>首页目标倒计时</h2><p>{title}</p>'
+                          f'<p>目标日期：{target["target_date"]} · 剩余 {days} 天</p>'
+                          f'<p><a href="{url}">查看工作台</a></p></body></html>')
+                message['Subject'] = '巡天御风｜目标倒计时｜' + job['day']
+            else:
+                digest_kind = 'morning' if job['kind'].startswith('morning') else job['kind']
+                content = digest_content(db, job['member_id'], at, kind=digest_kind)
+                if not content and job['kind'] in ('morning', 'morning_pm', 'daily'):
+                    raise DeliveryError('个人范围没有符合提醒条件的事项' if job['kind'].startswith('morning') else '全团队没有符合提醒条件的事项', 'skipped')
+                text, markup = content or ('测试邮件：当前没有团队符合提醒条件的事项。', render_test_html())
+                subjects = {'morning': '巡天御风｜个人任务早报｜', 'daily': '巡天御风｜团队项目晚报｜'}
+                message['Subject'] = subjects.get(digest_kind, '巡天御风｜测试邮件｜') + job['day']
         message.set_content(text)
         message.add_alternative(markup, subtype='html')
         if transport:
@@ -346,7 +423,7 @@ def process_job(db, job, at, transport=None):
     except DeliveryError as exc:
         state, error = exc.state, str(exc)
         if (exc.retry and exc.state == 'failed' and job['attempts'] < 3
-                and (job['kind'] not in ('morning', 'daily')
+                and (job['kind'] not in ('morning', 'morning_pm', 'daily', 'countdown')
                      or daily_window(at + timedelta(minutes=15), job['day'], kind=job['kind']))):
             state, next_at = 'pending', epoch + (60 if job['kind'] in ('verify', 'test') else 900)
     except Exception:

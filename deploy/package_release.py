@@ -11,6 +11,11 @@ import sys
 import tarfile
 import tempfile
 
+if __package__:
+    from .site_updates_snapshot import create_snapshot
+else:
+    from site_updates_snapshot import create_snapshot
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -73,7 +78,7 @@ def main():
             if not item.isfile():
                 raise RuntimeError('Release cannot contain links: ' + item.name)
             parts = Path(item.name).parts
-            if any(p in ('data', 'venv', '.venv', '.local-test-data', 'backups', 'dist', 'signing', 'client-ui-release') for p in parts) or Path(item.name).name in ('secret.key', 'initial-admin-password.txt', '.env', 'release-manifest.json') or Path(item.name).name.startswith('.env.') or item.name.lower().endswith(('.db', '.db-wal', '.db-shm', '.db-journal', '.sqlite', '.sqlite3')):
+            if any(p in ('data', 'venv', '.venv', '.local-test-data', 'backups', 'dist', 'signing', 'client-ui-release') for p in parts) or Path(item.name).name in ('secret.key', 'initial-admin-password.txt', '.env', 'release-manifest.json', 'site-release.json') or Path(item.name).name.startswith('.env.') or item.name.lower().endswith(('.db', '.db-wal', '.db-shm', '.db-journal', '.sqlite', '.sqlite3')):
                 raise RuntimeError('Runtime data or reserved name tracked by Git: ' + item.name)
             files[item.name] = source.extractfile(item).read()
     required = ('deploy/update_release.py', 'deploy/consistent_snapshot.py', 'app.py', 'requirements.txt',
@@ -81,6 +86,8 @@ def main():
     if any(name not in files for name in required):
         raise RuntimeError('HEAD does not contain the release scripts yet. Commit them before packaging.')
     files.update(build_ui_from_head(files, commit, args.ui_signing_key, args.installers))
+    # Snapshot Git log on the packaging machine: production needs no .git or GitHub.
+    files['site-release.json'] = create_snapshot(ROOT, commit)
     manifest = {'format': 1, 'commit': commit,
                 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
     output = ROOT / 'dist'

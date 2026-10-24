@@ -69,5 +69,5 @@
   };
   $('asset-label-close').onclick=()=>$('asset-label-dialog').close();
   $('asset-label-dialog').addEventListener('close',()=>{if(!$('asset-label-dialog').open)clear();});window.addEventListener('pagehide',clear);
-  window.AssetLabels={open(values){records=values;$('asset-label-dialog').showModal();return render();}};
+  window.AssetLabels={open(values){records=values;$('asset-label-summary').textContent=`本次打印 ${values.length} 张标签。补打沿用原编号。`;window.AssetLedger.showDialog($('asset-label-dialog'));return render();}};
 })();

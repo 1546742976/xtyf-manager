@@ -21,6 +21,13 @@ echo "==> 安装系统依赖"
 sudo apt-get update -y
 sudo apt-get install -y python3-venv python3-pip sqlite3 rsync fonts-noto-cjk
 
+# Legacy direct rsync deployment also embeds Git history when its source is a checkout.
+# The signed HEAD release packager creates the same file without touching the checkout.
+if command -v git >/dev/null 2>&1 && git -C "$SRC_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "==> 从当前 Git HEAD 生成更新日志快照"
+  python3 "$SRC_DIR/deploy/site_updates_snapshot.py" --repo "$SRC_DIR" --output "$SRC_DIR/site-release.json"
+fi
+
 echo "==> 同步代码"
 sudo mkdir -p "$APP_DIR"
 # Only synchronize source and explicitly permitted assets; local secrets and build caches stay off the server.

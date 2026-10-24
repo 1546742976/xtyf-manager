@@ -33,7 +33,8 @@ def migrate_assets(db):
         );
         INSERT OR IGNORE INTO asset_categories(name)
             SELECT DISTINCT category FROM asset_items WHERE category<>'';
-        CREATE UNIQUE INDEX IF NOT EXISTS asset_item_identity ON asset_items(name,specification);
+        DROP INDEX IF EXISTS asset_item_identity;
+        CREATE INDEX asset_item_identity ON asset_items(name,specification);
         CREATE TABLE IF NOT EXISTS asset_stock (
             item_id INTEGER NOT NULL REFERENCES asset_items(id),
             campus_id INTEGER NOT NULL REFERENCES asset_campuses(id),
@@ -75,6 +76,9 @@ def migrate_assets(db):
     migrate_scan(db)
     from modules.asset_units import migrate as migrate_units
     migrate_units(db)
+    if "supply_status" not in {r[1] for r in db.execute("PRAGMA table_info(asset_stock)")}:
+        db.execute("ALTER TABLE asset_stock ADD COLUMN supply_status TEXT NOT NULL DEFAULT 'low' "
+                   "CHECK(supply_status IN ('sufficient','low'))")
     db.commit()
 
 
@@ -130,11 +134,15 @@ def mutation(view):
             if not isinstance(data, dict):
                 raise Invalid("请求必须是 JSON 对象")
             catalog_fields = {"request_id", "name", "specification", "category", "unit",
-                              "kind", "id", "version", "active", "supplier_code", "inventory", "reason"}
+                              "kind", "id", "version", "active", "supplier_code", "inventory", "reason", "consumable_mode", "returnable_mode", "force_new"}
             operation_fields = {"request_id", "action", "reason", "occurred_at", "quantity",
                                 "loan_id", "item_id", "campus_id", "target_campus_id",
                                 "version", "event_id"}
             allowed = getattr(view, 'asset_fields', catalog_fields if request.endpoint == "assets.save_catalog" else operation_fields)
+            if request.endpoint == "assets.supply_status":
+                allowed = {"request_id", "item_id", "campus_id", "status", "version", "item_version"}
+            if request.endpoint == "assets.assign_categories":
+                allowed = {"request_id", "items", "category_id", "category_version"}
             if set(data) - allowed:
                 raise Invalid("资产请求包含不支持的字段")
             key = text(data, "request_id", maximum=100)
@@ -192,7 +200,7 @@ def page():
 @login_required
 def catalog():
     db = get_db()
-    return jsonify(ok=True, can_manage=manager(), server_time=stamp(),
+    return jsonify(ok=True, can_manage=manager(), intake_enabled=True, server_time=stamp(),
                    member_id=current_user()["id"],
                    categories=[dict(r) for r in db.execute("SELECT * FROM asset_categories ORDER BY name,id")],
                    campuses=[dict(r) for r in db.execute("SELECT * FROM asset_campuses ORDER BY name,id")])
@@ -210,8 +218,8 @@ def save_catalog(db, data, kind):
             raise Invalid("校区库存参数无效")
         campus_id = inventory_campus(db, inventory)
         item = row(db, "asset_items", result["id"])
-        if item["tracking"] == "unit":
-            raise Invalid("逐件物品请通过单件管理增减、移动具体设备", 409)
+        if item["tracking"] in ("unit", "status"):
+            raise Invalid("逐件或状态物品不通过数量调整维护", 409)
         operate_record(db, {**inventory, "campus_id": campus_id, "item_id": result["id"], "action": "adjust"})
     return result
 
@@ -246,9 +254,35 @@ def save_catalog_record(db, data, kind):
             if not category:
                 db.execute("INSERT INTO asset_categories(name) VALUES(?)", (fields["category"],))
     identity = data.get("id")
+    force_new = data.get("force_new", False)
+    if type(force_new) is not bool:
+        raise Invalid("另建档案确认参数无效")
+    if force_new:
+        text(data, "reason", maximum=500)
     if kind == 'items' and identity is None:
         fields['tracking'] = 'unit' if fields['kind'] == 'returnable' else 'quantity'
     before = None
+    previous_stock = None
+    if kind == "items" and "consumable_mode" in data:
+        mode = text(data, "consumable_mode")
+        if mode not in ("quantity", "status") or (fields["kind"] != "consumable" and mode != "quantity"):
+            raise Invalid("仅耗材可选择充足／不足管理")
+        if fields["kind"] == "consumable":
+            fields["tracking"] = mode
+    if kind == "items" and "returnable_mode" in data:
+        mode = text(data, "returnable_mode")
+        if fields["kind"] != "returnable" or mode not in ("unit", "quantity"):
+            raise Invalid("可借用品请选择逐件或按数量管理")
+        fields["tracking"] = mode
+    if kind == "items":
+        existing_identity = row(db, table, integer(data, "id")) if identity is not None else None
+        unchanged_identity = existing_identity and all(existing_identity[k] == fields[k] for k in ("name", "specification"))
+        duplicate = db.execute(
+            "SELECT id FROM asset_items WHERE name=? AND specification=? AND id<>? ORDER BY id LIMIT 1",
+            (fields["name"], fields["specification"], identity or 0),
+        ).fetchone()
+        if duplicate and not unchanged_identity and not force_new:
+            raise Invalid(f"已有同名同规格档案 M:{duplicate['id']}；请核对后明确另建档案并填写原因", 409)
     if identity is not None:
         identity = integer(data, "id")
         before = row(db, table, identity)
@@ -269,7 +303,7 @@ def save_catalog_record(db, data, kind):
                 db.execute("UPDATE asset_items SET category=?,version=version+1 WHERE category=?",
                            (fields["name"], before["name"]))
         elif not active and (
-            db.execute(f"SELECT 1 FROM asset_stock s JOIN asset_items i ON i.id=s.item_id WHERE s.{column}=? AND available>0 AND i.tracking<>'unit'", (identity,)).fetchone()
+            db.execute(f"SELECT 1 FROM asset_stock s JOIN asset_items i ON i.id=s.item_id WHERE s.{column}=? AND available>0 AND i.tracking NOT IN ('unit','status')", (identity,)).fetchone()
             or db.execute(f"SELECT 1 FROM asset_loans s JOIN asset_items i ON i.id=s.item_id WHERE s.{column}=? AND outstanding>0 AND i.tracking<>'unit'", (identity,)).fetchone()
             or db.execute(f"SELECT 1 FROM asset_units WHERE {column}=? AND lifecycle='active'", (identity,)).fetchone()
         ):
@@ -279,27 +313,103 @@ def save_catalog_record(db, data, kind):
             if has_history and (before["kind"] != fields["kind"] or current_user()["role"] != "admin" or not data.get("reason")):
                 raise Invalid("已有历史记录，不能改变单位或借还类型", 409)
             if before["kind"] != fields["kind"]:
-                fields["tracking"] = "unit" if fields["kind"] == "returnable" else "quantity"
+                fields.setdefault("tracking", "unit" if fields["kind"] == "returnable" else "quantity")
+        if kind == "items" and fields.get("tracking", before["tracking"]) != before["tracking"]:
+            target = fields["tracking"]
+            if before["tracking"] == "migrating":
+                raise Invalid("此物料正在核对实物，请先完成或取消核对", 409)
+            if before["tracking"] == "unit":
+                raise Invalid("已采用逐件管理，不能通过编辑资料取消单件身份", 409)
+            if before["kind"] == "returnable" and target == "unit":
+                raise Invalid("请从物料详情的“切换为逐件管理”核对现有库存与借单", 409)
+            if before["kind"] == "returnable" and target == "quantity":
+                if (db.execute("SELECT 1 FROM asset_units WHERE item_id=?", (identity,)).fetchone()
+                        or db.execute("SELECT 1 FROM asset_migration_entries WHERE item_id=?", (identity,)).fetchone()):
+                    raise Invalid("存在单件身份或未完成核对，不能直接改为按数量管理", 409)
+                text(data, "reason", maximum=500)
+            if target == "status" and db.execute(
+                "SELECT 1 FROM asset_identifiers WHERE item_id=? UNION ALL "
+                "SELECT 1 FROM asset_code_aliases WHERE namespace='lcsc-cn' AND item_id=? LIMIT 1",
+                (identity, identity),
+            ).fetchone():
+                raise Invalid("嘉立创物料继续按数量管理", 409)
+            if target == "status" or before["tracking"] == "status":
+                text(data, "reason", maximum=500)
+                previous_stock = [dict(r) for r in db.execute("SELECT * FROM asset_stock WHERE item_id=?", (identity,))]
+                if before["tracking"] == "status":
+                    for stock in previous_stock:
+                        event(db, "adjust", "恢复数量管理，清零历史余额后重新盘点", item_id=identity,
+                              campus_id=stock["campus_id"], quantity=0,
+                              details={"deltas": [[stock["campus_id"], -stock["available"]]], "mode_reset": True})
+                # Counts kept while in status mode are historical, never a live balance on return.
+                db.execute("UPDATE asset_stock SET supply_status='low',version=version+1" +
+                           (",available=0" if before["tracking"] == "status" else "") + " WHERE item_id=?", (identity,))
         db.execute(f"UPDATE {table} SET " + ",".join(f"{k}=?" for k in fields) +
                    ",version=version+1 WHERE id=?", (*fields.values(), identity))
     else:
         identity = db.execute(f"INSERT INTO {table}({','.join(fields)}) VALUES({','.join('?' for _ in fields)})",
                               tuple(fields.values())).lastrowid
     if kind == 'items' and data.get('supplier_code'):
-        from modules.asset_scan import parse_label
+        if row(db, "asset_items", identity)["tracking"] == "status":
+            raise Invalid("嘉立创物料继续按数量管理", 409)
+        from modules.asset_scan import exact_matches, parse_label
         parsed = parse_label(data['supplier_code'])
         if parsed['type'] != 'supplier':
             raise Invalid('请填写供应商 C 编号')
-        existing = db.execute('SELECT item_id FROM asset_identifiers WHERE supplier=? AND code=?',
-                              (parsed['supplier'], parsed['code'])).fetchone()
-        if existing and existing[0] != identity:
-            raise Invalid('供应商编号已关联其他物料', 409)
+        matches = exact_matches(db, parsed)
+        if parsed['raw'] != parsed['code']:
+            matches += exact_matches(db, {**parsed, 'raw': parsed['code']})
+        if any(m['target_type'] != 'item' or m['target_id'] != identity for m in matches):
+            raise Invalid('供应商编号已关联其他物料或实物，请通过扫码核对后明确另建', 409)
         db.execute('INSERT OR IGNORE INTO asset_identifiers(item_id,supplier,code) VALUES(?,?,?)',
                    (identity, parsed['supplier'], parsed['code']))
     event(db, "catalog", text(data, "reason", maximum=500) if data.get("reason") else "目录维护", item_id=identity if kind == "items" else None,
           campus_id=identity if kind == "campuses" else None,
-          details={"kind": kind, "id": identity, "before": before, "after": fields})
+          details={"kind": kind, "id": identity, "before": before, "after": fields, "force_new": force_new,
+                   **({"previous_stock": previous_stock} if previous_stock is not None else {})})
     return {"id": identity}
+
+
+@bp.post("/api/assets/categories/assign")
+@mutation
+def assign_categories(db, data):
+    require_manager()
+    selections = data.get("items")
+    if not isinstance(selections, list) or not 1 <= len(selections) <= 100:
+        raise Invalid("请选择 1 至 100 种物料")
+    if "category_id" not in data:
+        raise Invalid("请选择目标类别或明确移至未分类")
+    target = data.get("category_id")
+    category = None
+    if target is not None:
+        category = row(db, "asset_categories", integer(data, "category_id"))
+        if not category["active"] or category["version"] != integer(data, "category_version"):
+            raise Invalid("目标类别已更新或停用，请刷新后重试", 409)
+    elif data.get("category_version") is not None:
+        raise Invalid("未分类不应指定类别版本")
+    chosen, seen = [], set()
+    for selection in selections:
+        if not isinstance(selection, dict) or set(selection) != {"id", "version"}:
+            raise Invalid("所选物料参数无效")
+        identity = integer(selection, "id")
+        if identity in seen:
+            raise Invalid("同一物料不能重复选择")
+        seen.add(identity)
+        item = row(db, "asset_items", identity)
+        if item["version"] != integer(selection, "version"):
+            raise Invalid("所选物料已更新，请刷新后重试", 409)
+        chosen.append(item)
+    name = category["name"] if category else ""
+    changed = []
+    for item in chosen:
+        if item["category"] == name:
+            continue
+        db.execute("UPDATE asset_items SET category=?,version=version+1 WHERE id=?", (name, item["id"]))
+        event(db, "catalog", "批量整理物料类别", item_id=item["id"],
+              details={"kind": "items", "id": item["id"], "before": {"category": item["category"], "version": item["version"]},
+                       "after": {"category": name, "version": item["version"] + 1}, "category_id": target})
+        changed.append(item["id"])
+    return {"changed": changed, "selected": len(chosen), "category_id": target}
 
 
 def stock_change(db, item_id, campus_id, delta):
@@ -310,6 +420,31 @@ def stock_change(db, item_id, campus_id, delta):
         raise Invalid("在库数量不足或结果超出数量上限，请刷新核对", 409)
     db.execute("UPDATE asset_stock SET available=available+?,version=version+1 WHERE item_id=? AND campus_id=?",
                (delta, item_id, campus_id))
+
+
+@bp.post("/api/assets/supply-status")
+@mutation
+def supply_status(db, data):
+    item_id, campus_id = (integer(data, k) for k in ("item_id", "campus_id"))
+    item, campus = row(db, "asset_items", item_id), row(db, "asset_campuses", campus_id)
+    if not item["active"] or not campus["active"] or item["tracking"] != "status":
+        raise Invalid("请选择启用的状态耗材与校区", 409)
+    if integer(data, "item_version") != item["version"]:
+        raise Invalid("物料资料已变化，请刷新后核对", 409)
+    value = text(data, "status")
+    if value not in ("sufficient", "low"):
+        raise Invalid("耗材状态只能是充足或不足")
+    stock = db.execute("SELECT supply_status,version FROM asset_stock WHERE item_id=? AND campus_id=?",
+                       (item_id, campus_id)).fetchone()
+    if integer(data, "version", 0) != (stock["version"] if stock else 0):
+        raise Invalid("耗材状态已变化，请刷新后核对", 409)
+    before = stock["supply_status"] if stock else "low"
+    db.execute("INSERT OR IGNORE INTO asset_stock(item_id,campus_id) VALUES(?,?)", (item_id, campus_id))
+    db.execute("UPDATE asset_stock SET supply_status=?,version=version+1 WHERE item_id=? AND campus_id=?",
+               (value, item_id, campus_id))
+    return {"event_id": event(db, "supply_status", "补充后标记充足" if value == "sufficient" else "发现余量不足",
+                              item_id=item_id, campus_id=campus_id,
+                              details={"before": before, "after": value})}
 
 
 @bp.post("/api/assets/operations")
@@ -339,9 +474,11 @@ def operate_record(db, data):
         if db.execute("SELECT 1 FROM asset_events WHERE corrects_id=?", (original["id"],)).fetchone():
             raise Invalid("该记录已经纠正", 409)
         details = json.loads(original["details"])
+        if details.get("mode_reset"):
+            raise Invalid("管理方式切换不恢复旧数量，请重新盘点", 409)
         item_id, campus_id = original["item_id"], original["campus_id"]
-        if row(db,'asset_items',item_id)['tracking'] in ('unit','migrating'):
-            raise Invalid('单件或迁移中的型号不能撤销旧数量流水，请核对当前实物',409)
+        if row(db,'asset_items',item_id)['tracking'] in ('unit','migrating','status'):
+            raise Invalid('此物料不使用数量流水纠错，请核对当前管理方式',409)
         deltas = [(c, -d) for c, d in details["deltas"]]
         if not row(db, "asset_items", item_id)["active"]:
             raise Invalid("纠错涉及已停用物品，请先启用后核对", 409)
@@ -418,8 +555,8 @@ def operate_record(db, data):
                 ).lastrowid
         else:
             raise Invalid("操作类型无效")
-    if row(db,'asset_items',item_id)['tracking'] in ('unit','migrating'):
-        raise Invalid('此型号采用单件管理或正在迁移，请选择具体实物操作',409)
+    if row(db,'asset_items',item_id)['tracking'] in ('unit','migrating','status'):
+        raise Invalid('此物料采用单件、状态管理或正在迁移，不能登记数量',409)
     for campus, delta in deltas:
         stock_change(db, item_id, campus, delta)
     return {"event_id": event(db, action, reason, item_id=item_id, campus_id=campus_id, quantity=quantity,
@@ -437,13 +574,25 @@ def paging():
         return 1
 
 
+def paginated(total, default=20):
+    """Clamp after filtering, retaining each endpoint's legacy page size."""
+    supplied = request.args.get("per_page")
+    try:
+        per_page = int(supplied) if supplied is not None else default
+    except (TypeError, ValueError):
+        per_page = default
+    if per_page not in (20, 50, 100):
+        per_page = default
+    return min(paging(), max(1, (total + per_page - 1) // per_page)), per_page
+
+
 def totals(db):
-    # Three aggregate queries, independent of the number of items/campuses.
+    # Fixed query count, independent of the number of items/campuses.
     own_snapshot = not db.in_transaction
     if own_snapshot:
         db.execute("BEGIN")
     try:
-        balances = {(r["item_id"], r["campus_id"]): dict(r) for r in db.execute("SELECT s.* FROM asset_stock s JOIN asset_items i ON i.id=s.item_id WHERE i.tracking<>'unit'")}
+        balances = {(r["item_id"], r["campus_id"]): dict(r) for r in db.execute("SELECT s.*,i.tracking FROM asset_stock s JOIN asset_items i ON i.id=s.item_id WHERE i.tracking<>'unit'")}
         for r in db.execute("SELECT item_id,campus_id,SUM(outstanding) borrowed FROM asset_loans JOIN asset_items i ON i.id=item_id WHERE i.tracking<>'unit' GROUP BY item_id,campus_id"):
             balances.setdefault((r["item_id"], r["campus_id"]), {"available": 0, "version": 0})["borrowed"] = r["borrowed"]
         for r in db.execute("SELECT item_id,campus_id,SUM(consumed_delta) consumed FROM asset_events "
@@ -454,6 +603,9 @@ def totals(db):
                             "SUM(keeper_id IS NULL AND health='normal' AND object_id IS NULL) lendable,"
                             "SUM(health<>'normal') unavailable FROM asset_units WHERE lifecycle='active' GROUP BY item_id,campus_id"):
             balances[(r['item_id'],r['campus_id'])]=dict(r)
+        for stock in balances.values():
+            if stock.get("tracking") == "status":
+                stock.update(available=0, borrowed=0, consumed=0)
         return balances
     finally:
         if own_snapshot:
@@ -474,20 +626,54 @@ def items():
             for key in summary:
                 summary[key] += stock.get(key, 0)
     values = []
+    campuses = [dict(r) for r in db.execute("SELECT * FROM asset_campuses WHERE active=1 ORDER BY name,id")]
     for r in db.execute("SELECT * FROM asset_items ORDER BY name,specification,id"):
         item = dict(r)
         if query and query not in (item["name"] + " " + item["specification"]).casefold():
             continue
         if category and category != item["category"]:
             continue
-        if campus and item["id"] not in grouped:
+        if request.args.get("uncategorized") == "1" and item["category"]:
+            continue
+        if campus and item["id"] not in grouped and not (item["tracking"] == "status" and any(str(c["id"]) == campus for c in campuses)):
             continue
         for k in ("available", "borrowed", "consumed", "lendable", "unavailable"):
             item[k] = grouped.get(item["id"], {}).get(k, 0)
         item["total"] = item["available"] + item["borrowed"]
+        if item["tracking"] == "status":
+            item["supplies"] = [dict(id=c["id"], name=c["name"], active=c["active"],
+                                     supply_status=balances.get((item["id"], c["id"]), {}).get("supply_status", "low"),
+                                     stock_version=balances.get((item["id"], c["id"]), {}).get("version", 0))
+                                for c in campuses if not campus or str(c["id"]) == campus]
         values.append(item)
-    page_number = paging()
-    return jsonify(ok=True, items=values[(page_number-1)*20:page_number*20], total=len(values), page=page_number,
+    # Classify after campus/search/category filtering but before page slicing:
+    # counts and pagination must never be computed from only one page of cards.
+    def needs_attention(item):
+        if not item["active"]:
+            return False
+        if item["tracking"] == "status":
+            return any(c["supply_status"] == "low" for c in item["supplies"])
+        return item["kind"] == "consumable" and item["available"] == 0
+
+    summary = {"all": len(values), "equipment": 0, "quantity": 0, "supply": 0, "attention": 0}
+    for item in values:
+        group = ("equipment" if item["kind"] == "returnable" else
+                 "supply" if item["tracking"] == "status" else "quantity")
+        summary[group] += 1
+        if needs_attention(item):
+            summary["attention"] += 1
+    view = request.args.get("view", "all")
+    if view == "equipment":
+        values = [item for item in values if item["kind"] == "returnable"]
+    elif view == "quantity":
+        values = [item for item in values if item["kind"] == "consumable" and item["tracking"] != "status"]
+    elif view == "supply":
+        values = [item for item in values if item["kind"] == "consumable" and item["tracking"] == "status"]
+    elif view == "attention":
+        values = [item for item in values if needs_attention(item)]
+    page_number, per_page = paginated(len(values))
+    return jsonify(ok=True, items=values[(page_number-1)*per_page:page_number*per_page], total=len(values), page=page_number, per_page=per_page,
+                   summary=summary,
                    categories=[r[0] for r in db.execute("SELECT DISTINCT category FROM asset_items WHERE category<>'' ORDER BY category")])
 
 
@@ -507,7 +693,14 @@ def detail(item_id):
         stock = balances.get((item_id, campus["id"]), {})
         campus.update({k: stock.get(k, 0) for k in ("available", "borrowed", "consumed")})
         campus["stock_version"] = stock.get("version", 0)
+        if item["tracking"] == "status":
+            campus["supply_status"] = stock.get("supply_status", "low")
         campuses.append(campus)
+    item["supplier_codes"] = [r[0] for r in db.execute(
+        "SELECT code FROM asset_identifiers WHERE item_id=? UNION "
+        "SELECT code FROM asset_code_aliases WHERE namespace='lcsc-cn' AND item_id=? ORDER BY code",
+        (item_id, item_id),
+    )]
     return jsonify(ok=True, item=item, campuses=campuses, can_manage=manager())
 
 
@@ -522,20 +715,21 @@ def loans():
         where.append("l.item_id=?")
         args.append(request.args["item_id"])
     clause = " AND ".join(where)
-    db, page_number = get_db(), paging()
+    db = get_db()
     count = db.execute("SELECT COUNT(*) FROM asset_loans l WHERE " + clause, args).fetchone()[0]
+    page_number, per_page = paginated(count)
     rows = db.execute(
         "SELECT l.*,i.name,i.specification,i.unit,c.name campus_name FROM asset_loans l "
         "JOIN asset_items i ON i.id=l.item_id JOIN asset_campuses c ON c.id=l.campus_id WHERE " +
-        clause + " ORDER BY l.id DESC LIMIT 20 OFFSET ?", (*args, (page_number-1)*20),
+        clause + " ORDER BY l.id DESC LIMIT ? OFFSET ?", (*args, per_page, (page_number-1)*per_page),
     )
-    return jsonify(ok=True, loans=[dict(r) for r in rows], total=count, page=page_number, member_id=current_user()["id"])
+    return jsonify(ok=True, loans=[dict(r) for r in rows], total=count, page=page_number, per_page=per_page, member_id=current_user()["id"])
 
 
 @bp.get("/api/assets/events")
 @login_required
 def events():
-    db, page_number = get_db(), paging()
+    db = get_db()
     where, args = [], []
     for key in ("item_id", "campus_id"):
         if request.args.get(key):
@@ -551,13 +745,14 @@ def events():
                 args.append(request.args[key])
     clause = " WHERE " + " AND ".join(where) if where else ""
     count = db.execute("SELECT COUNT(*) FROM asset_events e" + clause, args).fetchone()[0]
+    page_number, per_page = paginated(count)
     values = [dict(r) for r in db.execute(
         "SELECT e.*,c.name campus_name,i.name item_name,"
         "(SELECT id FROM asset_events x WHERE x.corrects_id=e.id) correction_id FROM asset_events e "
         "LEFT JOIN asset_campuses c ON c.id=e.campus_id LEFT JOIN asset_items i ON i.id=e.item_id" +
-        clause + " ORDER BY e.id DESC LIMIT 20 OFFSET ?", (*args, (page_number-1)*20))]
+        clause + " ORDER BY e.id DESC LIMIT ? OFFSET ?", (*args, per_page, (page_number-1)*per_page))]
     for value in values:
         value["details"] = json.loads(value["details"])
     from modules.asset_scan import attach_receipts
     attach_receipts(db, values)
-    return jsonify(ok=True, events=values, total=count, page=page_number)
+    return jsonify(ok=True, events=values, total=count, page=page_number, per_page=per_page)

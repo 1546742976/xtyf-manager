@@ -31,7 +31,7 @@ class FrontendTests(unittest.TestCase):
     def tearDownClass(cls):cls.temp.cleanup()
 
     def test_all_pages_match_server_jinja_for_roles_themes_and_password_gate(self):
-        urls={'index':'/','tasks':'/tasks','account':'/account','manage':'/manage','members':'/members','login':'/login','logout':'/logout','export_csv':'/export.csv','export_members_csv':'/api/members/export.csv','discussions.index':'/discussions/','security.security_page':'/admin/security'}
+        urls={'index':'/','tasks':'/tasks','account':'/account','manage':'/manage','members':'/members','login':'/login','logout':'/logout','export_csv':'/export.csv','export_members_csv':'/api/members/export.csv','discussions.index':'/discussions/','security.security_page':'/admin/security','site_updates.timeline':'/updates','site_updates.version':'/api/site-release','site_updates.history':'/api/site-release/history'}
         from urllib.parse import urlencode
         def url_for(name,**options):
             if name=='static':return '/static/'+options['filename']

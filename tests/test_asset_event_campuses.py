@@ -44,7 +44,11 @@ class EventCampusesTest(unittest.TestCase):
         for i in range(22):
             self.operate('move', self.get_units(item)[:1], campus_id=self.campus if i % 2 == 0 else self.other)
         for campus in (self.campus, self.other):
-            pages = [self.admin.get(f'/api/assets/events?item_id={item}&campus_id={campus}&page={p}').get_json() for p in (1, 2, 3)]
+            url = f'/api/assets/events?item_id={item}&campus_id={campus}&per_page=20'
+            first = self.admin.get(url).get_json()
+            pages = [first] + [self.admin.get(url + f'&page={p}').get_json()
+                               for p in range(2, (first['total'] + first['per_page'] - 1) // first['per_page'] + 1)]
+            self.assertGreater(len(pages), 1)
             ids = [e['id'] for p in pages for e in p['events']]
             self.assertEqual(len(ids), pages[0]['total'])
             self.assertEqual(len(ids), len(set(ids)))
