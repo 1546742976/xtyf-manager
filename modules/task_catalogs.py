@@ -276,9 +276,11 @@ def member_create():
     password = secrets.token_urlsafe(10) if generated else data["password"]
     if not valid_password(password):
         return jsonify(ok=False, error="初始密码必须为 8 至 1024 位文字"), 400
-    role = str(data.get("role") or "member")
+    role = data.get("role", "member")
+    if not isinstance(role, str) or role not in ("admin", "manager", "member"):
+        return jsonify(ok=False, error="角色必须为有效的文字选项"), 400
     user = current_user()
-    if user["role"] != "admin" or role not in ("admin", "manager", "member"):
+    if user["role"] != "admin":
         role = "member"
     db = get_db()
     group_ids, error = normalize_ids(data.get("group_ids"), "组别")

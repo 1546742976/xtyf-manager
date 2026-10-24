@@ -101,6 +101,11 @@ class TestAccountInputBounds(unittest.TestCase):
             with self.subTest(role=role):
                 response = self.client.post('/api/member/999999/role', json={'role': role})
                 self.assertEqual(response.status_code, 400)
+                created = self.client.post('/api/member', json={
+                    'name': '合成角色边界', 'username': uuid4().hex,
+                    'password': 'synthetic-password', 'role': role,
+                })
+                self.assertEqual(created.status_code, 400)
         huge = 2**63
         for path, method in ((f'/api/member/{huge}/reset', 'post'),
                              (f'/api/assets/units/{huge}', 'get'),

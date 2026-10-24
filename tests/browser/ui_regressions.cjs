@@ -48,7 +48,7 @@ fs.mkdirSync(output, {recursive:true});
       assert.equal(await page.locator('#chartImg').getAttribute('src'),null);
       await page.locator('#aT').selectOption('进');await page.locator('#aAmt').fill('12.34');
       await page.locator('#addF [type=submit]').click();
-      await page.waitForFunction(()=>document.querySelector('#funds-feedback').textContent.includes('记录已'));
+      await page.locator('#funds-create-status').filter({hasText:'创建请求已处理'}).waitFor();
       await page.getByRole('tab',{name:'记录管理',exact:true}).click();
       await page.locator('#tbody button[title="编辑记录"]').first().click();
       await page.locator('#eAmt').waitFor({state:'visible'});
