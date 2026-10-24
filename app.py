@@ -33,6 +33,7 @@ from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
                     manager_required, error_response, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
 from modules.funds import funds_bp, can_review
 from modules.input_validation import valid_password
+from modules.client_address import client_address, parse_trusted_proxies
 from modules.task_validation import InvalidIdError, parse_id
 from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
 from modules.invoice_jobs import migrate as migrate_invoice_jobs
@@ -118,6 +119,7 @@ def _load_secret():
 
 # ---- 应用初始化 ----
 app = Flask(__name__)
+app.config['TRUSTED_PROXY_NETWORKS'] = parse_trusted_proxies(os.environ.get('TRUSTED_PROXY_CIDRS', ''))
 app.secret_key = _load_secret()
 app.json.ensure_ascii = False
 app.permanent_session_lifetime = timedelta(days=30)
@@ -349,12 +351,12 @@ _LOGIN_GLOBAL_LIMIT = int(os.environ.get("LOGIN_GLOBAL_FAILURE_LIMIT", "500"))
 
 def _login_attempt_key(username):
     """IP 与用户名共同计数，不信任未经验证的代理转发地址头。"""
-    raw = (request.remote_addr or '') + '\x00' + username.casefold()
+    raw = client_address() + '\x00' + username.casefold()
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
 
 def _login_counter_keys(username):
-    ip_hash = hashlib.sha256((request.remote_addr or '').encode('utf-8')).hexdigest()
+    ip_hash = hashlib.sha256(client_address().encode('utf-8')).hexdigest()
     return (_login_attempt_key(username), 'ip:' + ip_hash, 'global:')
 
 

@@ -14,6 +14,7 @@ from flask import (Blueprint, current_app, g, jsonify, redirect, render_template
                    request, session, url_for)
 
 from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str, error_response
+from modules.client_address import client_address
 
 bp = Blueprint("security", __name__)
 PERMISSIONS = {"funds.review": "资金审核", "invoices.manage": "发票管理", "assets.manage": "资产管理"}
@@ -30,7 +31,7 @@ _audit_writes = 0
 
 def _limited_audit_event(kind):
     now = time.monotonic()
-    key = (kind, request.remote_addr or '')
+    key = (kind, client_address())
     with _audit_lock:
         if now - _audit_rate.get(key, -60) < 60:
             return False
