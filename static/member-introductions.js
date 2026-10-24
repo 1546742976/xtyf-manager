@@ -2,7 +2,7 @@
 (() => {
   const root=document.getElementById('member-introductions');if(!root)return;
   const $=id=>document.getElementById(id),esc=value=>BusinessUI.escape(value),dialog=$('intro-dialog'),form=$('intro-form');
-  let version=0,loaded=false,busy=false,latest=null,page=1,sequence=0,returnFocus=null,profiles=[],canModerate=false,moderating=null;
+  let version=0,loaded=false,busy=false,latest=null,page=1,sequence=0,returnFocus=null,profiles=[],canModerate=false,moderating=null,ownSequence=0;
   const reasons=new Map();
   async function api(url,body){
     const response=await BusinessUI.fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -11,8 +11,25 @@
   }
   function close(){if(busy)return;dialog.close();returnFocus?.focus();}
   function requireHomepage(profile){
-    if(!Object.hasOwn(profile,'github_url'))throw new Error('当前服务器尚不支持 GitHub 个人主页，请更新服务器后再编辑；原协作功能仍可使用');
+    if(!Array.isArray(profile.github_profiles)||!Array.isArray(profile.github_repositories))throw new Error('当前服务器尚不支持多主页与仓库，请更新服务器后再编辑；原协作功能仍可使用');
   }
+  const linkGroups={profile:{host:'intro-profile-links',add:'intro-add-profile',label:'个人主页',placeholder:'www.github.com/用户名'},repository:{host:'intro-repository-links',add:'intro-add-repository',label:'仓库',placeholder:'github.com/所有者/仓库'}};
+  function addLink(kind,entry={}){
+    const group=linkGroups[kind],host=$(group.host);if(host.children.length>=3)return;
+    const row=document.createElement('div');row.className='intro-link-row';
+    row.innerHTML=`<label>${group.label}地址<input data-link-url type="text" inputmode="url" autocomplete="url" maxlength="500" placeholder="${group.placeholder}" value="${esc(entry.url?.replace('https://github.com/','www.github.com/')||'')}"></label><label>简单介绍（选填）<input data-link-description type="text" maxlength="200" value="${esc(entry.description||'')}"></label><button class="btn" type="button" aria-label="移除此${group.label}">移除</button>`;
+    if(entry.name)row.dataset.name=entry.name;
+    row.querySelector('button').onclick=()=>{row.remove();$(group.add).disabled=false;$(group.add).focus();};host.append(row);$(group.add).disabled=host.children.length>=3;return row;
+  }
+  function fillLinks(kind,entries){$(linkGroups[kind].host).replaceChildren();$(linkGroups[kind].add).disabled=false;for(const entry of entries)addLink(kind,entry);}
+  function readLinks(kind){return [...$(linkGroups[kind].host).children].map(row=>({url:row.querySelector('[data-link-url]').value.trim(),description:row.querySelector('[data-link-description]').value.trim(),...(row.dataset.name?{name:row.dataset.name}:{})})).filter(entry=>entry.url||entry.description);}
+  for(const kind of Object.keys(linkGroups))$(linkGroups[kind].add).onclick=()=>addLink(kind)?.querySelector('input').focus();
+  function profileContent(p){
+    const links=(title,entries)=>entries?.length?`<h3>${title}</h3><ul class="intro-links">${entries.map(r=>`<li><a href="${esc(r.url)}" target="_blank" rel="noopener noreferrer">${esc(r.name||r.url.replace('https://github.com/','www.github.com/'))}</a>${r.description?`<p>${esc(r.description)}</p>`:''}</li>`).join('')}</ul>`:'';
+    return `<p class="intro-bio">${esc(p.bio||'尚未填写个人简介。')}</p>${links('GitHub 个人主页',p.github_profiles)}${links('GitHub 仓库',p.github_repositories)}`;
+  }
+  function previewOwn(p){if($('intro-preview'))$('intro-preview').innerHTML=(p.hidden?`<p>此资料已被隐藏：${esc(p.moderation_reason)}。以下内容仅供本人核对，协作页暂不展示。</p>`:'')+profileContent(p);}
+  async function loadOwnPreview(){const ticket=++ownSequence;try{const data=await api('/api/account/introduction');requireHomepage(data.profile);if(ticket===ownSequence)previewOwn(data.profile);}catch(error){if(ticket===ownSequence)$('intro-preview').textContent=error.message;}}
   function legacyInfo(profile){
     const repos=profile.repositories||[];$('intro-legacy').hidden=!repos.length;
     $('intro-legacy-content').textContent=repos.map(r=>[r.name,r.url,r.description].filter(Boolean).join(' · ')).join('\n');
@@ -20,7 +37,7 @@
   function moderationState(profile){$('intro-moderation-state').textContent=profile.hidden?`此资料已被隐藏：${profile.moderation_reason}。可以修改，但保存不会解除隐藏。`:'';}
   $('intro-edit').onclick=async event=>{
     returnFocus=event.currentTarget;
-    try{if(!loaded){const data=await api('/api/account/introduction');requireHomepage(data.profile);version=data.profile.version;form.elements.bio.value=data.profile.bio;form.elements.github_url.value=data.profile.github_url?.replace('https://github.com/','www.github.com/')||'';legacyInfo(data.profile);moderationState(data.profile);loaded=true;}
+    try{if(!loaded){const data=await api('/api/account/introduction');requireHomepage(data.profile);version=data.profile.version;form.elements.bio.value=data.profile.bio;fillLinks('profile',data.profile.github_profiles);fillLinks('repository',data.profile.github_repositories);previewOwn(data.profile);legacyInfo(data.profile);moderationState(data.profile);loaded=true;}
       dialog.showModal();form.elements.bio.focus();
     }catch(error){$('intro-status').textContent=error.message;}
   };
@@ -29,16 +46,16 @@
   form.onsubmit=async event=>{
     event.preventDefault();if(busy)return;
     busy=true;$('intro-save').disabled=true;$('intro-save-result').textContent='正在保存…';
-    try{const data=await api('/api/account/introduction',{version,bio:form.elements.bio.value,github_url:form.elements.github_url.value});version=data.profile.version;moderationState(data.profile);$('intro-save-result').textContent='简介已保存';$('intro-conflict').hidden=true;latest=null;if(root.dataset.list==='1')await load();}
+    try{const data=await api('/api/account/introduction',{version,bio:form.elements.bio.value,github_profiles:readLinks('profile'),github_repositories:readLinks('repository')});version=data.profile.version;ownSequence++;previewOwn(data.profile);moderationState(data.profile);$('intro-save-result').textContent='简介已保存';$('intro-conflict').hidden=true;latest=null;if(root.dataset.list==='1')await load();}
     catch(error){$('intro-save-result').textContent=error.message;if(error.status===409){$('intro-conflict').hidden=false;$('intro-accept-version').hidden=true;}}
     finally{busy=false;$('intro-save').disabled=false;}
   };
-  $('intro-check-latest').onclick=async()=>{try{latest=(await api('/api/account/introduction')).profile;requireHomepage(latest);$('intro-latest').textContent=`最新版本 ${latest.version} · ${latest.hidden?'已隐藏：'+latest.moderation_reason:'公开'}\n${latest.bio}\n${latest.github_url||'未填写个人主页'}`;$('intro-accept-version').hidden=false;}catch(e){$('intro-save-result').textContent=e.message;}};
+  $('intro-check-latest').onclick=async()=>{try{latest=(await api('/api/account/introduction')).profile;requireHomepage(latest);$('intro-latest').textContent=`最新版本 ${latest.version} · ${latest.hidden?'已隐藏：'+latest.moderation_reason:'公开'}\n${latest.bio}\n${[...latest.github_profiles,...latest.github_repositories].map(r=>[r.url,r.description].filter(Boolean).join(' · ')).join('\n')||'未填写链接'}`;$('intro-accept-version').hidden=false;}catch(e){$('intro-save-result').textContent=e.message;}};
   $('intro-accept-version').onclick=()=>{if(!latest)return;version=latest.version;moderationState(latest);$('intro-conflict').hidden=true;$('intro-save-result').textContent='已核对最新状态，当前草稿未更改，请再次保存';};
   async function load(){
     const ticket=++sequence,search=$('intro-search'),query=new URLSearchParams({page:String(page),q:search.elements.q.value,include_hidden:search.elements.include_hidden.checked?'1':'0'});
     try{const data=await api('/api/collaboration/profiles?'+query);if(ticket!==sequence)return;profiles=data.profiles;canModerate=data.can_moderate;$('intro-hidden-filter').hidden=!canModerate;
-      $('intro-list').innerHTML=profiles.map(p=>`<article class="intro-card"><div class="intro-identity"><span class="intro-initial">${esc(p.name.slice(0,1))}</span>${p.avatar_url?`<img data-profile-avatar="${esc(p.avatar_url)}" hidden alt="${esc(p.name)}的头像">`:''}<strong>${esc(p.name)}</strong></div><p>${esc(p.groups||'未分组')}</p><p class="intro-bio">${esc(p.bio)}</p>${p.github_url?`<p><a href="${esc(p.github_url)}" target="_blank" rel="noopener noreferrer">${esc(p.github_url.replace('https://github.com/','www.github.com/'))}</a></p>`:''}${p.hidden?`<p>已隐藏：${esc(p.moderation_reason)}</p>`:''}${canModerate?`<button class="btn" type="button" data-moderate="${p.member_id}">${p.hidden?'恢复展示':'隐藏简介'}</button>`:''}</article>`).join('')||'<p>暂无符合条件的成员简介。</p>';
+      $('intro-list').innerHTML=profiles.map(p=>`<article class="intro-card"><div class="intro-identity"><span class="intro-initial">${esc(p.name.slice(0,1))}</span>${p.avatar_url?`<img data-profile-avatar="${esc(p.avatar_url)}" hidden alt="${esc(p.name)}的头像">`:''}<strong>${esc(p.name)}</strong></div><p>${esc(p.groups||'未分组')}</p>${profileContent(p)}${p.hidden?`<p>已隐藏：${esc(p.moderation_reason)}</p>`:''}${canModerate?`<button class="btn" type="button" data-moderate="${p.member_id}">${p.hidden?'恢复展示':'隐藏简介'}</button>`:''}</article>`).join('')||'<p>暂无符合条件的成员简介。</p>';
       for(const img of $('intro-list').querySelectorAll('[data-profile-avatar]')){img.onload=()=>{img.hidden=false;img.previousElementSibling.hidden=true;};img.onerror=()=>img.remove();const url=img.dataset.profileAvatar;
         if(window.XTYF?.invoke){if(window.XTYF.imageURL)window.XTYF.imageURL(url).then(src=>{if(img.isConnected)img.src=src;}).catch(()=>img.remove());}else img.src=url;
       }
@@ -50,9 +67,10 @@
   $('intro-moderation-close').onclick=closeModeration;modDialog.addEventListener('cancel',event=>{event.preventDefault();closeModeration();});
   modForm.onsubmit=async event=>{event.preventDefault();if(busy||!moderating)return;busy=true;modForm.querySelector('[type=submit]').disabled=true;
     try{await api(`/api/collaboration/profiles/${moderating.member_id}/moderation`,{version:moderating.version,hidden:!moderating.hidden,reason:modForm.elements.reason.value});reasons.delete(moderating.member_id);modDialog.close();await load();$('intro-status').textContent='展示状态已保存';returnFocus?.focus();}catch(e){$('intro-moderation-result').textContent=e.message;}finally{busy=false;modForm.querySelector('[type=submit]').disabled=false;}};
+  if(root.dataset.list!=='1')loadOwnPreview();
   if(root.dataset.list==='1'){
     $('intro-search').onsubmit=e=>{e.preventDefault();page=1;load();};$('intro-search').elements.include_hidden.onchange=()=>{page=1;load();};
     $('intro-prev').onclick=()=>{page--;load();};$('intro-next').onclick=()=>{page++;load();};$('intro-refresh').onclick=load;
-    $('intro-list').onclick=event=>{const button=event.target.closest('[data-moderate]');if(!button||!canModerate)return;moderating=profiles.find(p=>p.member_id===Number(button.dataset.moderate));returnFocus=button;modForm.elements.reason.value=reasons.get(moderating.member_id)||'';$('intro-moderation-result').textContent='';$('intro-moderation-target').textContent=`${moderating.hidden?'恢复':'隐藏'} ${moderating.name} 的整份简介与个人主页` ;modDialog.showModal();modForm.elements.reason.focus();};load();
+    $('intro-list').onclick=event=>{const button=event.target.closest('[data-moderate]');if(!button||!canModerate)return;moderating=profiles.find(p=>p.member_id===Number(button.dataset.moderate));returnFocus=button;modForm.elements.reason.value=reasons.get(moderating.member_id)||'';$('intro-moderation-result').textContent='';$('intro-moderation-target').textContent=`${moderating.hidden?'恢复':'隐藏'} ${moderating.name} 的整份简介与所有链接` ;modDialog.showModal();modForm.elements.reason.focus();};load();
   }
 })();

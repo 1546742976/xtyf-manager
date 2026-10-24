@@ -33,8 +33,47 @@ class IntroductionTests(unittest.TestCase):
         public = next(p for p in self.other.get('/api/collaboration/profiles?q='+profile['name']).get_json()['profiles'] if p['member_id'] == self.mid)
         self.assertEqual(public['repositories'], [])
         self.assertIsNone(public['github_url'])
-        self.assertEqual(set(public), {'member_id', 'name', 'groups', 'avatar_url', 'bio', 'repositories', 'version', 'hidden', 'github_url'})
+        self.assertEqual(set(public), {'member_id', 'name', 'groups', 'avatar_url', 'bio', 'repositories', 'version', 'hidden', 'github_url', 'github_profiles', 'github_repositories'})
         self.assertEqual(self.other.post('/api/account/introduction', json={'version': 0, 'member_id': self.mid, 'bio': '覆盖', 'repositories': []}).status_code, 400)
+
+    def test_multiple_links_public_preview_and_legacy_client_preserves_them(self):
+        body = {'version': 0, 'bio': '专长',
+                'github_profiles': [{'url': f'www.github.com/example{i}', 'description': f'主页 {i}'} for i in range(3)],
+                'github_repositories': [{'url': f'github.com/example/project{i}', 'description': f'项目 {i}'} for i in range(3)]}
+        saved = self.member.post('/api/account/introduction', json=body)
+        self.assertEqual(saved.status_code, 200, saved.get_json())
+        profile = saved.get_json()['profile']
+        self.assertEqual(profile['github_profiles'][0]['url'], 'https://github.com/example0')
+        self.assertEqual(profile['github_repositories'][0]['description'], '项目 0')
+        public = self.other.get('/api/collaboration/profiles?q='+profile['name']).get_json()['profiles'][0]
+        self.assertEqual(public['github_profiles'], profile['github_profiles'])
+        self.assertEqual(public['github_repositories'], profile['github_repositories'])
+        old = self.member.post('/api/account/introduction', json={'version': 1, 'bio': '旧客户端', 'github_url': profile['github_url']}).get_json()['profile']
+        self.assertEqual(old['github_profiles'], profile['github_profiles'])
+        self.assertEqual(old['github_repositories'], profile['github_repositories'])
+        body['version'] = old['version']
+        body['bio'] = ''
+        body['github_profiles'] = []
+        saved = self.member.post('/api/account/introduction', json=body).get_json()['profile']
+        self.assertIsNone(saved['github_url'])
+        self.assertIn(self.mid, [p['member_id'] for p in self.other.get('/api/collaboration/profiles?q='+profile['name']).get_json()['profiles']])
+
+    def test_multiple_link_limits_validation_and_deduplication(self):
+        body = {'version': 0, 'bio': '', 'github_profiles': [], 'github_repositories': []}
+        for field, url in [('github_profiles', 'github.com/example'), ('github_repositories', 'github.com/example/repo')]:
+            for invalid in ([{'url': url}]*4, [{'url': 'javascript:alert(1)'}], [{'url': url, 'description': '字'*201}], {}, [{'url': url, 'member_id': self.oid}]):
+                rejected = self.member.post('/api/account/introduction', json={**body, field: invalid})
+                self.assertEqual(rejected.status_code, 400, rejected.get_json())
+        body['github_profiles'] = [{'url': 'www.github.com/Example'}, {'url': 'https://github.com/example/'}]
+        body['github_repositories'] = [{'url': 'www.github.com/example/repo.git'}, {'url': 'https://github.com/EXAMPLE/repo/'}]
+        profile = self.member.post('/api/account/introduction', json=body).get_json()['profile']
+        self.assertEqual(len(profile['github_profiles']), 1)
+        self.assertEqual(len(profile['github_repositories']), 1)
+        self.assertEqual(self.member.post('/api/account/introduction', json=body).status_code, 409)
+        self.admin.post(f'/api/collaboration/profiles/{self.mid}/moderation', json={'version': 1, 'hidden': True, 'reason': '核实链接'})
+        body['version'] = 2
+        self.assertTrue(self.member.post('/api/account/introduction', json=body).get_json()['profile']['hidden'])
+        self.assertNotIn(self.mid, [p['member_id'] for p in self.other.get('/api/collaboration/profiles').get_json()['profiles']])
 
     def test_personal_homepage_normalization_and_legacy_preservation(self):
         legacy = [{'url': 'https://github.com/team-a/project', 'name': '旧资料'}]
@@ -89,6 +128,7 @@ class IntroductionTests(unittest.TestCase):
             db.commit()
             migrate(db); migrate(db)
             self.assertEqual(db.execute('SELECT bio,repositories,version,github_url FROM member_introductions').fetchone(), ('旧简介', '[]', 8, None))
+            self.assertEqual(db.execute('SELECT github_profiles,github_repositories FROM member_introductions').fetchone(), (None, None))
 
     def test_hide_conflict_and_owner_edits_do_not_unhide(self):
         self.member.post('/api/account/introduction', json={'version': 0, 'bio': '公开', 'repositories': []})

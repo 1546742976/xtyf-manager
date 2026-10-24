@@ -134,7 +134,11 @@ def run():
             page.evaluate("XTYF.navigate('/discussions/')")
             frame.locator('#intro-edit').click()
             frame.locator('#intro-form [name=bio]').fill('合成客户端简介')
-            frame.locator('#intro-form [name=github_url]').fill('www.github.com/example-client')
+            frame.locator('#intro-add-profile').click()
+            frame.locator('#intro-profile-links [data-link-url]').fill('www.github.com/example-client')
+            frame.locator('#intro-add-repository').click()
+            frame.locator('#intro-repository-links [data-link-url]').fill('github.com/example-client/robot')
+            frame.locator('#intro-repository-links [data-link-description]').fill('合成仓库介绍')
             frame.locator('#intro-save').click()
             frame.locator('#intro-save-result').filter(has_text='简介已保存').wait_for()
             frame.locator('#intro-close').click()
@@ -142,9 +146,11 @@ def run():
             frame.locator('#intro-edit').click()
             frame.locator('#intro-dialog[open]').wait_for()
             assert frame.locator('#intro-form [name=bio]').input_value()=='合成客户端简介'
-            assert frame.locator('#intro-form [name=github_url]').input_value()=='www.github.com/example-client'
+            assert frame.locator('#intro-profile-links [data-link-url]').input_value()=='www.github.com/example-client'
             frame.locator('#intro-close').click()
-            results.append('shared introduction editor persists through authenticated native transport')
+            assert frame.locator('#intro-preview a').count()==2
+            assert '合成仓库介绍' in frame.locator('#intro-preview').inner_text()
+            results.append('shared introduction editor and link preview persist through authenticated native transport')
             page.evaluate("XTYF.navigate('/account/email/verify#token=test')")
             page.get_by_role('heading',name='本地页面不存在').wait_for()
             results.append('removed legacy email-link template uses the local unavailable-page message')
