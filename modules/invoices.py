@@ -178,14 +178,19 @@ _worker_guard = threading.Lock()
 _worker_thread = None
 _worker_pid = None
 _worker_wakeup = threading.Event()
+_sse_guard = threading.Lock()
+_sse_members = set()
 
 
 def _reset_worker_after_fork():
     global _worker_guard, _worker_thread, _worker_pid, _worker_wakeup
+    global _sse_guard, _sse_members
     _worker_guard = threading.Lock()
     _worker_thread = None
     _worker_pid = None
     _worker_wakeup = threading.Event()
+    _sse_guard = threading.Lock()
+    _sse_members = set()
 
 
 if hasattr(os, 'register_at_fork'):
@@ -241,34 +246,51 @@ def _update_job(jid, progress, message):
 
 def _job_sse(jid, user_id, session_version):
     """Read persisted progress without blocking invoice writes or other workers."""
+    with _sse_guard:
+        if user_id in _sse_members or len(_sse_members) >= 4:
+            return jsonify(error='进度连接已达上限，请稍后重试或查看任务列表', reason='sse_capacity'), 429, {'Retry-After': '5'}
+        _sse_members.add(user_id)
+    released = False
+
+    def release():
+        nonlocal released
+        with _sse_guard:
+            if not released:
+                _sse_members.discard(user_id)
+                released = True
+
     def generate():
         previous = None
-        heartbeat = time.monotonic()
-        while True:
-            # Revalidate the session and permission while a long-lived stream is open.
-            if not invoice_jobs.actor_is_current(user_id, session_version):
-                yield 'data: ' + json.dumps({'status': 'error', 'message': '登录或财务授权已失效'}, ensure_ascii=False) + '\n\n'
-                break
-            job = invoice_jobs.get_job(jid)
-            if job is None:
-                yield 'data: ' + json.dumps({'status': 'error', 'message': '任务不存在'}, ensure_ascii=False) + '\n\n'
-                break
-            payload = {key: job[key] for key in ('id', 'type', 'status', 'progress', 'message')}
-            if job['status'] in invoice_jobs.TERMINAL:
-                payload['result'] = job['result']
-            encoded = json.dumps(payload, ensure_ascii=False)
-            if encoded != previous:
-                yield f'data: {encoded}\n\n'
-                previous = encoded
-                heartbeat = time.monotonic()
-            elif time.monotonic() - heartbeat >= 15:
-                yield ': keep-alive\n\n'
-                heartbeat = time.monotonic()
-            if job['status'] in invoice_jobs.TERMINAL:
-                break
-            time.sleep(1)
-    return Response(generate(), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+        started = heartbeat = time.monotonic()
+        try:
+            while time.monotonic() - started < 30:
+                if not invoice_jobs.actor_is_current(user_id, session_version):
+                    yield 'data: ' + json.dumps({'status': 'error', 'message': '登录或财务授权已失效'}, ensure_ascii=False) + '\n\n'
+                    break
+                job = invoice_jobs.get_job(jid)
+                if job is None:
+                    yield 'data: ' + json.dumps({'status': 'error', 'message': '任务不存在'}, ensure_ascii=False) + '\n\n'
+                    break
+                payload = {key: job[key] for key in ('id', 'type', 'status', 'progress', 'message')}
+                if job['status'] in invoice_jobs.TERMINAL:
+                    payload['result'] = job['result']
+                encoded = json.dumps(payload, ensure_ascii=False)
+                if encoded != previous:
+                    yield f'data: {encoded}\n\n'
+                    previous = encoded
+                    heartbeat = time.monotonic()
+                elif time.monotonic() - heartbeat >= 5:
+                    yield ': keep-alive\n\n'
+                    heartbeat = time.monotonic()
+                if job['status'] in invoice_jobs.TERMINAL:
+                    break
+                time.sleep(1)
+        finally:
+            release()
+    response = Response(generate(), mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+    response.call_on_close(release)  # Also releases a response never iterated by WSGI.
+    return response
 
 
 def _normalize_month(s):

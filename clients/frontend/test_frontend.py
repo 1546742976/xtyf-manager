@@ -79,7 +79,9 @@ class FrontendTests(unittest.TestCase):
             self.assertNotRegex(template,r'<(?:script|link)\b[^>]*(?:src|href)=["\']https?://',name)
         self.assertNotIn('security.js',self.templates['_security_head.html'])
         self.assertNotIn('new EventSource',(self.dist/'static/invoices.js').read_text(encoding='utf-8'))
-        self.assertIn('new XTYFJobPoller',(self.dist/'static/invoices.js').read_text(encoding='utf-8'))
+        self.assertIn('InvoiceJobPolling.create',(self.dist/'static/invoices.js').read_text(encoding='utf-8'))
+        self.assertIn('static/invoice-polling.js', self.templates['invoices.html'])
+        self.assertTrue((self.dist/'static/invoice-polling.js').is_file())
 
     def test_navigation_adaptation_preserves_unrelated_identifiers(self):
         source="location.assign('/');window.location.href='/';other.location.href='/';history.replaceState(null,'','/');"

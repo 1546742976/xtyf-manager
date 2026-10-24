@@ -148,7 +148,6 @@ def build(output=DIST):
                 start, end = content.index('  async function download('), content.index('  document.addEventListener("click"')
                 content = content[:start] + '  async function download(url,filename="download"){return action("download:"+url,[],()=>window.XTYF.download(url,filename));}\n' + content[end:]
             if path.name == "invoices.js":
-                content = content.replace("new EventSource('/invoices/api/job/stream/'+encodeURIComponent(id))", "new XTYFJobPoller(id)")
                 content = content.replace("handleFiles(e.dataTransfer.files)", "window.XTYF.pickInvoiceFiles()")
             if path.name == "discussions.js":
                 content = content.replace("url.origin===window.XTYFLocation.origin&&", "window.XTYF.isLocal(url)&&")

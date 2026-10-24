@@ -352,71 +352,48 @@ else{showToast(d2.error||'入库失败','error')}
 document.getElementById('batchUploadModal').addEventListener('click',function(e){if(e.target===this)BUModal.close()});
 document.getElementById('batchUploadModal').addEventListener('click',function(e){if(e.target.closest('[data-retry-upload-owners]'))BusinessUI.action('invoice-upload-owners',[e.target],()=>BUModal.open(BUModal._data),text=>showToast(text,'error'))});
 
-// ====== 持久化任务列表与可重连 SSE ======
+// ====== 持久化任务列表；网站和客户端使用同一个可暂停轮询器 ======
 var InvoiceJobs={
   names:{scan_dups:'查重',organize:'整理文件',refresh:'刷新 PDF 金额',delete_dups:'删除重复'},
   states:{queued:'排队中',running:'执行中',done:'已完成',error:'失败',interrupted:'执行中断'},
-  active:new Map(),timer:null,loading:false,
+  monitor:null,
   resetButtons:function(){
     var organize=document.getElementById('organizeBtn'),refresh=document.getElementById('refreshBtn');
     if(organize){organize.disabled=false;organize.textContent='整理文件'}
     if(refresh){refresh.disabled=false;refresh.textContent='刷新PDF金额'}
   },
-  load:async function(){
-    if(!IS_FINANCE||InvoiceJobs.loading)return;
-    clearTimeout(InvoiceJobs.timer);InvoiceJobs.loading=true;
-    var delay=15000;
-    try{
-      var response=await BusinessUI.fetch('/invoices/api/jobs');
-      if(response.status===401||response.status===403){
-        InvoiceJobs.active.forEach(function(entry){entry.source.close()});InvoiceJobs.active.clear();
-        document.getElementById('invoiceJobsList').textContent='请重新登录并确认财务权限';
-        return;
-      }
-      if(!response.ok)throw new Error('任务列表加载失败');
-      var data=await response.json(),jobs=data.jobs||[];
-      if(jobs.some(function(job){return job.status==='queued'||job.status==='running'}))delay=3000;
+  load:function(){
+    if(!IS_FINANCE)return;
+    if(!InvoiceJobs.monitor)InvoiceJobs.monitor=InvoiceJobPolling.create({
+      fetch:(url,options)=>BusinessUI.fetch(url,options),
+      enabled:()=>!document.hidden&&navigator.onLine!==false,
+      onList:function(jobs){
       document.getElementById('invoiceJobsList').innerHTML=jobs.length?jobs.map(function(job){
         var date=new Date(job.created_at*1000).toLocaleString();
         return '<div class="invoice-job-row" data-status="'+escHtml(job.status)+'"><div class="invoice-job-info"><strong>'+escHtml(InvoiceJobs.names[job.type]||job.type)+'</strong> · '+escHtml(InvoiceJobs.states[job.status]||job.status)+' · '+Number(job.progress)+'%<small>'+escHtml(job.message)+'</small><small>'+escHtml(job.actor_name)+' · '+escHtml(date)+'</small></div><button type="button" class="btn-sm" data-job-id="'+escHtml(job.id)+'">查看'+(['queued','running'].includes(job.status)?'进度':'结果')+'</button></div>';
       }).join(''):'暂无后台任务';
       document.querySelectorAll('#invoiceJobsList [data-job-id]').forEach(function(button){button.addEventListener('click',function(){InvoiceJobs.view(button.dataset.jobId)})});
-      for(var job of jobs){
-        if(InvoiceJobs.active.has(job.id)&&['done','error','interrupted'].includes(job.status)){
-          var detail=await BusinessUI.fetch('/invoices/api/job/'+encodeURIComponent(job.id));
-          if(detail.ok)InvoiceJobs.finish(job.id,await detail.json());
-        }
-      }
-    }catch(error){document.getElementById('invoiceJobsList').textContent=error.message+'，稍后自动重试';delay=5000}
-    finally{InvoiceJobs.loading=false}
-    InvoiceJobs.timer=setTimeout(InvoiceJobs.load,delay);
+      },
+      onResult:(id,data,callback)=>InvoiceJobs.finish(id,data,callback),
+      onError:error=>{document.getElementById('invoiceJobsList').textContent=error.message+'，稍后自动重试';},
+      onAuth:()=>{document.getElementById('invoiceJobsList').textContent='请重新登录并确认财务权限后刷新页面';InvoiceJobs.resetButtons();}
+    });
+    return InvoiceJobs.monitor.refresh();
   },
   watch:function(id,onResult){
-    if(InvoiceJobs.active.has(id))return;
-    var source=new EventSource('/invoices/api/job/stream/'+encodeURIComponent(id));
-    InvoiceJobs.active.set(id,{source:source,onResult:onResult});
-    source.onmessage=function(event){
-      try{
-        var data=JSON.parse(event.data);
-        if(['done','error','interrupted'].includes(data.status))InvoiceJobs.finish(id,data);
-      }catch(error){showToast('任务进度解析失败，可在任务列表查看结果','error')}
-    };
-    // EventSource reconnects automatically. The list also retrieves terminal results.
-    source.onerror=function(){InvoiceJobs.load()};
     InvoiceJobs.load();
+    return InvoiceJobs.monitor.watch(id,onResult);
   },
-  finish:function(id,data){
-    var entry=InvoiceJobs.active.get(id);if(!entry)return;
-    entry.source.close();InvoiceJobs.active.delete(id);InvoiceJobs.resetButtons();
+  finish:function(id,data,onResult){
+    InvoiceJobs.resetButtons();
     if(data.status==='done'){
       var result=data.result||{};
       if(result.failed||result.errors){
         App.stats=null;loadStats();loadInvoices(App.currentPage);
         InvoiceJobs.showResult(data);showToast('任务完成，部分项目失败，请查看结果','error');
-      }else if(entry.onResult)entry.onResult(data);
+      }else if(onResult)onResult(data);
       else{App.stats=null;loadStats();loadInvoices(App.currentPage);InvoiceJobs.showResult(data)}
     }else{showToast(data.message||'任务执行失败','error');InvoiceJobs.showResult(data)}
-    InvoiceJobs.load();
   },
   view:async function(id){
     try{
@@ -435,7 +412,7 @@ var InvoiceJobs={
     (result.details||[]).forEach(function(item){lines.push(String(item))});
     (result.failed_details||[]).forEach(function(item){lines.push(item.path+'：'+item.error)});
     if(result.deleted_paths&&result.deleted_paths.length)lines.push('已删除文件（最多显示 50 项）：',...result.deleted_paths);
-    document.getElementById('invoiceJobResultTitle').textContent=(InvoiceJobs.names[job.type]||'后台任务')+' · '+(InvoiceJobs.states[job.status]||'结果');
+    document.getElementById('invoiceJobModalTitle').textContent=(InvoiceJobs.names[job.type]||'后台任务')+' · '+(InvoiceJobs.states[job.status]||'结果');
     document.getElementById('invoiceJobResultMessage').textContent=job.message||result.error||'';
     document.getElementById('invoiceJobResultDetails').textContent=lines.join('\n');
     openInvoiceDialog('invoiceJobModal');
@@ -613,7 +590,11 @@ syncInvoiceSortControls();
 bindInvoiceTable();
 loadStats().then(function(){loadInvoices()});
 if(window.IS_FINANCE)InvoiceJobs.load();
-window.addEventListener('beforeunload',function(){InvoiceJobs.active.forEach(function(entry){entry.source.close()})});
+document.addEventListener('visibilitychange',()=>InvoiceJobs.monitor?.sync());
+window.addEventListener('offline',()=>InvoiceJobs.monitor?.sync());
+window.addEventListener('online',()=>InvoiceJobs.monitor?.sync());
+window.addEventListener('pagehide',()=>InvoiceJobs.monitor?.pause());
+window.addEventListener('pageshow',()=>InvoiceJobs.monitor?.sync());
 
 function invoiceOwnerOptions(selected, placeholder, allowUnassigned){
   var zero=allowUnassigned?'0':'';
