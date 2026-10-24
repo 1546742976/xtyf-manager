@@ -101,7 +101,7 @@ test("dialog retries an initial failed preview without a date, but validates a s
   }
   const root={querySelector:control,querySelectorAll:()=>[],setAttribute(){}};
   const context={BusinessUI: { escape: (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) }, document:{addEventListener(){},querySelector:()=>root},isManagement:()=>true,
-    showModal:()=>true,hideModal(){},refresh:async()=>{},
+    showModal:()=>true,hideModal(){},refresh:async()=>{},projectById:id=>({id,is_active:1}),
     apiRequest:async(url,body)=>{requests.push({url,body});return requests.length===1
       ? {ok:false,error:"offline"} : {...result(),rows:[],task_ids:[],durations:{},can_apply:false,changed_count:0};}};
   vm.createContext(context);vm.runInContext(source("task-schedule.js"),context);

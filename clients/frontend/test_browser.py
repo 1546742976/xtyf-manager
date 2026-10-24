@@ -121,6 +121,14 @@ def run():
                     assert frame.locator('#email-form').is_visible()
                     assert frame.locator('#email-code').get_attribute('pattern')=='[0-9]{6}'
                     results.append('account contains the current six-digit email verification controls')
+                if path=='/manage':
+                    frame.locator('#schedule-project:enabled').wait_for()
+                    frame.locator('#schedule-project').click()
+                    frame.locator('#schedule-project-choice [name=project]').select_option(index=1)
+                    frame.locator('#schedule-project-choice [type=submit]').click()
+                    frame.locator('#schedule-summary').filter(has_text='参与').wait_for()
+                    frame.locator('[data-schedule-close]').click()
+                    results.append('local schedule chooser loads preview through authenticated native transport')
                 results.append('local route '+path)
                 print(results[-1],flush=True)
             page.evaluate("XTYF.navigate('/discussions/')")
