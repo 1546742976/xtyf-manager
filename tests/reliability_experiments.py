@@ -19,6 +19,8 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from unittest.mock import patch
 from uuid import uuid4
@@ -155,7 +157,10 @@ case "$1" in
   mkdir) /bin/mkdir -p "$APP_DIR" ;;
   rsync) [[ "$PROBE_FAILURE" == rsync ]] && exit 23; /bin/cp -R "$PROBE_SOURCE/." "$APP_DIR/" ;;
   tee) cat >/dev/null ;;
-  systemctl) [[ "$PROBE_FAILURE" == restart && "$2" == restart ]] && exit 1; echo 'synthetic service status' ;;
+  systemctl)
+    [[ "$PROBE_FAILURE" == restart && "$2" == restart ]] && exit 1
+    [[ "$PROBE_FAILURE" == inactive && "$2" == is-active ]] && exit 3
+    echo 'synthetic service status' ;;
   apt-get|python3|chmod|chown|ufw|*/venv/bin/pip) : ;;
   *) echo "Unexpected mock command: $1" >&2; exit 77 ;;
 esac
@@ -163,20 +168,29 @@ esac
             "git": "#!/bin/bash\nexit 1\n",
             "sleep": "#!/bin/bash\nexit 0\n",
             "curl": '''#!/bin/bash
+printf '%s\\n' "$*" >> "$PROBE_CALLS"
+count=0; [[ -f "$PROBE_STATE" ]] && count=$(cat "$PROBE_STATE")
+count=$((count+1)); echo "$count" > "$PROBE_STATE"
 [[ "$PROBE_FAILURE" == connection ]] && exit 7
-if [[ "$PROBE_FAILURE" == http500 ]]; then echo 'HTTP 500'; else echo 'HTTP 200'; fi
+[[ "$PROBE_FAILURE" == timeout ]] && exit 28
+if [[ "$PROBE_FAILURE" == http500 || "$PROBE_FAILURE" == slow && "$count" -lt 3 ]]; then echo '500'; else echo '200'; fi
 ''',
         }
         for name, content in scripts.items():
             path = binaries / name
             path.write_text(content, encoding="utf-8")
             path.chmod(0o700)
-        for failure in ("none", "http500", "connection", "rsync", "restart"):
+        for failure in ("none", "http500", "connection", "timeout", "inactive", "slow", "rsync", "restart", "invalid_url", "custom_url"):
+            calls = root / ('calls-' + failure)
+            health_url = 'http://user:secret@127.0.0.1/login' if failure == 'invalid_url' else 'http://127.0.0.1:9854/login'
             result = subprocess.run(["bash", str(source / "deploy/deploy.sh")], capture_output=True,
                 text=True, timeout=15, env={**os.environ, "PATH": str(binaries) + ":/usr/bin:/bin",
                 "APP_DIR": str(root / ("app-" + failure)), "APP_USER": "synthetic",
-                "PROBE_SOURCE": str(source), "PROBE_FAILURE": failure})
-            results[failure] = {"exit_code": result.returncode, "completion_printed": "完成。局域网访问" in result.stdout}
+                "PROBE_SOURCE": str(source), "PROBE_FAILURE": failure,
+                "PROBE_CALLS": str(calls), "PROBE_STATE": str(root / ('state-' + failure)), "HEALTH_URL": health_url})
+            commands = calls.read_text().splitlines() if calls.exists() else []
+            results[failure] = {"exit_code": result.returncode, "completion_printed": "完成。局域网访问" in result.stdout,
+                                "health_attempts": len(commands), "health_commands": commands[:1]}
             assert result.returncode != 77, result.stderr
     return {"commands_mocked": True, "cases": results}
 
@@ -194,14 +208,15 @@ def sse_capacity():
         cookies = http.cookiejar.CookieJar()
         opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookies), urllib.request.ProxyHandler({}))
 
-        def request(path, data=None, timeout=2):
+        def request(path, data=None, timeout=2, transport=None):
+            transport = transport or opener
             headers = {}
             if data is not None:
-                with opener.open(origin + "/api/csrf", timeout=timeout) as response:
+                with transport.open(origin + "/api/csrf", timeout=timeout) as response:
                     headers = {"X-CSRF-Token": json.load(response)["csrf_token"], "Content-Type": "application/json"}
             started = time.monotonic()
             body = None if data is None else json.dumps(data).encode()
-            with opener.open(urllib.request.Request(origin + path, data=body, headers=headers), timeout=timeout) as response:
+            with transport.open(urllib.request.Request(origin + path, data=body, headers=headers), timeout=timeout) as response:
                 payload = response.read()
             return {"seconds": round(time.monotonic() - started, 4), "body": payload}
 
@@ -224,13 +239,28 @@ def sse_capacity():
                 request("/login", {"username": "admin", "password": "synthetic-probe-password"})
                 request("/api/password", {"old": "synthetic-probe-password", "new": "synthetic-probe-password-rotated"})
                 job = json.loads(request("/invoices/api/job/start", {"type": "refresh"})["body"])["job_id"]
-                results = {}
+                clients = []
+                for index in range(8):
+                    username = 'synthetic-sse-' + str(index)
+                    request('/api/member', {'name': username, 'username': username,
+                            'password': 'synthetic-stream-password', 'role': 'admin'})
+                    client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()), urllib.request.ProxyHandler({}))
+                    request('/login', {'username': username, 'password': 'synthetic-stream-password'}, transport=client)
+                    request('/api/password', {'old': 'synthetic-stream-password', 'new': 'synthetic-stream-rotated'}, transport=client)
+                    clients.append(client)
+                results = {'stream_statuses': []}
                 for count in range(9):
                     if count:
-                        stream = opener.open(origin + "/invoices/api/job/stream/" + job, timeout=5)
-                        assert stream.readline(), "SSE did not produce an initial message"
-                        streams.append(stream)
-                    if count in (0, 7, 8):
+                        try:
+                            stream = clients[count - 1].open(origin + "/invoices/api/job/stream/" + job, timeout=2)
+                            assert stream.readline(), "SSE did not produce an initial message"
+                            streams.append(stream)
+                            results['stream_statuses'].append(200)
+                        except urllib.error.HTTPError as error:
+                            assert error.code == 429 and error.headers['Retry-After'] == '5'
+                            results['stream_statuses'].append(error.code)
+                            error.close()
+                    if count in (0, 4, 8):
                         results[str(count)] = {}
                         for path in ("/login", "/api/data"):
                             try:
@@ -238,19 +268,25 @@ def sse_capacity():
                                 results[str(count)][path] = {"seconds": result["seconds"], "status": "ok"}
                             except (TimeoutError, OSError) as error:
                                 results[str(count)][path] = {"status": "timeout/error", "error_type": type(error).__name__}
+                assert results['stream_statuses'] == [200] * 4 + [429] * 4, results
+                with ThreadPoolExecutor(max_workers=20) as executor:
+                    polling = list(executor.map(lambda _: request('/invoices/api/jobs')['seconds'], range(20)))
+                results['twenty_polling_requests_max_seconds'] = max(polling)
+                assert all(value['status'] == 'ok' for count in ('0', '4', '8') for value in results[count].values()), results
                 for stream in streams:
                     stream.close()
                 streams.clear()
                 started = time.monotonic()
                 while True:
                     try:
-                        request("/api/data")
+                        stream = clients[0].open(origin + "/invoices/api/job/stream/" + job, timeout=2)
+                        assert stream.readline()
+                        stream.close()
                         results["recovery_seconds"] = round(time.monotonic() - started, 4)
                         break
                     except (TimeoutError, OSError):
-                        if time.monotonic() - started > 35:
-                            results["recovery_seconds"] = "not recovered within 35 seconds"
-                            break
+                        if time.monotonic() - started > 15:
+                            raise AssertionError('SSE slot was not recovered within 15 seconds')
                         time.sleep(.2)
                 return {"workers": 1, "threads": 8, "actual_invoice_sse": True, "observations": results}
             finally:
