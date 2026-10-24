@@ -1,5 +1,5 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='member-introductions.css') }}">
-<section class="panel introductions" id="member-introductions" data-list="{{ '1' if intro_listing else '0' }}" aria-labelledby="introductions-title">
+<section class="{{ 'ux-account-subsection' if intro_embedded else 'panel' }} introductions" id="member-introductions" data-list="{{ '1' if intro_listing else '0' }}" aria-labelledby="introductions-title">
   <header><h2 id="introductions-title">成员简介</h2><button class="btn" id="intro-edit" type="button">编辑我的简介</button></header>
   <p>分享专长和 GitHub 个人主页；仅登录成员可见。</p>
   <p id="intro-status" role="status" aria-live="polite"></p>

@@ -104,14 +104,15 @@ tbody tr:hover td {background:#f8faff;}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important;}}
 
 /* Account */
-.ux-account-grid{display:grid;grid-template-columns:minmax(260px,.75fr) minmax(0,1.25fr);grid-template-areas:"profile email" "appearance editor" ". password";gap:24px;align-items:stretch;}
+.ux-account-grid{display:grid;grid-template-columns:minmax(260px,.75fr) minmax(0,1.25fr);grid-template-areas:"profile editor" "appearance email";gap:24px;align-items:stretch;}
 .ux-account-grid>.panel{min-width:0;margin:0;}
 .ux-account-grid>.ux-account-profile{grid-area:profile;min-height:512px;}
 .ux-account-grid>.ux-account-email{grid-area:email;min-height:512px;}
 .ux-account-grid>.ux-account-appearance{grid-area:appearance;}
 .ux-account-grid>.ux-account-editor{grid-area:editor;}
-.ux-account-grid>.ux-account-password{grid-area:password;}
-.ux-account-password-required{grid-template-areas:"profile password" "appearance .";}
+.ux-account-subsection{margin-top:24px;padding-top:24px;border-top:1px solid var(--ux-border);}
+.ux-account-profile>.introductions{margin-top:12px;}
+.ux-account-password-required{grid-template-areas:"profile editor" "appearance .";}
 .ux-account-profile{display:flex;flex-direction:column;gap:12px;}
 .ux-account-avatar{display:grid;place-items:center;width:66px;height:66px;border-radius:19px;
   background:linear-gradient(145deg,#3769d9,#13a5a3);color:#fff;font-size:30px;font-weight:750;
