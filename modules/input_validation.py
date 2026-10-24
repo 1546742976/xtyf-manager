@@ -1,6 +1,11 @@
 """Small shared input bounds; reject invalid input instead of truncating it."""
 
 
+def valid_password(value):
+    """Keep password characters intact; all credential writers share these bounds."""
+    return isinstance(value, str) and 8 <= len(value) <= 1024
+
+
 def clean_text(value, label, max_len, required=True, allow_newlines=True):
     if value is None and not required:
         value = ''

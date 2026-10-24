@@ -47,9 +47,9 @@
       <h2 id="account-password-title">修改登录密码</h2>
       <p class="ux-note">请输入原密码验证身份。建议使用与其他网站不同的高强度密码。</p>
       <form id="account-password-form" class="ux-account-form" data-required-change="{{ '1' if me.must_change_password else '0' }}">
-        <label>当前密码<input type="password" name="old" required autocomplete="current-password"></label>
-        <label>新密码<input type="password" name="new" minlength="8" required autocomplete="new-password"></label>
-        <label>确认新密码<input type="password" name="confirm" minlength="8" required autocomplete="new-password"></label>
+        <label>当前密码<input type="password" name="old" maxlength="1024" required autocomplete="current-password"></label>
+        <label>新密码<input type="password" name="new" minlength="8" maxlength="1024" required autocomplete="new-password"></label>
+        <label>确认新密码<input type="password" name="confirm" minlength="8" maxlength="1024" required autocomplete="new-password"></label>
         <button class="btn primary" type="submit">保存新密码</button>
         <p class="ux-account-result" id="account-result" role="status" aria-live="polite"></p>
       </form>

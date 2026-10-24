@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import secrets
-from modules.input_validation import clean_text
+from modules.input_validation import clean_text, valid_password
 import sqlite3
 
 from flask import Blueprint, Response, jsonify, request
@@ -272,10 +272,10 @@ def member_create():
         username = clean_text(data.get('username') or name, '用户名', 64, allow_newlines=False)
     except ValueError as exc:
         return jsonify(ok=False, error=str(exc)), 400
-    password = str(data.get("password") or "") or secrets.token_urlsafe(10)
-    generated = not bool(data.get("password"))
-    if not name or len(password) < 8:
-        return jsonify(ok=False, error="姓名不能为空且初始密码至少 8 位"), 400
+    generated = data.get("password") in (None, "")
+    password = secrets.token_urlsafe(10) if generated else data["password"]
+    if not valid_password(password):
+        return jsonify(ok=False, error="初始密码必须为 8 至 1024 位文字"), 400
     role = str(data.get("role") or "member")
     user = current_user()
     if user["role"] != "admin" or role not in ("admin", "manager", "member"):

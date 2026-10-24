@@ -260,6 +260,11 @@ def validate_expense_fields(data):
 # ---- 模块守卫：资金模块整体仅 admin/manager 可访问（API 返回 JSON 错误码）----
 @funds_bp.before_request
 def _funds_guard():
+    if 'rid' in (request.view_args or {}):
+        try:
+            parse_id(request.view_args['rid'], '记录 ID', False)
+        except InvalidIdError as exc:
+            return jsonify(code=1, msg=str(exc)), 400
     user = current_user()
     if user is None:
         if "/api/" in request.path:

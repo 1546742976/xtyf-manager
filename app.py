@@ -32,6 +32,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
                     manager_required, error_response, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
 from modules.funds import funds_bp, can_review
+from modules.input_validation import valid_password
+from modules.task_validation import InvalidIdError, parse_id
 from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
 from modules.invoice_jobs import migrate as migrate_invoice_jobs
 from modules.discussions import discussions_bp
@@ -127,6 +129,11 @@ configure_mail(app)
 
 @app.before_request
 def request_body_limit():
+    if 'member_id' in (request.view_args or {}):
+        try:
+            parse_id(request.view_args['member_id'], '成员 ID', False)
+        except InvalidIdError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
     # Run before CSRF/audit hooks: both may parse form or JSON bodies.
     if request.method in {'GET', 'HEAD', 'OPTIONS'}:
         return None
@@ -435,7 +442,7 @@ def login():
 def authenticate_login(data):
     """One credential/rate-limit/session path for the website and native apps."""
     username = data.get("username") or ""
-    password = data.get("password") or ""
+    password = data.get("password", "")
     if (not isinstance(username, str) or not isinstance(password, str)
             or len(username) > 64 or len(password) > 1024):
         return jsonify(ok=False, error="用户名或密码格式不正确", reason="invalid_payload"), 400
@@ -450,7 +457,7 @@ def authenticate_login(data):
     row = db.execute(
         "SELECT * FROM members WHERE username = ? AND is_active = 1 AND deleted_at IS NULL", (username,)
     ).fetchone()
-    if row is None or not check_password_hash(row["password_hash"], password):
+    if not valid_password(password) or row is None or not check_password_hash(row["password_hash"], password):
         locked = _failed_login(db, keys, now)
         if locked:
             return _retry_login(locked)
@@ -546,7 +553,7 @@ def export_members_csv():
 def api_member_reset(member_id):
     user = current_user()
     db = get_db()
-    row = db.execute("SELECT id, role, deleted_at FROM members WHERE id = ?", (member_id,)).fetchone()
+    row = db.execute("SELECT id, role, deleted_at, is_active, session_version FROM members WHERE id = ?", (member_id,)).fetchone()
     if row is None:
         return jsonify(ok=False, error="成员不存在"), 404
     if row["deleted_at"] is not None:
@@ -556,13 +563,32 @@ def api_member_reset(member_id):
     if user["role"] != "admin" and row["role"] != "member":
         return jsonify(ok=False, error="无权限"), 403
     data = request.get_json(silent=True) or {}
-    generated_password = not bool(data.get("password"))
-    password = data.get("password") or secrets.token_urlsafe(10)
-    if not isinstance(password, str) or not 8 <= len(password) <= 1024:
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error="请求必须为 JSON 对象"), 400
+    generated_password = data.get("password") in (None, "")
+    password = secrets.token_urlsafe(10) if generated_password else data['password']
+    if not valid_password(password):
         return jsonify(ok=False, error="密码必须为 8 至 1024 位"), 400
-    db.execute("UPDATE members SET password_hash = ?, must_change_password=1, session_version = session_version + 1 WHERE id = ?",
-               (generate_password_hash(password), member_id))
-    db.commit()
+    password_hash = generate_password_hash(password)
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        actor = current_user()
+        if actor is None or actor['must_change_password']:
+            db.rollback()
+            return jsonify(ok=False, error="登录状态已变化，请重新登录"), 401
+        target = db.execute('SELECT role,deleted_at,is_active,session_version FROM members WHERE id=?', (member_id,)).fetchone()
+        if actor['role'] not in ('admin', 'manager') or (actor['role'] != 'admin' and target and target['role'] != 'member'):
+            db.rollback()
+            return jsonify(ok=False, error="权限已变化，不能重置此账号"), 403
+        if target is None or any(target[key] != row[key] for key in ('role', 'deleted_at', 'is_active', 'session_version')):
+            db.rollback()
+            return jsonify(ok=False, error="账号状态已变化，请重新核对后操作"), 409
+        db.execute("UPDATE members SET password_hash = ?, must_change_password=1, session_version = session_version + 1 WHERE id = ?",
+                   (password_hash, member_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return jsonify(ok=True, initial_password=password if generated_password else None)
 
 
@@ -575,8 +601,8 @@ def api_member_role(member_id):
     if member_id == user["id"]:
         return jsonify(ok=False, error="不能修改自己的角色"), 400
     data = request.get_json(silent=True) or {}
-    role = data.get("role")
-    if role not in ROLE_NAMES:
+    role = data.get("role") if isinstance(data, dict) else None
+    if not isinstance(role, str) or role not in ROLE_NAMES:
         return jsonify(ok=False, error="角色不合法"), 400
     db = get_db()
     row = db.execute("SELECT id, deleted_at FROM members WHERE id = ?", (member_id,)).fetchone()
@@ -617,7 +643,7 @@ def api_password():
     data = request.get_json(silent=True) or {}
     old_password = data.get("old") or ""
     new_password = data.get("new") or ""
-    if not isinstance(old_password, str) or not isinstance(new_password, str) or not 8 <= len(new_password) <= 1024:
+    if not isinstance(old_password, str) or len(old_password) > 1024 or not valid_password(new_password):
         return jsonify(ok=False, error="新密码必须为 8 至 1024 位"), 400
     db = get_db()
     row = db.execute("SELECT password_hash FROM members WHERE id = ?", (user["id"],)).fetchone()
