@@ -44,7 +44,7 @@ class FrontendTests(unittest.TestCase):
             for dark in (False,True):
                 for forced in (False,True):
                     user={'id':42,'name':'王<&"同学','username':'tester','role':role,'group_name':'电控','must_change_password':forced,'ui_theme':'dark' if dark else 'light','theme_mode':'system','light_theme':'paw','dark_theme':'xueli'}
-                    context={'me':user,'role_names':{'admin':'管理员','manager':'项管','member':'成员'},'statuses':['未开始','进行中','已完成'],'priorities':['高','中','低'],'can_review_funds':role=='admin' and not forced,'can_review':role=='admin' and not forced,'is_finance':role=='admin' and not forced,'can_manage_invoices':role=='admin' and not forced,'page':'tasks','task_type':'daily' if dark else 'vehicle','project_id':'12' if dark else ''}
+                    context={'me':user,'role_names':{'admin':'超级管理员','manager':'项管','member':'成员'},'statuses':['未开始','进行中','已完成'],'priorities':['高','中','低'],'can_review_funds':role=='admin' and not forced,'can_review':role=='admin' and not forced,'is_finance':role=='admin' and not forced,'can_manage_invoices':role=='admin' and not forced,'page':'tasks','task_type':'daily' if dark else 'vehicle','project_id':'12' if dark else ''}
                     for name in self.templates:
                         fixtures.append({'name':name,'context':context,'expected':env.get_template(name).render(**context)})
         context={'me':None,'page':'login','role_names':{}}

@@ -126,8 +126,7 @@ def run():
             page.evaluate("XTYF.navigate('/discussions/')")
             frame.locator('#intro-edit').click()
             frame.locator('#intro-form [name=bio]').fill('合成客户端简介')
-            frame.locator('#intro-add-repository').click()
-            frame.locator('[name=repository_url]').fill('https://github.com/example/client-project')
+            frame.locator('#intro-form [name=github_url]').fill('www.github.com/example-client')
             frame.locator('#intro-save').click()
             frame.locator('#intro-save-result').filter(has_text='简介已保存').wait_for()
             frame.locator('#intro-close').click()
@@ -135,6 +134,7 @@ def run():
             frame.locator('#intro-edit').click()
             frame.locator('#intro-dialog[open]').wait_for()
             assert frame.locator('#intro-form [name=bio]').input_value()=='合成客户端简介'
+            assert frame.locator('#intro-form [name=github_url]').input_value()=='www.github.com/example-client'
             frame.locator('#intro-close').click()
             results.append('shared introduction editor persists through authenticated native transport')
             page.evaluate("XTYF.navigate('/account/email/verify#token=test')")

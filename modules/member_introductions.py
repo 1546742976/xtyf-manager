@@ -21,6 +21,8 @@ def migrate(db):
             version INTEGER NOT NULL DEFAULT 0, hidden INTEGER NOT NULL DEFAULT 0,
             moderation_reason TEXT NOT NULL DEFAULT '', moderated_by INTEGER REFERENCES members(id),
             moderated_at TEXT, updated_at TEXT NOT NULL)''')
+        if 'github_url' not in {row[1] for row in db.execute('PRAGMA table_info(member_introductions)')}:
+            db.execute('ALTER TABLE member_introductions ADD COLUMN github_url TEXT')
 
 
 def manager():
@@ -63,18 +65,45 @@ def repositories(value):
     return result
 
 
+GITHUB_RESERVED = frozenset(('about', 'account', 'apps', 'business', 'codespaces', 'collections',
+    'contact', 'copilot', 'customer-stories', 'dashboard', 'enterprise', 'events', 'explore',
+    'features', 'issues', 'join', 'login', 'logout', 'marketplace', 'new', 'notifications',
+    'organizations', 'orgs', 'password_reset', 'pricing', 'pulls', 'readme', 'search',
+    'security', 'sessions', 'settings', 'site', 'sponsors', 'topics', 'trending', 'users'))
+
+
+def github_homepage(value):
+    if value is None:
+        return None
+    raw = text(value, 500, 'GitHub 个人主页')
+    if not raw:
+        return None
+    if any(ord(c) < 33 for c in raw):
+        raise ValueError('个人主页地址不能包含空白或控制字符')
+    if raw.lower().startswith(('github.com/', 'www.github.com/')):
+        raw = 'https://' + raw
+    parsed = urlsplit(raw)
+    if (parsed.scheme not in ('http', 'https') or parsed.netloc.lower() not in ('github.com', 'www.github.com')
+            or '?' in raw or '#' in raw):
+        raise ValueError('请填写不含凭据或参数的 GitHub 个人主页')
+    match = re.fullmatch(r'/([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)/?', parsed.path)
+    if not match or '--' in match[1] or match[1].lower() in GITHUB_RESERVED:
+        raise ValueError('请填写 www.github.com/用户名 格式的个人主页，不是仓库地址')
+    return 'https://github.com/' + match[1]
+
+
 SELECT = '''SELECT m.id AS member_id,m.name,m.avatar_key,
     COALESCE((SELECT group_concat(g.name,'、') FROM member_groups mg JOIN groups g ON g.id=mg.group_id WHERE mg.member_id=m.id),m.group_name,'') AS groups,
-    COALESCE(p.bio,'') AS bio,COALESCE(p.repositories,'[]') AS repositories,
+    COALESCE(p.bio,'') AS bio,COALESCE(p.repositories,'[]') AS repositories,p.github_url,
     COALESCE(p.version,0) AS version,COALESCE(p.hidden,0) AS hidden,
     COALESCE(p.moderation_reason,'') AS moderation_reason,p.moderated_by
     FROM members m LEFT JOIN member_introductions p ON p.member_id=m.id
     WHERE m.is_active=1 AND m.deleted_at IS NULL'''
 
 
-def projection(row, private=False):
-    data = {key: row[key] for key in ('member_id', 'name', 'groups', 'bio', 'version')}
-    data.update(repositories=json.loads(row['repositories']), hidden=bool(row['hidden']),
+def projection(row, private=False, include_legacy=False):
+    data = {key: row[key] for key in ('member_id', 'name', 'groups', 'bio', 'version', 'github_url')}
+    data.update(repositories=json.loads(row['repositories']) if include_legacy else [], hidden=bool(row['hidden']),
                 avatar_url=f'/api/collaboration/profiles/{row["member_id"]}/avatar' if row['avatar_key'] else None)
     if private:
         data.update(moderation_reason=row['moderation_reason'], moderated_by=row['moderated_by'])
@@ -82,12 +111,13 @@ def projection(row, private=False):
 
 
 def own(db):
-    return projection(db.execute(SELECT + ' AND m.id=?', (current_user()['id'],)).fetchone(), True)
+    return projection(db.execute(SELECT + ' AND m.id=?', (current_user()['id'],)).fetchone(), True, True)
 
 
 def body_with_version(fields):
     body = request.get_json(silent=True)
-    if not isinstance(body, dict) or set(body) != fields:
+    allowed = fields if isinstance(fields, tuple) else (fields,)
+    if not isinstance(body, dict) or set(body) not in allowed:
         raise ValueError('提交字段不正确')
     if type(body['version']) is not int or not 0 <= body['version'] < 2**63-1:
         raise ValueError('请读取有效的资料版本后再保存')
@@ -101,9 +131,11 @@ def account():
     if request.method == 'GET':
         return jsonify(ok=True, profile=own(db))
     try:
-        body = body_with_version({'version', 'bio', 'repositories'})
+        body = body_with_version(({'version', 'bio', 'repositories'}, {'version', 'bio', 'github_url'}))
         bio = text(body['bio'], 1000, '个人简介')
-        repos = repositories(body['repositories'])
+        legacy = 'repositories' in body
+        repos = repositories(body['repositories']) if legacy else None
+        homepage = github_homepage(body['github_url']) if not legacy else None
     except ValueError as exc:
         return jsonify(ok=False, error=str(exc)), 400
     db.execute('BEGIN IMMEDIATE')
@@ -111,10 +143,12 @@ def account():
     if prior['version'] != body['version']:
         db.rollback()
         return jsonify(ok=False, error='资料或隐藏状态已变化，草稿已保留；请重新核对最新资料'), 409
-    db.execute('''INSERT INTO member_introductions(member_id,bio,repositories,version,updated_at) VALUES(?,?,?,1,?)
-        ON CONFLICT(member_id) DO UPDATE SET bio=excluded.bio,repositories=excluded.repositories,
+    repos = repos if legacy else prior['repositories']
+    homepage = prior['github_url'] if legacy else homepage
+    db.execute('''INSERT INTO member_introductions(member_id,bio,repositories,github_url,version,updated_at) VALUES(?,?,?,?,1,?)
+        ON CONFLICT(member_id) DO UPDATE SET bio=excluded.bio,repositories=excluded.repositories,github_url=excluded.github_url,
         version=member_introductions.version+1,updated_at=excluded.updated_at''',
-        (current_user()['id'], bio, json.dumps(repos, ensure_ascii=False), now_str()))
+        (current_user()['id'], bio, json.dumps(repos, ensure_ascii=False), homepage, now_str()))
     db.commit()
     return jsonify(ok=True, profile=own(db))
 
@@ -131,7 +165,7 @@ def profiles():
     except ValueError as exc:
         return jsonify(ok=False, error=str(exc)), 400
     include_hidden = request.args.get('include_hidden') == '1' and manager()
-    sql = SELECT + " AND (COALESCE(p.bio,'')<>'' OR COALESCE(p.repositories,'[]')<>'[]'"
+    sql = SELECT + " AND (COALESCE(p.bio,'')<>'' OR COALESCE(p.github_url,'')<>''"
     sql += ' OR p.hidden=1)' if include_hidden else ')'
     if not include_hidden:
         sql += ' AND COALESCE(p.hidden,0)=0'

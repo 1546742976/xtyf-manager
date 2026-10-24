@@ -1,7 +1,7 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='member-introductions.css') }}">
 <section class="panel introductions" id="member-introductions" data-list="{{ '1' if intro_listing else '0' }}" aria-labelledby="introductions-title">
   <header><h2 id="introductions-title">成员简介</h2><button class="btn" id="intro-edit" type="button">编辑我的简介</button></header>
-  <p>分享专长和项目仓库；仅登录成员可见。</p>
+  <p>分享专长和 GitHub 个人主页；仅登录成员可见。</p>
   <p id="intro-status" role="status" aria-live="polite"></p>
   {% if intro_listing %}
   <form id="intro-search"><label>姓名或组别<input name="q" type="search" maxlength="100"></label><button class="btn" type="submit">搜索成员</button><label id="intro-hidden-filter" hidden><input name="include_hidden" type="checkbox"> 包含已隐藏资料</label></form>
@@ -13,8 +13,9 @@
   <form id="intro-form"><header><h2 id="intro-dialog-title">编辑我的简介</h2><button type="button" class="btn" id="intro-close" aria-label="关闭简介编辑">关闭</button></header>
     <p id="intro-moderation-state" role="status"></p>
     <label>个人简介（选填，最多 1000 字）<textarea name="bio" rows="6" maxlength="1000"></textarea></label>
-    <h3>GitHub 仓库（选填，最多 10 个）</h3><div id="intro-repositories"></div>
-    <button type="button" class="btn" id="intro-add-repository">添加仓库</button>
+    <label>GitHub 个人主页（选填）<input name="github_url" type="text" inputmode="url" autocomplete="url" maxlength="500" placeholder="www.github.com/用户名"></label>
+    <p class="ux-note">填写个人主页，不是具体仓库地址。系统不验证账号归属，也不会读取 GitHub 内容。</p>
+    <details id="intro-legacy" hidden><summary>查看原仓库资料</summary><p>旧仓库资料已保留，请自行确认并填写个人主页；不会自动转换。</p><pre id="intro-legacy-content"></pre></details>
     <p id="intro-save-result" role="status" aria-live="polite"></p>
     <div id="intro-conflict" hidden><button type="button" class="btn" id="intro-check-latest">查看最新资料，保留当前草稿</button><pre id="intro-latest"></pre><button type="button" class="btn" id="intro-accept-version" hidden>已核对，使用最新版本继续保存</button></div>
     <button type="submit" class="btn primary" id="intro-save">保存简介</button>
