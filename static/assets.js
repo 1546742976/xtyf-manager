@@ -246,7 +246,7 @@
       }
       $('asset-campuses').hidden=!c.can_manage;
       $('asset-categories').hidden=!c.can_manage;
-      if(!c.can_manage||!c.intake_enabled)organizing=false;
+      if(itemId||mine)organizing=false;
       filter.hidden=!!itemId||mine;
       const campus=filter.elements.campus_id.value;
       filter.elements.campus_id.innerHTML=options(c.campuses,campus,'全部校区');
@@ -386,23 +386,36 @@
     showDialog($('asset-directory-dialog'));
   }
   function updateCategorySelection(){
-    const host=$('asset-category-organizer');if(!host)return;
+    const host=$('asset-category-organizer'),toggle=$('asset-bulk-toggle');
+    const canAssign=!!catalog?.can_manage&&!!catalog?.intake_enabled;
+    if(toggle){
+      toggle.hidden=!!itemId||mine||(!window.AssetLabels&&!canAssign);
+      toggle.textContent=organizing?'退出多选':`批量操作${categorySelection.size?`（已选 ${categorySelection.size}）`:''}`;
+      toggle.setAttribute('aria-pressed',String(organizing));
+    }
+    if(!host)return;
     host.hidden=!organizing||!!itemId||mine;
-    if(host.hidden)return;
     const values=[...categorySelection.values()],outside=values.filter(v=>!listing.some(i=>i.id===v.id)).length;
-    $('asset-category-selection').textContent=`已选 ${values.length} / 100 种物料${outside?` · ${outside} 种不在当前页`:''}。翻页、搜索、切换筛选后保留选择；只修改已选型号。`;
+    $('asset-category-selection').textContent=`已选 ${values.length} / 100 种物料${outside?` · ${outside} 种不在当前页`:''}。翻页、搜索、切换筛选后保留选择；打印只生成所选型号标签，不改变库存。`;
     $('asset-category-selected-list').innerHTML=values.map(v=>`<li><span>${esc(v.name)} · ${esc(v.specification)||'无规格'} · M:${v.id}</span>${button('category-remove','取消选择',v.id,`aria-label="取消选择 M:${v.id}"`)}</li>`).join('');
+    const print=host.querySelector('[data-action="bulk-print-labels"]');
+    if(print){print.hidden=!window.AssetLabels;print.disabled=!values.length;}
+    const assign=host.querySelector('[data-action="category-assign"]');
+    if(assign){assign.hidden=!canAssign;assign.disabled=!values.length;}
+    const clear=host.querySelector('[data-action="category-clear"]');
+    if(clear)clear.disabled=!values.length;
+    const page=host.querySelector('[data-action="category-select-page"]');
+    if(page)page.disabled=!listing.length;
     for(const checkbox of document.querySelectorAll('[data-category-item]'))checkbox.checked=categorySelection.has(Number(checkbox.dataset.categoryItem));
-    for(const control of host.querySelectorAll('[data-action]'))if(['category-clear','category-assign'].includes(control.dataset.action))control.disabled=!values.length;else if(control.dataset.action==='category-select-page')control.disabled=!listing.length;
   }
   function selectCategoryItem(item){
     if(categorySelection.has(item.id))return;
     if(categorySelection.size>=100)throw Error('每批最多选择 100 种物料，请先保存或取消已有选择');
-    categorySelection.set(item.id,{id:item.id,version:item.version,name:item.name,specification:item.specification});
+    categorySelection.set(item.id,{...item});
   }
   async function categoryAction(action,id){
-    if(!catalog.can_manage||!catalog.intake_enabled)throw Error('当前账号或服务器暂不支持整理类别');
     if(action==='category-organize'){
+      if(!catalog.can_manage||!catalog.intake_enabled)throw Error('当前账号或服务器暂不支持整理类别');
       organizing=true;$('asset-directory-dialog').close();await load();
       $('asset-category-organizer').scrollIntoView({block:'nearest',behavior:'smooth'});return;
     }
@@ -414,6 +427,7 @@
       listing.forEach(selectCategoryItem);updateCategorySelection();return;
     }
     if(action==='category-assign'){
+      if(!catalog.can_manage||!catalog.intake_enabled)throw Error('当前账号或服务器暂不支持整理类别');
       if(!categorySelection.size)throw Error('请先勾选需要整理的物料');
       const values=[...categorySelection.values()],categories=catalog.categories.filter(c=>c.active);
       open('设置物料类别',`<div class="asset-operation-summary"><strong>本次共 ${values.length} 种物料</strong><p>包括已选清单中不在当前页的物料。同型号的全部实物沿用类别。</p></div><label>目标类别<select name="category_id">${options(categories,'','未分类')}</select></label><p id="asset-category-confirmation" class="asset-operation-summary" aria-live="polite"></p>`,'categories/assign',{},[],data=>{
@@ -426,6 +440,17 @@
     }
   }
   async function act(action,id,campusId){
+    if(action==='bulk-toggle'){
+      if(itemId||mine)return;
+      organizing=!organizing;await load();
+      if(organizing)$('asset-category-organizer').scrollIntoView({block:'nearest',behavior:'smooth'});
+      return;
+    }
+    if(action==='bulk-print-labels'){
+      if(!window.AssetLabels)throw Error('当前客户端暂不支持标签打印');
+      if(!categorySelection.size)throw Error('请先勾选需要打印的物料');
+      return window.AssetLabels.open([...categorySelection.values()]);
+    }
     if(action.startsWith('category-'))return categoryAction(action,id);
     if(action==='new-campus'||action==='edit-campus'){catalogEditor('campuses',catalog.campuses.find(c=>c.id===id)||{});return;}
     if(action==='new-category'||action==='edit-category'){catalogEditor('categories',catalog.categories.find(c=>c.id===id)||{});return;}
@@ -688,5 +713,6 @@
     if(e.target.name==='campus_id'||e.target.name==='category'){listPage=1;load();}
   });
   window.AssetLedger={api,load,open,showDialog,input,reason,options,esc,campusFields,scanQuantity,renderPager:pager,registerPager,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
+  window.addEventListener('load',updateCategorySelection,{once:true});
   load();
 })();

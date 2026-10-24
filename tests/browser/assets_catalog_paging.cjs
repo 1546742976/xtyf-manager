@@ -32,6 +32,59 @@ async function main(){
     await nav.locator('[data-asset-page-size]').selectOption('100');await ready(ui);assert.equal(await ui.locator('[data-category-item]').count(),25);
     await nav.locator('[data-asset-page-size]').selectOption('20');await ready(ui);
   }
+  let labelResponse=null,saveResolve=null;
+  function captureLabels(){
+    page.on('response',response=>{
+      if(new URL(response.url()).pathname==='/api/assets/labels.pdf')labelResponse={url:response.url(),body:response.body()};
+    });
+  }
+  async function checkPrint(ui,selected){
+    labelResponse=null;
+    await ui.locator('[data-action=bulk-print-labels]').click();
+    await ui.locator('#asset-label-download').waitFor({state:'visible'});
+    await ui.locator('#asset-label-summary').filter({hasText:`本次打印 ${selected.length} 张标签`}).waitFor();
+    assert(labelResponse,'PDF generated through the website or authenticated native resource channel');
+    const query=new URL(labelResponse.url).searchParams;
+    assert.equal(query.get('kind'),'item');
+    assert.deepEqual(query.get('ids').split(',').map(Number).sort((a,b)=>a-b),[...selected].sort((a,b)=>a-b));
+    let downloaded;
+    if(await ui.locator('#asset-label-download').evaluate(()=>!!window.XTYF)){
+      let timeout;
+      const saved=new Promise((resolve,reject)=>{saveResolve=resolve;timeout=setTimeout(()=>reject(Error('native PDF save timed out')),15000);});
+      try{await ui.locator('#asset-label-download').click();downloaded=Array.from(await saved);}
+      finally{clearTimeout(timeout);saveResolve=null;}
+    }else downloaded=await ui.locator('#asset-label-download').evaluate(async a=>Array.from(new Uint8Array(await(await fetch(a.href)).arrayBuffer())));
+    assert.deepEqual(Buffer.from(downloaded),await labelResponse.body,'download retains the generated preview bytes');
+    const metadata=await ui.locator('#asset-label-download').evaluate(async (_a,downloaded)=>{
+      const pdf=await import('/vendor/pdfjs/pdf.mjs');
+      // Match the product: static CMaps load in the worker, not the native business fetch adapter.
+      const doc=await pdf.getDocument({data:new Uint8Array(downloaded),isEvalSupported:false,useWorkerFetch:true,cMapUrl:new URL('/vendor/pdfjs/cmaps/',window.XTYFLocation?.href||location.href).href,cMapPacked:true}).promise;
+      try{
+        let text='';for(let p=1;p<=doc.numPages;p++)text+=(await(await doc.getPage(p)).getTextContent()).items.map(i=>i.str).join(' ');
+        return {pages:doc.numPages,text};
+      }finally{await doc.destroy();}
+    },downloaded);
+    for(const id of selected)assert(metadata.text.includes('M:'+id),'PDF includes selected identity '+id);
+    assert(metadata.text.includes('分页合成'),'Chinese item text remains in PDF');
+    if(query.get('paper')==='thermal')assert.equal(metadata.pages,selected.length,'labels after the twelfth remain previewable');
+    if(metadata.pages>1){await ui.locator('#asset-label-next').click();await ui.locator('#asset-label-page').filter({hasText:`第 2 / ${metadata.pages} 页`}).waitFor();}
+    assert.equal(await ui.locator('#asset-label-preview canvas').count(),1,'only the current actual PDF page is rendered');
+    await ui.locator('#asset-label-close').click();
+  }
+  async function checkBulkPdf(ui,label){
+    await ui.locator('#asset-filter [name=category]').selectOption('');await ready(ui);
+    await query(ui,'分页合成');
+    if(!await ui.locator('#asset-category-organizer').isVisible())await ui.locator('#asset-bulk-toggle').click();
+    await ready(ui);if(await ui.locator('[data-action=category-clear]').isEnabled())await ui.locator('[data-action=category-clear]').click();
+    await ui.locator('[data-action=category-select-page]').click();await jump(ui,2);
+    await ui.locator('[data-action=category-select-page]').click();
+    await ui.locator('#asset-category-selection').filter({hasText:'已选 25 / 100'}).waitFor();
+    await ui.locator('#asset-label-form').evaluate(f=>{f.elements.paper.value='thermal';});
+    await checkPrint(ui,ids);
+    await ui.locator('[data-action=category-clear]').click();
+    await ui.locator('[data-action=category-organize-close]').click();await ready(ui);
+    passed.push(label+': cross-page 25-label PDF, complete identities and authenticated preview/download bytes');
+  }
   async function checkCategories(ui,label){
     await query(ui,'分页合成');await organize(ui);await checkPager(ui);
     await ui.locator('[data-category-item="'+ids[0]+'"]').check();
@@ -39,6 +92,14 @@ async function main(){
     await ui.locator('#asset-category-selection').filter({hasText:'已选 2 / 100'}).waitFor();
     await query(ui,'分页合成 03');await ui.locator('[data-category-item="'+ids[2]+'"]').check();
     await ui.locator('#asset-category-selection').filter({hasText:'2 种不在当前页'}).waitFor();
+    await ui.locator('#asset-bulk-toggle').click();
+    await ui.locator('#asset-category-organizer').waitFor({state:'hidden'});await ready(ui);
+    await ui.locator('#asset-bulk-toggle').filter({hasText:'已选 3'}).waitFor();
+    await ui.locator('#asset-bulk-toggle').click();
+    await ui.locator('#asset-category-organizer').waitFor({state:'visible'});await ready(ui);
+    assert.equal(await ui.locator('#asset-category-selected-list li').count(),3,'selection survives leaving and re-entering bulk mode');
+    await checkPrint(ui,[ids[0],ids[2],ids[24]]);
+    await ui.locator('#asset-category-organizer').waitFor({state:'visible'});
     await ui.locator('#asset-category-organizer').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,label+'-categories.png')});
     await ui.locator('[data-action=category-assign]').click();await ui.locator('#asset-form [name=category_id]').selectOption(String(category));
     await ui.locator('#asset-category-confirmation').filter({hasText:'3 种物料设置为“合成整理类别”'}).waitFor();
@@ -84,7 +145,7 @@ async function main(){
   const engines=[['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]];
   for(const [label,engine,options] of engines){
     engineName=label;browser=await engine.launch();const context=await browser.newContext({...options,storageState:await api.storageState()});page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
-    await page.goto(base+'/assets');await ready(page);await checkCategories(page,label);
+    captureLabels();await page.goto(base+'/assets');await ready(page);await checkCategories(page,label);await checkBulkPdf(page,label);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'inventory and pager stay inside viewport');
     await page.locator('[data-asset-pager=items]').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,label+'.png')});
     // Isolate duplicate creation from the 25-row pagination fixture.
@@ -95,15 +156,32 @@ async function main(){
     const originals=records.filter(v=>ids.includes(v.id));await post('/api/assets/categories/assign',{request_id:crypto.randomUUID(),items:originals.map(v=>({id:v.id,version:v.version})),category_id:null,category_version:null});
   }
   const dist=path.join(output,'ui');execFileSync(python,['-B','clients/build_frontend.py','--output-dir',dist],{cwd:root});
-  uiServer=http.createServer((req,res)=>{const file=path.resolve(dist,'.'+new URL(req.url,'http://local').pathname.replace(/\/$/,'/index.html'));if(!file.startsWith(dist+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404).end();return;}res.setHeader('Content-Type',({'.html':'text/html','.js':'application/javascript','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'})[path.extname(file)]||'application/octet-stream');fs.createReadStream(file).pipe(res);});
+  uiServer=http.createServer((req,res)=>{const file=path.resolve(dist,'.'+new URL(req.url,'http://local').pathname.replace(/\/$/,'/index.html'));if(!file.startsWith(dist+path.sep)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404).end();return;}res.setHeader('Content-Type',({'.html':'text/html','.js':'application/javascript','.mjs':'application/javascript','.wasm':'application/wasm','.css':'text/css','.json':'application/json','.svg':'image/svg+xml'})[path.extname(file)]||'application/octet-stream');fs.createReadStream(file).pipe(res);});
   await new Promise(resolve=>uiServer.listen(0,'127.0.0.1',resolve));
   for(const [label,engine,options] of engines){
     engineName=label+'-local';browser=await engine.launch();page=await browser.newPage(options);page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));const remote=[];
     page.on('request',r=>{if(r.url().startsWith(base))remote.push(r.url());});
-    await page.exposeFunction('__catalogNative',async(action,args)=>{if(action==='get_config')return {serverUrl:base,version:'test',capabilities:[]};if(['cancel','ui_ready'].includes(action))return {};if(!['request','read_resource'].includes(action))throw Error('unexpected native action '+action);const r=await api.fetch(args.path,{method:args.method||'GET',headers:{...args.headers,'X-XTYF-Client-Protocol':'1','X-CSRF-Token':csrf},...(args.body!==undefined?{data:args.body}:{})});const headers=r.headers();csrf=headers['x-csrf-token']||csrf;return {status:r.status(),headers,body:await r.text(),encoding:'text'};});
+    await page.exposeFunction('__catalogNative',async(action,args)=>{
+      if(action==='get_config')return {serverUrl:base,version:'test',capabilities:['pdf_save']};
+      if(action==='download'){
+        assert.equal(args.filename,'asset-labels.pdf');assert(saveResolve,'expected native PDF save');
+        saveResolve(Buffer.from(args.pdfBody,'base64'));return {cancelled:false};
+      }
+      if(['cancel','ui_ready'].includes(action))return {};
+      if(!['request','read_resource'].includes(action))throw Error('unexpected native action '+action);
+      const r=await api.fetch(args.path,{method:args.method||'GET',headers:{...args.headers,'X-XTYF-Client-Protocol':'1','X-CSRF-Token':csrf},...(args.body!==undefined?{data:args.body}:{})});
+      const headers=r.headers();csrf=headers['x-csrf-token']||csrf;
+      if(action==='read_resource'){
+        const body=await r.body();
+        if(args.path.startsWith('/api/assets/labels.pdf?'))labelResponse={url:new URL(args.path,base).href,body:Promise.resolve(body)};
+        return {status:r.status(),headers,body:body.toString('base64'),encoding:'base64'};
+      }
+      return {status:r.status(),headers,body:await r.text(),encoding:'text'};
+    });
     await page.addInitScript(()=>{if(window===window.top)window.XTYFNative={invoke:(action,args)=>window.__catalogNative(action,args)};});
     await page.goto('http://127.0.0.1:'+uiServer.address().port+'/#/assets');const frame=page.frameLocator('#page-host iframe');await ready(frame);await query(frame,'分页合成');await organize(frame);await checkPager(frame);
     await frame.locator('[data-category-item="'+ids[1]+'"]').check();await frame.locator('[data-action=category-assign]').click();await frame.locator('#asset-form [name=category_id]').selectOption(String(category));await frame.locator('#asset-save').click();await frame.locator('#asset-dialog').waitFor({state:'hidden'});await ready(frame);
+    await checkBulkPdf(frame,label+'-local');
     assert.equal(await frame.locator('html').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);assert.deepEqual(remote,[],'packaged UI uses native API only');
     await page.screenshot({path:path.join(output,label+'-local.png'),fullPage:true});passed.push(label+': packaged shared pager and category write through simulated native IPC');await browser.close();browser=null;
   }

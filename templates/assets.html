@@ -55,11 +55,12 @@
   </div>
   <div id="asset-results-heading" class="asset-results-heading">
     <div><h2>库存清单</h2><p id="asset-result-summary" class="asset-result-summary" aria-live="polite"></p></div>
-    <span class="asset-list-hint">点击名称查看库存与流转记录</span>
+    <div class="asset-results-actions"><span class="asset-list-hint">点击名称查看库存与流转记录</span><button class="btn" id="asset-bulk-toggle" type="button" data-action="bulk-toggle" aria-pressed="false" hidden>批量操作</button></div>
   </div>
-  <section id="asset-category-organizer" class="asset-category-organizer" aria-label="整理库存类别" hidden>
-    <div class="asset-heading"><div><h3>整理库存类别</h3><p id="asset-category-selection" class="asset-muted" aria-live="polite"></p></div><button class="btn" type="button" data-action="category-organize-close">完成整理</button></div>
-    <div class="asset-actions"><button class="btn" type="button" data-action="category-select-page">选择本页</button><button class="btn" type="button" data-action="category-clear">清空选择</button><button class="btn primary" type="button" data-action="category-assign">设置已选物料类别</button></div>
+  <section id="asset-category-organizer" class="asset-category-organizer" aria-label="批量操作" hidden>
+    <div class="asset-heading"><div><h3>批量操作</h3><p id="asset-category-selection" class="asset-muted" aria-live="polite"></p></div><button class="btn" type="button" data-action="category-organize-close">退出多选</button></div>
+    <p class="asset-muted">勾选物料后选择操作；跨页、搜索和筛选会保留已选项。打印标签不会改变库存。</p>
+    <div class="asset-actions"><button class="btn" type="button" data-action="category-select-page">选择本页</button><button class="btn" type="button" data-action="category-clear">清空选择</button><button class="btn" type="button" data-action="bulk-print-labels" hidden>打印选中标签</button><button class="btn primary" type="button" data-action="category-assign" hidden>设置已选物料类别</button></div>
     <details><summary>查看已选物料</summary><ul id="asset-category-selected-list"></ul></details>
   </section>
   <div id="asset-content" aria-busy="true"></div>
