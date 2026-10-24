@@ -11,6 +11,17 @@
   let operation=null, pending=false, opener=null, serverReceivedAt=0;
   const pageSizes={items:20,loans:20,events:20}, pagerHandlers=new Map(),categorySelection=new Map();
   let organizing=false;
+  // Navigation may finish before a catalog response. Stop read chains in the
+  // old document; keep writes and their durable recovery receipts untouched.
+  let pageInactive=false,readController=new AbortController();
+  window.addEventListener('pagehide',()=>{
+    pageInactive=true;generation++;readController.abort();
+  });
+  window.addEventListener('pageshow',event=>{
+    if(event.persisted&&pageInactive){
+      pageInactive=false;readController=new AbortController();load();
+    }
+  });
   // In-flight writes survive dialog closure, page reloads and packaged-view navigation.
   // Namespace by server, then verify the user before ever replaying a saved write.
   const serverScope=window.XTYF?.config?.serverUrl||location.origin;
@@ -91,7 +102,7 @@
   async function api(path, body){
     const response=await fetch('/api/assets/'+path, body?{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
-    }:{});
+    }:{signal:readController.signal});
     let data;
     try{data=await response.json();}catch(_){throw new Error('服务器返回了无法识别的内容');}
     if(!response.ok||data?.ok!==true){
@@ -225,6 +236,7 @@
       <section class="asset-detail-history" data-asset-detail-panel="history" ${detailView==='history'?'':'hidden'}>${renderEvents(e)}</section>`;
   }
   async function load(){
+    if(pageInactive)return false;
     const own=++generation;
     $('asset-content').setAttribute('aria-busy','true');status('正在加载…');
     try{

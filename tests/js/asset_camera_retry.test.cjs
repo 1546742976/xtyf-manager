@@ -1,24 +1,31 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 function fixture(){
-  const listeners={},nodes=new Map();
+  const listeners={},windowListeners={},nodes=new Map();
   const get=id=>{
     if(!nodes.has(id))nodes.set(id,{value:'general',hidden:false,open:true,innerHTML:'',textContent:'',dataset:{},options:[],listeners:{},classList:{add(){},remove(){},toggle(){}},replaceChildren(){this.innerHTML='';},append(){},parentNode:{insertBefore(){}},setAttribute(){},addEventListener(k,f){(this.listeners[k]??=[]).push(f);},focus(){},close(){this.open=false;for(const f of this.listeners.close||[])f();},showModal(){this.open=true;},files:[]});
     return nodes.get(id);
   };
-  let calls=0,decode,vibrations=0,respond=async()=>{throw Error('network unavailable');};
+  let calls=0,decode,vibrations=0,stopped=0,respond=async()=>{throw Error('network unavailable');};
   const context={
     document:{createElement:()=>get('created'),getElementById:get,querySelectorAll:()=>[],addEventListener(k,f){(listeners[k]??=[]).push(f);},dispatchEvent(e){for(const f of listeners[e.type]||[])f(e);}},
-    window:{AssetLedger:{catalog:{can_manage:true,campuses:[]},showDialog(){},esc:String,input(){},reason(){},options(){},api:async(...args)=>{calls++;return respond(...args);}},AssetUnits:{selection:[]},isSecureContext:true,addEventListener(){}},
-    navigator:{vibrate(){vibrations++;},mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){}}]})}},
+    window:{AssetLedger:{catalog:{can_manage:true,campuses:[]},showDialog(){},esc:String,input(){},reason(){},options(){},api:async(...args)=>{calls++;return respond(...args);}},AssetUnits:{selection:[]},isSecureContext:true,addEventListener(k,f){(windowListeners[k]??=[]).push(f);}},
+    navigator:{vibrate(){vibrations++;},mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){stopped++;}}]})}},
     ZXing:{BrowserMultiFormatReader:class{reset(){} async decodeFromStream(s,v,cb){decode=cb;}}},
     CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}},setTimeout(){},clearTimeout(){},
     matchMedia:()=>({matches:false}),Map,console
   };
   vm.createContext(context);
   for(const f of ['static/asset-scan.js','static/asset-camera.js'])vm.runInContext(fs.readFileSync(f,'utf8'),context,{filename:f});
-  return {get,context,set respond(f){respond=f;},get calls(){return calls;},get vibrations(){return vibrations;},frame:()=>decode({getText:()=>'{on:SYNTHETIC,pc:C123,pm:TEST,qty:2}'}),tick:()=>new Promise(r=>setImmediate(r))};
+  return {get,context,set respond(f){respond=f;},get calls(){return calls;},get vibrations(){return vibrations;},get stopped(){return stopped;},emit:name=>{for(const f of windowListeners[name]||[])f();},frame:()=>decode({getText:()=>'{on:SYNTHETIC,pc:C123,pm:TEST,qty:2}'}),tick:()=>new Promise(r=>setImmediate(r))};
 }
+
+test('camera releases tracks when a departing frame no longer exposes scanner globals',async()=>{
+  const f=fixture();await f.get('asset-camera-start').onclick();
+  delete f.context.window.AssetScan;
+  assert.doesNotThrow(()=>f.emit('pagehide'));
+  assert.equal(f.stopped,1);
+});
 test('failed camera label remains retryable without success or frame request storm',async()=>{
   const f=fixture();await f.get('asset-camera-start').onclick();f.frame();await f.tick();
   assert.equal(f.vibrations,0);assert.doesNotMatch(f.get('asset-camera-status').textContent,/已识别/);

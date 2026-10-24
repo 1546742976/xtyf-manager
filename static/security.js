@@ -4,10 +4,18 @@
 (() => {
   let token = document.querySelector('meta[name="csrf-token"]')?.content || "";
   const originalFetch = window.fetch.bind(window);
+  let pageInactive = false;
+  window.addEventListener("pagehide", () => { pageInactive = true; });
+  window.addEventListener("pageshow", () => { pageInactive = false; });
   window.fetch = async (input, options = {}) => {
     const url = new URL(input instanceof Request ? input.url : input, location.href);
     const method = String(options.method || (input instanceof Request ? input.method : "GET")).toUpperCase();
     const sameOrigin = url.origin === location.origin;
+    // Late continuations (e.g. permissions -> audit) must not start a fresh read
+    // from an inactive document. Keep write/recovery and CSRF behavior intact.
+    if (sameOrigin && pageInactive && ["GET", "HEAD"].includes(method)) {
+      throw new DOMException("页面已离开，取消后续读取", "AbortError");
+    }
     if (sameOrigin && !["GET", "HEAD", "OPTIONS"].includes(method)) {
       const headers = new Headers(options.headers || (input instanceof Request ? input.headers : undefined));
       headers.set("X-CSRF-Token", token);

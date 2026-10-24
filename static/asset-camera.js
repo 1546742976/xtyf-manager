@@ -1,7 +1,9 @@
 /* Camera/photo recognition stays on the device. No image is sent to a supplier. */
 (() => {
   'use strict';
-  const $=id=>document.getElementById(id),host=$('asset-scan-camera');
+  // Keep the controller alive through frame teardown so tracks are still freed
+  // when the departing window no longer exposes its scanner global.
+  const $=id=>document.getElementById(id),host=$('asset-scan-camera'),scanner=window.AssetScan;
   let reader=null,stream=null,generation=0,last='',busy=null,failed='',sound=true,audio=null,flashTimer=null;
   host.innerHTML=`<div class="asset-camera-frame" id="asset-camera-frame">
     <video id="asset-camera-video" playsinline muted hidden></video>
@@ -75,7 +77,7 @@
     };
     return messages[error.name]||'无法打开摄像头：'+(error.message||error.name||'未知错误')+'。可以使用下方图片识别。';
   }
-  function stop(){generation++;window.AssetScan.cancel();busy=null;failed='';$('asset-camera-retry').hidden=true;reader?.reset();reader=null;stream?.getTracks().forEach(t=>t.stop());stream=null;$('asset-scan-dialog').classList.remove('asset-scan-camera-active');$('asset-camera-video').hidden=true;$('asset-camera-overlay').hidden=true;$('asset-camera-placeholder').hidden=false;$('asset-camera-stop').disabled=true;$('asset-camera-stop').hidden=true;$('asset-camera-start').hidden=false;}
+  function stop(){generation++;scanner.cancel();busy=null;failed='';$('asset-camera-retry').hidden=true;reader?.reset();reader=null;stream?.getTracks().forEach(t=>t.stop());stream=null;$('asset-scan-dialog').classList.remove('asset-scan-camera-active');$('asset-camera-video').hidden=true;$('asset-camera-overlay').hidden=true;$('asset-camera-placeholder').hidden=false;$('asset-camera-stop').disabled=true;$('asset-camera-stop').hidden=true;$('asset-camera-start').hidden=false;}
   async function found(text,explicit=false){
     if(busy||(!explicit&&last===text))return;
     last=text;$('asset-scan-raw').value=text;const own=generation,token={};busy=token;$('asset-camera-retry').disabled=true;
