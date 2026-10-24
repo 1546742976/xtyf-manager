@@ -1,5 +1,7 @@
 """Assignment delivery through task APIs and the existing mail worker seam."""
 import unittest
+import sqlite3
+from unittest.mock import patch
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -113,3 +115,26 @@ class AssignmentMailTests(unittest.TestCase):
             raise DeliveryError('模拟服务器已接收后断线', 'unknown')
         self.assertEqual(process_job(self.db, job, datetime.now(TZ), uncertain), 'unknown')
         self.assertEqual(self.jobs()[0]['state'], 'unknown')
+
+    def test_enqueue_database_failure_rolls_back_task_and_mail_together(self):
+        from modules.task_assignment_mail import enqueue_assignments
+        def failing_queue(*args, **kwargs):
+            enqueue_assignments(*args, **kwargs)
+            raise sqlite3.OperationalError('synthetic transaction failure')
+        title = 'rollback_' + uuid4().hex
+        with patch('modules.task_mutations.enqueue_assignments', side_effect=failing_queue):
+            response = self.admin.post('/api/task', json={'title': title, 'owner_id': self.mid})
+        self.assertEqual(response.status_code, 500)
+        self.assertIsNone(self.db.execute('SELECT id FROM tasks WHERE title=?', (title,)).fetchone())
+        self.assertEqual(self.jobs(), [])
+
+    def test_finished_tasks_and_inactive_recipients_are_skipped(self):
+        for status in ('已完成', '已取消'):
+            task = self.admin.post('/api/task', json={'title': status, 'owner_id': self.mid}).get_json()
+            self.admin.post('/api/task/' + str(task['id']), json={'version': 1, 'status': status, 'note': '终态原因'})
+            state, messages = self.deliver(self.jobs()[0]['id'])
+            self.assertEqual((state, messages), ('skipped', []))
+        self.admin.post('/api/task', json={'title': '已停用收件人', 'owner_id': self.mid})
+        self.db.execute('UPDATE members SET is_active=0 WHERE id=?', (self.mid,)); self.db.commit()
+        state, messages = self.deliver(self.jobs()[0]['id'])
+        self.assertEqual((state, messages), ('skipped', []))

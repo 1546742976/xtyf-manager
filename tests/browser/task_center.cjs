@@ -238,7 +238,10 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
         await memberPage.locator(`[name=owners-${mechanical}][value="${created.body.id}"]`).check();
         await memberPage.locator('#daily-form [type=submit]').click();
         await memberPage.waitForURL(/project=\d+/);
-        assert.equal(await memberPage.locator('#daily-edit').count(),0);
+        assert.equal(await memberPage.locator('#daily-edit').count(),1);
+        await memberPage.locator('#daily-edit').click();await memberPage.locator('#daily-form [name=title]').waitFor();
+        assert.equal(await memberPage.locator('#daily-form [name=status],#daily-form [name=enabled]').count(),0);
+        await memberPage.keyboard.press('Escape');
         assert.equal((await api(memberPage,'/api/projects',{name:'不可越权'})).status,403);
         checks.push(engine+' ordinary member completes vehicle and daily creation; management remains restricted');
       } finally {await context.close();if(engine==='webkit')await memberBrowser.close();}

@@ -1,0 +1,27 @@
+<link rel="stylesheet" href="{{ url_for('static', filename='member-introductions.css') }}">
+<section class="panel introductions" id="member-introductions" data-list="{{ '1' if intro_listing else '0' }}" aria-labelledby="introductions-title">
+  <header><h2 id="introductions-title">成员简介</h2><button class="btn" id="intro-edit" type="button">编辑我的简介</button></header>
+  <p>分享专长和项目仓库；仅登录成员可见。</p>
+  <p id="intro-status" role="status" aria-live="polite"></p>
+  {% if intro_listing %}
+  <form id="intro-search"><label>姓名或组别<input name="q" type="search" maxlength="100"></label><button class="btn" type="submit">搜索成员</button><label id="intro-hidden-filter" hidden><input name="include_hidden" type="checkbox"> 包含已隐藏资料</label></form>
+  <div class="intro-grid" id="intro-list"></div>
+  <nav aria-label="成员简介分页"><button id="intro-prev" class="btn" type="button" disabled>上一页</button><span id="intro-page"></span><button id="intro-next" class="btn" type="button" disabled>下一页</button><button id="intro-refresh" class="btn" type="button">刷新简介</button></nav>
+  {% endif %}
+</section>
+<dialog id="intro-dialog" class="intro-dialog" aria-labelledby="intro-dialog-title">
+  <form id="intro-form"><header><h2 id="intro-dialog-title">编辑我的简介</h2><button type="button" class="btn" id="intro-close" aria-label="关闭简介编辑">关闭</button></header>
+    <p id="intro-moderation-state" role="status"></p>
+    <label>个人简介（选填，最多 1000 字）<textarea name="bio" rows="6" maxlength="1000"></textarea></label>
+    <h3>GitHub 仓库（选填，最多 10 个）</h3><div id="intro-repositories"></div>
+    <button type="button" class="btn" id="intro-add-repository">添加仓库</button>
+    <p id="intro-save-result" role="status" aria-live="polite"></p>
+    <div id="intro-conflict" hidden><button type="button" class="btn" id="intro-check-latest">查看最新资料，保留当前草稿</button><pre id="intro-latest"></pre><button type="button" class="btn" id="intro-accept-version" hidden>已核对，使用最新版本继续保存</button></div>
+    <button type="submit" class="btn primary" id="intro-save">保存简介</button>
+  </form>
+</dialog>
+<dialog id="intro-moderation-dialog" class="intro-dialog" aria-labelledby="intro-moderation-title"><form id="intro-moderation-form">
+  <header><h2 id="intro-moderation-title">管理简介展示</h2><button class="btn" type="button" id="intro-moderation-close" aria-label="关闭简介管理">关闭</button></header>
+  <p id="intro-moderation-target"></p><label>原因（必填）<textarea name="reason" required maxlength="1000"></textarea></label>
+  <p id="intro-moderation-result" role="status"></p><button class="btn primary" type="submit">确认</button>
+</form></dialog>

@@ -80,8 +80,10 @@
   <p id="avatar-crop-result" class="ux-account-result" role="status" aria-live="polite"></p>
   <div class="avatar-crop-actions"><button type="button" class="btn" id="avatar-reselect">重新选图</button><button type="button" class="btn primary" id="avatar-save">保存头像</button></div>
 </dialog>{% endif %}
+{% if not me.must_change_password %}{% set intro_listing = false %}{% include "_member_introductions.html" %}{% endif %}
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='member-introductions.js') }}"></script>
 <script src="{{ url_for('static', filename='account.js') }}"></script>
 <script src="{{ url_for('static', filename='account-avatar.js') }}"></script>
 <script src="{{ url_for('static', filename='email.js') }}"></script>

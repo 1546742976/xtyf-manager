@@ -44,5 +44,7 @@
     <footer><span class="collab-shortcut">Ctrl / ⌘ + Enter 发布</span><button class="btn" type="button" data-topic-close>取消</button><button class="btn primary" type="submit">发布话题</button></footer>
   </form>
 </dialog>
+{% if not me.must_change_password %}{% set intro_listing = true %}{% include "_member_introductions.html" %}{% endif %}
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='discussions.js') }}"></script>{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='member-introductions.js') }}"></script><script src="{{ url_for('static', filename='discussions.js') }}"></script>{% endblock %}

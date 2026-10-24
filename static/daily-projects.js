@@ -48,7 +48,25 @@
     pages.innerHTML=`<button class="btn" type="button" data-page="${page-1}" ${page<=1?'disabled':''}>上一页</button><span>第 ${page} 页 · 共 ${data.total} 项</span><button class="btn" type="button" data-page="${page+1}" ${page*20>=data.total?'disabled':''}>下一页</button>`;
   }
   function own(group) {return isManager || group.owners.some(o=>o.id===memberId);}
+  function renderLifecycle(project){
+    host.querySelector('.daily-lifecycle')?.remove();
+    const id=project.id;
+    const closed=['已完成','已取消'].includes(project.status);
+    const executionGroups=project.groups.filter(group=>group.enabled&&own(group));
+    if(executionGroups.length) {
+      host.insertAdjacentHTML('beforeend',`<details class="daily-lifecycle"><summary>${closed?'重新打开任务':'取消任务'}</summary><form id="daily-lifecycle">${closed?`<label>重开的专业组<select name="stage">${executionGroups.map(group=>`<option value="${escape(group.stage)}">${escape(group.label)}</option>`).join('')}</select></label><label>实际进度（0–99）<input name="progress" type="number" min="0" max="99" required value="0"></label>`:''}<label>原因（必填）<textarea name="note" maxlength="2000" required></textarea></label><button type="submit" class="btn">${closed?'确认重开':'确认取消整个任务'}</button><p class="form-message" role="alert"></p></form></details>`);
+      const lifecycle=host.querySelector('#daily-lifecycle');
+      lifecycle.addEventListener('submit',event=>{
+        event.preventDefault();BusinessUI.action('daily-lifecycle:'+id,lifecycle.querySelectorAll('button'),async()=>{
+          const body={action:closed?'reopen':'cancel',version:current.version,note:lifecycle.elements.note.value};
+          if(closed){body.group_versions=Object.fromEntries(current.groups.map(group=>[group.stage,group.version]));body.reopen_progress={[lifecycle.elements.stage.value]:Number(lifecycle.elements.progress.value)};}
+          await request('/api/daily-projects/'+id,body);await show(id);
+        },text=>{lifecycle.querySelector('.form-message').textContent=text+'；输入已保留。';});
+      });
+    }
+  }
   function updateSummary(project) {
+    const statusChanged=current.status!==project.status;
     current.version=project.version;current.status=project.status;current.progress=project.progress;
     for(const key of ['completed_at','blocker_reason','blocker_next_action','blocker_helper_id','blocker_follow_up','blocker_helper_name','blocker_events'])current[key]=project[key];
     const status=host.querySelector('[data-daily-status]');if(status)status.textContent=project.status;
@@ -57,6 +75,7 @@
     const closed=['已完成','已取消'].includes(project.status);
     host.querySelectorAll('[data-progress-form] button,[data-progress-form] input,[data-progress-form] textarea').forEach(control=>{control.disabled=closed;});
     const edit=document.getElementById('daily-edit');if(edit)edit.textContent=closed?'重新打开／调整项目':'编辑项目';
+    if(statusChanged)renderLifecycle(current);
     const hint=host.querySelector('[data-daily-reminder]');if(hint)hint.textContent=reasons(project);
   }
   async function showBlocker(project) {
@@ -93,18 +112,7 @@
     host.hidden=false; document.getElementById('daily-list-panel').hidden=true;
     host.innerHTML=`<a class="btn" href="/tasks?type=daily">返回项目列表</a><h2>${escape(project.title)}</h2><p class="daily-note">${escape(project.detail||'暂无目标说明')}</p><p>${escape(project.status)} · ${escape(project.priority)}优先级 · ${escape(project.start_date||'未设开始日期')} → ${escape(project.due_date||'未设截止日期')}</p><p>${escape(reasons(project))}</p>${meter(project.progress,'各组平均进度')}${isManager?`<div class="daily-actions"><button type="button" class="btn" id="daily-edit">${closed?'重新打开／调整项目':'编辑项目'}</button><button type="button" class="btn danger" id="daily-delete">删除项目</button></div>`:''}<div class="daily-group-grid">${project.groups.map(g=>`<section class="daily-group"><h3>${escape(g.label)}${g.enabled?'':'（已停用）'}${g.catalog_archived?'（专业组已停用）':''}</h3><p>负责人：${g.owners.map(o=>escape(o.name)+(!o.is_active||o.deleted_at?'（已停用）':'')).join('、')}</p>${meter(g.progress,g.label+'进度')}${g.enabled&&!closed&&own(g)?`<form data-progress-form="${g.stage}"><label>进度百分比<input name="progress" type="number" min="0" max="100" step="1" value="${g.progress}" required></label><label>进度备注<textarea name="note" rows="3" maxlength="2000"></textarea></label><label>图片（最多 5 张）<input name="files" type="file" accept="image/png,image/jpeg,image/webp" multiple></label><button class="btn primary" type="submit">提交${escape(g.label)}进度</button><p class="form-message" role="status" aria-live="polite"></p></form>`:'<p class="muted">只读记录</p>'}<h4>进度记录</h4><div data-history="${g.stage}">加载中…</div><button class="btn" type="button" data-history-retry="${g.stage}">刷新记录</button></section>`).join('')}</div>`;
     if(!isManager && Number(project.created_by)===memberId && !closed)host.insertAdjacentHTML('afterbegin','<button type="button" class="btn" id="daily-edit">编辑计划</button>');
-    const executionGroups=project.groups.filter(group=>group.enabled&&own(group));
-    if(executionGroups.length) {
-      host.insertAdjacentHTML('beforeend',`<details class="daily-lifecycle"><summary>${closed?'重新打开任务':'取消任务'}</summary><form id="daily-lifecycle">${closed?`<label>重开的专业组<select name="stage">${executionGroups.map(group=>`<option value="${escape(group.stage)}">${escape(group.label)}</option>`).join('')}</select></label><label>实际进度（0–99）<input name="progress" type="number" min="0" max="99" required value="0"></label>`:''}<label>原因（必填）<textarea name="note" maxlength="2000" required></textarea></label><button type="submit" class="btn">${closed?'确认重开':'确认取消整个任务'}</button><p class="form-message" role="alert"></p></form></details>`);
-      const lifecycle=host.querySelector('#daily-lifecycle');
-      lifecycle.addEventListener('submit',event=>{
-        event.preventDefault();BusinessUI.action('daily-lifecycle:'+id,lifecycle.querySelectorAll('button'),async()=>{
-          const body={action:closed?'reopen':'cancel',version:current.version,note:lifecycle.elements.note.value};
-          if(closed){body.group_versions=Object.fromEntries(current.groups.map(group=>[group.stage,group.version]));body.reopen_progress={[lifecycle.elements.stage.value]:Number(lifecycle.elements.progress.value)};}
-          await request('/api/daily-projects/'+id,body);await show(id);
-        },text=>{lifecycle.querySelector('.form-message').textContent=text+'；输入已保留。';});
-      });
-    }
+    renderLifecycle(project);
     if(project.changes?.length)host.insertAdjacentHTML('beforeend',`<details><summary>任务修改记录</summary>${project.changes.map(change=>`<article><strong>${escape(change.actor_name)} · ${escape(change.created_at)}</strong><p>${escape({create:'创建',update:'管理调整',plan:'计划修改',cancel:'取消',reopen:'重新打开'}[change.action]||change.action)} · ${escape(change.note||'无备注')}</p></article>`).join('')}</details>`);
     for(const group of project.groups) history(project,group.stage).catch(error=>{const box=host.querySelector(`[data-history="${group.stage}"]`);if(box)box.textContent=error.message;});
     const header=host.querySelector(':scope > p:nth-of-type(2)');
