@@ -19,7 +19,7 @@ from flask import g, jsonify, redirect, render_template, request, session, url_f
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("PROGRESS_DB", os.path.join(BASE_DIR, "data.db"))
-ROLE_NAMES = {"admin": "管理员", "manager": "项管", "member": "成员"}
+ROLE_NAMES = {"admin": "超级管理员", "manager": "项管", "member": "成员"}
 
 
 def error_response(status_code, message):

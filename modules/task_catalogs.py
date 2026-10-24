@@ -93,7 +93,7 @@ def groups_edit(item_id: int):
 def _archive_catalog(table: str, item_id: int, archive: bool):
     actor = current_user()
     if actor["role"] != "admin":
-        return jsonify(ok=False, error="仅管理员可删除或恢复组别"), 403
+        return jsonify(ok=False, error="仅超级管理员可删除或恢复组别"), 403
     if (response := _path_id_error(item_id)) is not None:
         return response
     db = get_db()

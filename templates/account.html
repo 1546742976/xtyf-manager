@@ -3,7 +3,7 @@
 {% block content %}
 <div class="ux-page-head">
   <div><p class="ux-eyebrow">WORKSPACE / ACCOUNT</p><h1>账户设置</h1>
-    <p>维护个人登录名、专业组和造车组别，安全更新密码；姓名由管理员统一维护。</p></div>
+    <p>维护个人登录名、专业组和造车组别，安全更新密码；姓名由超级管理员统一维护。</p></div>
 </div>
 {% if me.must_change_password %}<p class="panel error account-password-warning" role="alert">当前使用的是初始或重置密码。请先设置一个与当前密码不同的新密码，之后才能进入工作区。</p>{% endif %}
 <div class="ux-account-grid{% if me.must_change_password %} ux-account-password-required{% endif %}">
@@ -28,7 +28,7 @@
       <dt>造车组别</dt><dd id="account-project-names">{{ '改密后查看' if me.must_change_password else '加载中…' }}</dd>
       <dt>系统角色</dt><dd>{{ role_names[me.role] }}</dd>
     </dl>
-    <p class="ux-note">成员 ID 是数据库中的固定身份标识，不会随用户名修改而改变。需要修改真实姓名或权限角色请联系管理员。</p>
+    <p class="ux-note">成员 ID 是数据库中的固定身份标识，不会随用户名修改而改变。需要修改真实姓名或权限角色请联系超级管理员。</p>
   </section>
   {% include "_email_settings.html" %}
     <section class="panel appearance-panel ux-account-appearance" aria-labelledby="appearance-title">

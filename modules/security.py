@@ -146,12 +146,24 @@ def migrate_security(db):
         raise
 
 
+def permission_is_current(db, member_id, permission, session_version=None):
+    """Role and explicit grants share the same live account checks, including workers."""
+    if permission not in PERMISSIONS:
+        return False
+    sql = ("SELECT 1 FROM members m WHERE m.id=? AND m.is_active=1 "
+           "AND m.deleted_at IS NULL AND m.must_change_password=0 "
+           "AND (m.role='admin' OR EXISTS (SELECT 1 FROM member_permissions p "
+           "WHERE p.member_id=m.id AND p.permission=?))")
+    args = [member_id, permission]
+    if session_version is not None:
+        sql += ' AND m.session_version=?'
+        args.append(session_version)
+    return db.execute(sql, args).fetchone() is not None
+
+
 def has_permission(permission, user=None):
     user = user or current_user()
-    return bool(user and get_db().execute(
-        "SELECT 1 FROM member_permissions WHERE member_id=? AND permission=?",
-        (user["id"], permission),
-    ).fetchone())
+    return bool(user and permission_is_current(get_db(), user['id'], permission, user.get('session_version')))
 
 
 def admin_required(view):
@@ -159,7 +171,7 @@ def admin_required(view):
     @login_required
     def wrapped(*args, **kwargs):
         if current_user()["role"] != "admin":
-            return error_response(403, "无权限，仅管理员可访问")
+            return error_response(403, "无权限，仅超级管理员可访问")
         return view(*args, **kwargs)
     return wrapped
 
@@ -351,12 +363,17 @@ def security_page():
 def permissions_get():
     db = get_db()
     members = [dict(row) for row in db.execute(
-        "SELECT id,name,username,role,is_active,deleted_at FROM members ORDER BY id")]
+        "SELECT id,name,username,role,is_active,deleted_at,must_change_password FROM members ORDER BY id")]
     grants = {}
     for row in db.execute("SELECT member_id,permission FROM member_permissions ORDER BY permission"):
         grants.setdefault(row["member_id"], []).append(row["permission"])
-    return jsonify(ok=True, permissions=PERMISSIONS,
-                   members=[member | {"permissions": grants.get(member["id"], [])} for member in members])
+    for member in members:
+        explicit = grants.get(member['id'], [])
+        inherited = list(PERMISSIONS) if member['role'] == 'admin' else []
+        ready = member['is_active'] and not member['deleted_at'] and not member['must_change_password']
+        member.update(explicit_permissions=explicit, inherited_permissions=inherited,
+                      permissions=sorted(set(explicit + inherited) & PERMISSIONS.keys()) if ready else [])
+    return jsonify(ok=True, permissions=PERMISSIONS, members=members)
 
 
 @bp.post("/api/admin/permissions/<int:member_id>")
@@ -375,12 +392,15 @@ def permissions_set(member_id):
     if row is None:
         db.rollback()
         return jsonify(ok=False, error="成员不存在"), 404
+    if row['role'] == 'admin':
+        db.rollback()
+        return jsonify(ok=False, error='超级管理员的权限由角色自带，不可单独撤销；请先调整角色'), 409
     if values and (not row["is_active"] or row["deleted_at"] is not None):
         db.rollback()
         return jsonify(ok=False, error="停用或已删除账号只能撤销权限"), 400
     if "funds.review" in values and row["role"] not in ("admin", "manager"):
         db.rollback()
-        return jsonify(ok=False, error="资金审核人必须具备资金工作区访问角色（管理员或项管）"), 400
+        return jsonify(ok=False, error="资金审核人必须具备资金工作区访问角色（超级管理员或项管）"), 400
     db.execute("DELETE FROM member_permissions WHERE member_id=?", (member_id,))
     db.executemany("INSERT INTO member_permissions VALUES(?,?,?,?)",
                    [(member_id, p, current_user()["id"], now_str()) for p in values])

@@ -276,7 +276,7 @@ def _funds_guard():
 @funds_bp.route("/")
 def index():
     return render_template("funds.html", me=current_user(), page="funds",
-                           role_names={"admin": "管理员", "manager": "项管", "member": "成员"},
+                           role_names={"admin": "超级管理员", "manager": "项管", "member": "成员"},
                            can_review=can_review())
 
 

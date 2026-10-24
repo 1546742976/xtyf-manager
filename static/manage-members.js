@@ -5,7 +5,7 @@ const memberFilters = { q: "", group: "", project: "", role: "", showDeleted: fa
 
 function roleSelect(member) {
   const disabled = Number(member.id) === Number(state.me?.id) ? "disabled" : "";
-  return `<select aria-label="${esc(member.name)}的系统角色" class="role-select" data-role-id="${Number(member.id)}" ${disabled}><option value="member" ${member.role === "member" ? "selected" : ""}>成员</option><option value="manager" ${member.role === "manager" ? "selected" : ""}>项管</option><option value="admin" ${member.role === "admin" ? "selected" : ""}>管理员</option></select>`;
+  return `<select aria-label="${esc(member.name)}的系统角色" class="role-select" data-role-id="${Number(member.id)}" ${disabled}><option value="member" ${member.role === "member" ? "selected" : ""}>成员</option><option value="manager" ${member.role === "manager" ? "selected" : ""}>项管</option><option value="admin" ${member.role === "admin" ? "selected" : ""}>超级管理员</option></select>`;
 }
 
 function filteredMembers() {
@@ -101,13 +101,13 @@ async function loadMembers() {
 function editMemberProfile(member) {
   const isSelf = Number(member.id) === Number(state.me?.id);
   const roleOptions = [
-    ["member", "成员"], ["manager", "项管"], ["admin", "管理员"],
+    ["member", "成员"], ["manager", "项管"], ["admin", "超级管理员"],
   ].map(([value, label]) => `<option value="${value}" ${member.role === value ? "selected" : ""}>${label}</option>`).join("");
   showModal(
     `<div class="modal-head"><h2>编辑成员：${esc(member.name)}</h2><button class="btn ghost sm" type="button" data-close>关闭</button></div>
     <form id="member-profile-form" class="form-grid">
       <label>成员 ID（不可更改）<input value="${Number(member.id)}" readonly disabled></label>
-      <label>姓名（管理员维护）<input name="name" maxlength="64" value="${esc(member.name)}" maxlength="80" required></label>
+      <label>姓名（超级管理员维护）<input name="name" maxlength="64" value="${esc(member.name)}" maxlength="80" required></label>
       <label>登录用户名<input name="username" maxlength="64" value="${esc(member.username)}" maxlength="64" required autocomplete="off"></label>
       ${isSelf
         ? '<p class="ux-note span-2">不能调整自己的系统角色或停用自己的账号；修改本人密码请到「账户设置」。</p>'

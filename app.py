@@ -571,7 +571,7 @@ def api_member_reset(member_id):
 def api_member_role(member_id):
     user = current_user()
     if user["role"] != "admin":
-        return jsonify(ok=False, error="仅管理员可调整角色"), 403
+        return jsonify(ok=False, error="仅超级管理员可调整角色"), 403
     if member_id == user["id"]:
         return jsonify(ok=False, error="不能修改自己的角色"), 400
     data = request.get_json(silent=True) or {}

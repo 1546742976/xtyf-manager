@@ -198,7 +198,7 @@ def revert(task_id: int, revision_id: int):
         return response
     user = current_user()
     if user["role"] != "admin":
-        return jsonify(ok=False, error="仅管理员可撤销修订"), 403
+        return jsonify(ok=False, error="仅超级管理员可撤销修订"), 403
     body, response = _json_body()
     if response is not None:
         return response

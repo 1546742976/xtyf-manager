@@ -290,7 +290,7 @@ def update_task(
                 ownership.append(label)
         if ownership:
             db.rollback()
-            return None, "只有管理员或项管可以调整" + "、".join(ownership), 403
+            return None, "只有超级管理员或项管可以调整" + "、".join(ownership), 403
     active_members = [item for item in relations["participant_ids"] if item not in old_relations["participant_ids"]]
     if values["owner_id"] != prior["owner_id"] and values["owner_id"] is not None:
         active_members.append(values["owner_id"])

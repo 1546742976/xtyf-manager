@@ -27,6 +27,7 @@ class TestInvoiceJobRecovery(unittest.TestCase):
             db.executescript("""
                 CREATE TABLE members (
                     id INTEGER PRIMARY KEY,
+                    role TEXT NOT NULL DEFAULT 'manager',
                     is_active INTEGER NOT NULL DEFAULT 1,
                     deleted_at TEXT,
                     must_change_password INTEGER NOT NULL DEFAULT 0,
@@ -74,6 +75,21 @@ class TestInvoiceJobRecovery(unittest.TestCase):
         with closing(sqlite3.connect(self.db_path)) as db, db:
             return db.execute("SELECT outcome FROM security_audit WHERE id=?",
                               (audit_id,)).fetchone()[0]
+
+    def test_superadmin_claims_without_grants_and_demotion_blocks_next_job(self):
+        with closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE members SET role='admin' WHERE id=1")
+            db.execute("DELETE FROM member_permissions WHERE member_id=1")
+        jid, _ = self._insert_job()
+        with InvoiceFileLock(self.lock_path):
+            self.assertEqual(invoice_jobs.recover_and_claim()['id'], jid)
+            invoice_jobs.finish_job(jid, result={})
+        with closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE members SET role='manager' WHERE id=1")
+        second, _ = self._insert_job()
+        with InvoiceFileLock(self.lock_path):
+            self.assertIsNone(invoice_jobs.recover_and_claim())
+        self.assertEqual(self._db_row(second)['status'], 'error')
 
     def test_readonly_job_crash_retries_and_finishes_with_audit(self):
         jid, audit_id = self._insert_job("refresh")

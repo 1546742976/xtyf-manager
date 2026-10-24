@@ -12,7 +12,7 @@ function progressSection(task) {
       <label>进度备注（完成了什么工作）<textarea name="note" rows="3" maxlength="2000" placeholder="例如：完成电机驱动联调、通过实车测试…"></textarea></label>
       <label>附图（可选，最多 5 张）<input type="file" name="files" accept="image/png,image/jpeg,image/webp" multiple></label>
       <div class="progress-submit"><button type="submit" class="btn primary">提交进度记录</button><p class="form-message" role="alert"></p></div>
-    </form>` : `<p class="muted">${task.status === '已取消' ? '已取消任务请先在设置中明确重新打开并填写实际进度。' : '仅负责人、参与成员或管理员可更新进度。'}</p>`}
+    </form>` : `<p class="muted">${task.status === '已取消' ? '已取消任务请先在设置中明确重新打开并填写实际进度。' : '仅负责人、参与成员或超级管理员可更新进度。'}</p>`}
     <div id="task-progress-list" class="progress-timeline"><p class="empty">正在加载进度记录…</p></div>
   </section>`;
 }

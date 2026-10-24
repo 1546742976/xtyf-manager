@@ -116,7 +116,7 @@ class TestClientAPI(unittest.TestCase):
                 self.login()
                 permitted = ["invoices.manage"] + (["funds.review"] if role != "member" else [])
                 grant = self.admin.post(f"/api/admin/permissions/{self.member_id}", json={"permissions": permitted})
-                self.assertEqual(grant.status_code, 200)
+                self.assertEqual(grant.status_code, 409 if role == "admin" else 200)
                 data = self.bootstrap().get_json()
                 manager = role in ("manager", "admin")
                 self.assertEqual(data["permissions"]["manage_tasks"], manager)
@@ -130,8 +130,8 @@ class TestClientAPI(unittest.TestCase):
                 self.assertEqual(data["permissions"]["manage_security"], role == "admin")
                 self.admin.post(f"/api/admin/permissions/{self.member_id}", json={"permissions": []})
                 revoked = self.bootstrap().get_json()
-                self.assertFalse(revoked["is_finance"])
-                self.assertFalse(revoked["can_review_funds"])
+                self.assertEqual(revoked["is_finance"], role == "admin")
+                self.assertEqual(revoked["can_review_funds"], role == "admin")
 
     def test_theme_preferences_are_live_and_account_scoped(self):
         self.onboard()

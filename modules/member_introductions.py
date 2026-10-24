@@ -147,7 +147,7 @@ def profiles():
 @login_required
 def moderate(mid):
     if not manager():
-        return jsonify(ok=False, error='仅管理员或项管可隐藏、恢复简介'), 403
+        return jsonify(ok=False, error='仅超级管理员或项管可隐藏、恢复简介'), 403
     try:
         body = body_with_version({'version', 'hidden', 'reason'})
         reason = text(body['reason'], 1000, '管理原因')

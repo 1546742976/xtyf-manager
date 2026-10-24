@@ -88,7 +88,7 @@ def save_own_preferences():
 @login_required
 def save_member_preferences(mid):
     if not admin():
-        return failure('仅管理员可操作', 403)
+        return failure('仅超级管理员可操作', 403)
     if mid > 2**63 - 1:
         return failure('成员不存在', 404)
     return save_preferences(mid, request.get_json(silent=True))
@@ -178,7 +178,7 @@ def verify():
 @login_required
 def admin_page():
     if not admin():
-        return error_response(403, '无权限，仅管理员可查看')
+        return error_response(403, '无权限，仅超级管理员可查看')
     return render_template('mail_admin.html', me=current_user(), role_names=ROLE_NAMES, page='mail')
 
 
@@ -186,7 +186,7 @@ def admin_page():
 @login_required
 def admin_status():
     if not admin():
-        return error_response(403, '无权限，仅管理员可查看')
+        return error_response(403, '无权限，仅超级管理员可查看')
     db = get_db()
     try:
         page = max(1, min(int(request.args.get('page', '1')), 100000))
@@ -208,7 +208,7 @@ def admin_status():
 @login_required
 def pause(mid):
     if not admin():
-        return failure('仅管理员可操作', 403)
+        return failure('仅超级管理员可操作', 403)
     body = request.get_json(silent=True) or {}
     if type(body.get('paused')) is not bool or mid > 2**63-1:
         return failure('暂停状态不合法')
@@ -224,7 +224,7 @@ def pause(mid):
 @login_required
 def test_mail():
     if not admin():
-        return failure('仅管理员可操作', 403)
+        return failure('仅超级管理员可操作', 403)
     if not configured():
         return failure('邮件服务尚未配置', 503)
     db, mid, epoch = get_db(), current_user()['id'], epoch_now()

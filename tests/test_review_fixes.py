@@ -41,7 +41,12 @@ class TestReviewFixes(unittest.TestCase):
             'tmp_path': tmp, 'month': '2026.10', 'amount': '1.00', **fields})
 
     def record(self):
-        response = self.admin.post('/funds/api/records', json={
+        name = 'writer_' + uuid4().hex[:12]
+        self.assertTrue(self.admin.post('/api/member', json={'name': name, 'username': name,
+            'password': 'writer-password', 'role': 'manager'}).get_json()['ok'])
+        writer = app_module.app.test_client()
+        self.assertTrue(writer.post('/login', json={'username': name, 'password': 'writer-password'}).get_json()['ok'])
+        response = writer.post('/funds/api/records', json={
             'record_type': '进', 'amount': '5.00', 'record_date': '2026-10-13'})
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         payload = response.get_json()
