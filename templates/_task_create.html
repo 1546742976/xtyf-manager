@@ -5,7 +5,7 @@
       <div class="task-create-grid">
         <label class="task-create-wide">任务标题<input name="title" required maxlength="200" autofocus></label>
         <label>造车组别<select name="project_id" id="create-project"><option value="">未选择</option></select></label>
-        <label>优先级<select name="priority">{% for p in priorities %}<option>{{ p }}</option>{% endfor %}</select></label>
+        <label>优先级<select name="priority">{% for p in priorities %}<option{% if p == "中" %} selected{% endif %}>{{ p }}</option>{% endfor %}</select></label>
         <label>状态<select name="status">{% for s in statuses %}<option>{{ s }}</option>{% endfor %}</select></label>
         <label>负责人<select name="owner_id" id="create-owner"><option value="">未指定</option></select></label>
         <fieldset class="task-create-wide"><legend>参与成员（可多选）</legend><div id="create-participants" class="choice-host"></div></fieldset>

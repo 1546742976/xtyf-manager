@@ -30,7 +30,7 @@ class TaskCreationAccessTests(unittest.TestCase):
                 self.assertEqual(daily.status_code, 200, daily.get_json())
                 if role == 'member':
                     self.assertEqual(client.post('/api/daily-projects/' + str(daily.get_json()['id']),
-                                                 json={}).status_code, 403)
+                                                 json={'version': 1, 'priority': '高'}).status_code, 403)
                     self.assertEqual(client.post('/api/projects', json={'name': name}).status_code, 403)
                     rejected = client.post('/api/task', json={'title': 'legacy', 'project': name})
                     self.assertEqual(rejected.status_code, 400)

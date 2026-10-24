@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS daily_updates (
  created_at TEXT NOT NULL, FOREIGN KEY(project_id,stage) REFERENCES daily_groups(project_id,stage)
 );
 CREATE INDEX IF NOT EXISTS daily_updates_group ON daily_updates(project_id,stage,id);
+CREATE TABLE IF NOT EXISTS daily_changes (
+ id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES daily_projects(id),
+ actor_id INTEGER NOT NULL REFERENCES members(id), actor_name TEXT NOT NULL,
+ action TEXT NOT NULL, note TEXT NOT NULL, before_json TEXT NOT NULL,
+ after_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS daily_attachments (
  id INTEGER PRIMARY KEY, update_id INTEGER NOT NULL REFERENCES daily_updates(id),
  original_name TEXT NOT NULL, stored_name TEXT UNIQUE NOT NULL, mime_type TEXT NOT NULL
@@ -66,6 +72,8 @@ def migrate(db):
             if statement.strip():
                 db.execute(statement)
         columns = {row[1] for row in db.execute('PRAGMA table_info(daily_projects)')}
+        if 'created_by' not in columns:
+            db.execute('ALTER TABLE daily_projects ADD COLUMN created_by INTEGER REFERENCES members(id)')
         if 'completed_at' not in columns:
             # Historical updated_at is not evidence of completion.
             db.execute('ALTER TABLE daily_projects ADD COLUMN completed_at TEXT')

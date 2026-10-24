@@ -41,6 +41,9 @@ function taskForm(task) {
   const editable = canEdit(task),
     members = modalMembers(task),
     others = state.tasks.filter((item) => Number(item.id) !== Number(task.id));
+  if (!editable && Number(task.created_by) === Number(state.me?.id) && !['已完成','已取消'].includes(task.status)) {
+    return `<form id="creator-plan-form" class="task-settings"><p>作为创建者，你可维护任务计划；进度由执行成员填写。</p><label>标题<input name="title" maxlength="200" required value="${esc(task.title)}"></label><label>说明<textarea name="detail" maxlength="10000">${esc(task.detail||'')}</textarea></label><label>开始日期<input type="date" name="start_date" value="${esc(task.start_date||'')}"></label><label>截止日期<input type="date" name="due_date" value="${esc(task.due_date||'')}"></label><button type="submit" class="btn primary">保存计划</button><p class="form-message" role="alert"></p></form>`;
+  }
   if (!editable) return taskReadOnly(task);
   return `<form id="task-form" class="task-settings"><input type="hidden" name="version" value="${Number(task.version || 0)}">
     <label>标题<input name="title" maxlength="200" value="${esc(task.title)}" required></label>
@@ -116,11 +119,33 @@ async function finishTaskModalUpdate(box, generation, taskId, navigation = {}) {
   }
 }
 function bindTaskForm(task, generation, navigation = {}) {
+  const creatorForm = document.getElementById('creator-plan-form');
+  creatorForm?.addEventListener('submit', async event => {
+    event.preventDefault(); const button=creatorForm.querySelector('button'); button.disabled=true;
+    const result=await api(`/api/task/${task.id}`, {...Object.fromEntries(new FormData(creatorForm)),version:Number(task.version)});
+    if(!taskModalActive(creatorForm,generation,task.id))return;
+    button.disabled=false;
+    if(result?.ok)await finishTaskModalUpdate(creatorForm,generation,task.id,navigation);
+    else creatorForm.querySelector('.form-message').textContent=(result?.error||'保存失败')+'；输入已保留。';
+  });
   const form = document.getElementById("task-form");
   if (!form) return;
-  window.TaskDateDefaults?.bind(form, {saved: true});
+  const terminal=['已完成','已取消'].includes(task.status);
+  if(terminal && isManagement()) {
+    const label=document.createElement('label');label.className='choice-item';label.innerHTML='<input type="checkbox" name="correction">管理纠错（保持终态，必须填写原因）';form.prepend(label);
+  }
+  if(terminal) {
+    form.querySelectorAll('input,textarea,select').forEach(input=>{if(!['version','status','progress','note','correction'].includes(input.name))input.disabled=true;});
+  } else window.TaskDateDefaults?.bind(form, {saved: true});
   const syncStatusFields = () => {
+    const correcting=!!form.elements.correction?.checked;
+    if(terminal && isManagement())form.querySelectorAll('input,textarea,select').forEach(input=>{
+      if(!['version','status','progress','note','correction'].includes(input.name))input.disabled=!correcting;
+    });
+    if(correcting){form.elements.status.value=task.status;form.elements.status.disabled=true;}else form.elements.status.disabled=false;
     const status = form.elements.status.value;
+    form.elements.note.required = terminal || status==='已取消';
+    form.elements.note.placeholder = form.elements.note.required ? '取消、重开或纠错原因（必填）' : '记录本次调整原因';
     const sections = [
       ['[data-task-reopen]', ['已完成', '已取消'].includes(task.status) && status !== task.status],
       ['[data-task-blocker]', status === '阻塞'],
@@ -137,6 +162,7 @@ function bindTaskForm(task, generation, navigation = {}) {
       });
     });
   };
+  form.elements.correction?.addEventListener('change',syncStatusFields);
   form.elements.status.addEventListener('change', syncStatusFields); syncStatusFields();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -151,8 +177,11 @@ function bindTaskForm(task, generation, navigation = {}) {
     if (projectSelect) payload.project_id = retainArchivedCatalogSelection(
       projectSelect.value, task.project_id, state.projects, projectSelect.dataset.edited === "1",
     );
+    if(!isManagement()) { delete payload.owner_id; delete payload.project_id; delete payload.participant_ids; }
+    if(payload.correction)payload.correction=true;
+    if(terminal&&!payload.correction)for(const key of Object.keys(payload))if(!['version','status','progress','note','blocker_reason','blocker_next_action','blocker_helper_id','blocker_follow_up'].includes(key))delete payload[key];
     payload.version = Number(payload.version);
-    if (!payload.owner_id && payload.participant_ids.length) {
+    if (isManagement() && !payload.owner_id && payload.participant_ids?.length) {
       form.querySelector("[name=owner_id]").setCustomValidity("选择参与成员后必须指定负责人");
       form.querySelector("[name=owner_id]").reportValidity();
       return;

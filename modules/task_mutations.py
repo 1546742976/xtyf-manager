@@ -205,8 +205,30 @@ def update_task(
     prior = dict(row)
     participant_ids = _relations(db, task_id)["participant_ids"]
     management = actor["role"] in ("admin", "manager")
-    if not management and actor["id"] != prior["owner_id"] and actor["id"] not in participant_ids:
+    executor = management or actor['id'] == prior['owner_id'] or actor['id'] in participant_ids
+    creator = actor['id'] == prior.get('created_by')
+    if not executor and not creator:
         db.rollback(); return None, "无权限", 403
+    if 'created_by' in data:
+        db.rollback(); return None, '创建者身份不能修改', 403
+    if not executor and set(data) - {'version', 'title', 'detail', 'start_date', 'due_date', 'note'}:
+        db.rollback(); return None, '创建者只能修改标题、说明及计划日期', 403
+    if not executor and 'version' not in data:
+        db.rollback(); return None, '修改必须提供版本号', 400
+    note = data.get('note', '')
+    if not isinstance(note, str) or len(note) > 2000:
+        db.rollback(); return None, '修改原因最多 2000 字', 400
+    terminal = prior['status'] in ('已完成', '已取消')
+    reopening = terminal and data.get('status', prior['status']) in ('未开始', '进行中', '阻塞')
+    correction = management and data.get('correction') is True
+    if terminal and not reopening and not correction:
+        db.rollback(); return None, '请先明确重新打开任务', 409
+    if terminal and not reopening and any(key in data and data[key] != prior[key] for key in COMPLETION_FIELDS):
+        db.rollback(); return None, '终态进度必须通过重新打开修改', 409
+    if (reopening or correction or data.get('status') == '已取消' and not terminal) and not note.strip():
+        db.rollback(); return None, '取消、重新打开或纠错必须填写原因', 400
+    if reopening and not executor:
+        db.rollback(); return None, '只有执行成员可以重新打开', 403
     if "schedule_locked" in data and type(data["schedule_locked"]) is not bool:
         db.rollback(); return None, "自动排期固定日期必须为布尔值", 400
     state_requested = 'progress' in data or data.get('status', prior['status']) != prior['status']
@@ -288,6 +310,8 @@ def update_task(
     before = {key: (prior[key] if key in SCALAR_FIELDS else _relations(db, task_id)[key]) for key in touched}
     after = {key: (values[key] if key in SCALAR_FIELDS else relations[key]) for key in touched}
     changed = {key for key in touched if before[key] != after[key]}
+    if reopening and changed - set(COMPLETION_FIELDS) - set(BLOCKER_FIELDS):
+        db.rollback(); return None, '请先重开，再修改任务内容', 409
     note = str(data.get("note") or "").strip()
     try:
         current = db.execute("SELECT version FROM tasks WHERE id=? AND deleted_at IS NULL", (task_id,)).fetchone()

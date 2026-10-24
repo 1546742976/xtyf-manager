@@ -109,6 +109,9 @@ def update_progress(task_id: int):
             db.rollback()
             cleanup_staged(staged)
             return jsonify(ok=False, error="无权更新该任务进度"), 403
+        if task['status'] in ('已完成', '已取消'):
+            db.rollback(); cleanup_staged(staged)
+            return jsonify(ok=False, error='请先明确重新打开任务'), 409
         if int(task["version"]) != version:
             db.rollback()
             cleanup_staged(staged)

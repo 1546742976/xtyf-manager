@@ -4,7 +4,19 @@
   const forms=new Map();
   const escape=value=>BusinessUI.escape(value);
   const options=(values,current)=>values.map(value=>`<option ${value===current?'selected':''}>${escape(value)}</option>`).join('');
+  function buildPlan(project) {
+    const form=document.createElement('form');form.id='daily-form';form.className='task-create-form';
+    form.innerHTML=`<label>目标名称<input name="title" required maxlength="200" value="${escape(project.title)}"></label><label>目标说明<textarea name="detail" maxlength="10000">${escape(project.detail||'')}</textarea></label><label>开始日期<input name="start_date" type="date" value="${escape(project.start_date||'')}"></label><label>截止日期<input name="due_date" type="date" value="${escape(project.due_date||'')}"></label><p class="form-message" role="alert"></p><button class="btn primary" type="submit">保存计划</button>`;
+    form.addEventListener('submit',async event=>{
+      event.preventDefault();const button=form.querySelector('button');if(button.disabled)return;
+      button.disabled=true;window.TaskCreateDialog.setBusy(true);
+      try {const result=await window.TaskCreateDialog.request('/api/daily-projects/'+project.id,{...Object.fromEntries(new FormData(form)),version:project.version});forms.delete(project.id);document.dispatchEvent(new CustomEvent('daily:saved',{detail:{id:result.id}}));}
+      catch(error){form.querySelector('.form-message').textContent=error.message+'；输入已保留，请核对最新版本。';}
+      finally{button.disabled=false;window.TaskCreateDialog.setBusy(false);}
+    });return form;
+  }
   function build(project,catalog) {
+    if(project&&!['admin','manager'].includes(catalog.me.role))return buildPlan(project);
     const members=catalog.members.filter(member=>member.is_active!==0);
     const choices=[...(project?.groups||[])];
     for(const group of catalog.groups.filter(group=>group.is_active!==0)) {
@@ -41,15 +53,24 @@
         form.querySelector(`[data-owner-empty=${stage}]`).hidden=count!==0;
       });
     });
+    if(project&&['已完成','已取消'].includes(project.status)) {
+      const label=document.createElement('label');label.innerHTML='<input type="checkbox" name="correction">管理纠错（保持终态）';form.prepend(label);
+      label.querySelector('input').addEventListener('change',event=>{form.elements.status.disabled=event.target.checked;if(event.target.checked)form.elements.status.value=project.status;});
+    }
+    const reason=document.createElement('label');reason.textContent='取消、重开或纠错原因';
+    const reasonInput=document.createElement('textarea');reasonInput.name='note';reasonInput.maxLength=2000;reason.append(reasonInput);form.insertBefore(reason,form.lastElementChild);
+    const requireReason=()=>{reasonInput.required=!!project&&(['已完成','已取消'].includes(project.status)||form.elements.status.value==='已取消');};
+    form.elements.status.addEventListener('change',requireReason);requireReason();
     let saving=false;
     form.addEventListener('submit',async event=>{
       event.preventDefault();if(saving||!form.reportValidity())return;
       const local=form.querySelector('.form-message'),body=Object.fromEntries(new FormData(form));body.groups={};body.groups_mode='replace';body.group_links={};
+      if(body.correction){body.correction=true;body.status=project.status;}
       body.blocker_helper_id=body.blocker_helper_id?Number(body.blocker_helper_id):null;
       if(project){body.version=project.version;body.group_versions=Object.fromEntries(project.groups.map(group=>[group.stage,group.version]));}
       form.querySelectorAll('[name=enabled]:checked').forEach(input=>{body.groups[input.value]=[...form.querySelectorAll(`[name=owners-${input.value}]:checked`)].map(owner=>Number(owner.value));});
       for(const stage of Object.keys(body.groups))if(body[`link-${stage}`])body.group_links[stage]=Number(body[`link-${stage}`]);
-      if(project&&['已完成','已取消'].includes(project.status)) {
+      if(project&&['已完成','已取消'].includes(project.status)&&!body.correction) {
         body.reopen_progress={};for(const stage of Object.keys(body.groups))if(body[`reopen-${stage}`]!=='')body.reopen_progress[stage]=Number(body[`reopen-${stage}`]);
       }
       if(!Object.keys(body.groups).length){local.textContent='请至少启用一个组。';return;}
