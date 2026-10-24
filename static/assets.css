@@ -50,6 +50,8 @@
 .asset-filters .asset-reset { padding-inline:8px; border-color:transparent; background:transparent; color:var(--ux-muted); }
 .asset-results-heading { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px 16px; padding:20px 24px; }
 .asset-results-heading > div { display:flex; gap:14px; flex-wrap:wrap; align-items:baseline; }
+.asset-results-actions { display:flex; align-items:center; justify-content:flex-end; gap:12px; flex-wrap:wrap; }
+.asset-results-actions .btn { white-space:nowrap; }
 .asset-results-heading h2 { margin:0; font-size:16px; font-weight:650; }
 .asset-result-summary { margin:0; color:var(--ux-muted); font-size:12px; }
 .asset-list-hint { font-size:11px; color:var(--ux-muted); }
@@ -144,6 +146,7 @@
 #asset-mine-units { width:100%; max-width:100%; max-height:none; }
 #asset-camera-video { width:100%; max-height:45vh; object-fit:contain; }
 #asset-label-preview canvas { display:block; margin:1rem auto; border:1px solid var(--ux-stroke); }
+.asset-label-preview-note { margin:12px 0; color:var(--ux-muted); font-size:12px; }
 .asset-workspace [hidden],.asset-dialog [hidden] { display:none!important; }
 
 /* Secondary tasks: one visible dialog, contextual forms, and stable action areas. */
@@ -336,6 +339,7 @@
   .asset-filters .btn { width:100%; }
   .asset-results-heading { padding:18px 16px; }
   .asset-results-heading > div { gap:6px; flex-direction:column; }
+  .asset-results-heading > .asset-results-actions { width:100%; flex-direction:row; align-items:center; justify-content:space-between; }
   .asset-grid { grid-template-columns:minmax(0,1fr); }
   .asset-card.asset-list-row { grid-template-columns:minmax(0,1fr); gap:14px; padding:20px 16px; }
   .asset-item-mode { grid-column:1; grid-row:2; }
