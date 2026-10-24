@@ -239,10 +239,9 @@ jobs:
         if: needs.browser-image.result == 'skipped'
         with:
           python-version: '3.13'
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
+          # The vendor Playwright image lacks lsb_release, which setup-python's
+          # Linux pip-cache key requires. Install normally on the fork fallback;
+          # native Python jobs retain caching and the GHCR path is preinstalled.
       - uses: actions/setup-node@v4
         if: needs.browser-image.result == 'skipped'
         with:
