@@ -125,6 +125,23 @@ class TestInvoiceSSE(unittest.TestCase):
                 db.execute("INSERT OR IGNORE INTO member_permissions(member_id,permission,granted_at) "
                            "VALUES(?,'invoices.manage','2026-10-22 00:00:00')", (self.mid,))
 
+    def test_generator_error_releases_capacity(self):
+        from modules import invoices
+        job = self.client.post('/invoices/api/job/start', json={'type': 'refresh'}).get_json()
+        url = '/invoices/api/job/stream/' + job['job_id']
+        response = self.client.get(url, buffered=False)
+        iterator = iter(response.response)
+        next(iterator)
+        try:
+            with patch.object(invoices.invoice_jobs, 'get_job', side_effect=RuntimeError('synthetic read failure')):
+                with self.assertRaisesRegex(RuntimeError, 'synthetic read failure'):
+                    next(iterator)
+            again = self.client.get(url, buffered=False)
+            self.assertEqual(again.status_code, 200)
+            again.close()
+        finally:
+            response.close()
+
 
 if __name__ == '__main__':
     unittest.main()

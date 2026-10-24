@@ -14,6 +14,9 @@ os.environ["PROGRESS_SECRET_PATH"] = os.path.join(_TEMP.name, "secret.key")
 os.environ["PROGRESS_INITIAL_ADMIN_PASSWORD"] = "ci-test-password-only"
 
 import app as app_module  # noqa: E402
+if os.environ.get('XTYF_TEST_AUTH_TRACE') == '1':
+    from auth_diagnostics import install
+    install(app_module.app)
 # Queue recovery tests claim jobs explicitly against their own patched DB paths.
 # A daemon started by an unrelated page request must not consume those fixtures
 # or mutate another test's invoice directory while DB_PATH is temporarily patched.
