@@ -23,12 +23,16 @@ module.exports=async function({page,api,post,campus,label}){
   assert.equal(metadata.pages,13);assert(metadata.text.includes('中文标签测试'));assert(metadata.text.includes('U:'+units[0].id));
   let ratio=await page.locator('#asset-label-preview canvas').evaluate(c=>c.width/c.height);assert(Math.abs(ratio-210/297)<0.01);
   await page.locator('#asset-label-next').click();await page.locator('#asset-label-page').filter({hasText:'第 2 / 13 页'}).waitFor();
-  for(const [width,height] of [[40,270],[100,30]]){
+  for(const [width,height] of [[40,270],[100,30],[20,12]]){
     await page.evaluate(({width,height})=>{const f=document.querySelector('#asset-label-form');f.elements.paper.value='thermal';f.elements.width.value=width;f.elements.height.value=height;f.requestSubmit();},{width,height});
     await page.locator('#asset-label-download').waitFor();assert.deepEqual(await content(),generated);
     ratio=await page.locator('#asset-label-preview canvas').evaluate(c=>c.width/c.height);assert(Math.abs(ratio-width/height)<0.02);
     await page.locator('#asset-label-page').filter({hasText:'第 1 / 25 页'}).waitFor();
   }
+  await page.evaluate(()=>{const f=document.querySelector('#asset-label-form');f.elements.layout.value='compact';f.elements.font.value='8';f.elements.font_width.value='75';f.requestSubmit();});
+  await page.locator('#asset-label-download').waitFor();assert.deepEqual(await content(),generated);
+  const remembered=await page.evaluate(()=>JSON.parse(localStorage.getItem('xtyf.asset.labels.v2')));
+  assert.equal(remembered.layout,'compact');assert.equal(remembered.font,8);assert.equal(remembered.font_width,75);
   // The local client reads authenticated bytes and saves those exact bytes without a second GET.
   const encoded=generated.toString('base64');await page.unroute('**/api/assets/labels.pdf?*',capture);
   await page.evaluate(async ({encoded,units})=>{
