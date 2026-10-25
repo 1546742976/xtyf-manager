@@ -6,18 +6,21 @@ function fixture(){
     if(!nodes.has(id))nodes.set(id,{value:'general',hidden:false,open:true,innerHTML:'',textContent:'',dataset:{},options:[],listeners:{},classList:{add(){},remove(){},toggle(){}},replaceChildren(){this.innerHTML='';},append(){},parentNode:{insertBefore(){}},setAttribute(){},addEventListener(k,f){(this.listeners[k]??=[]).push(f);},focus(){},close(){this.open=false;for(const f of this.listeners.close||[])f();},showModal(){this.open=true;},files:[]});
     return nodes.get(id);
   };
-  let calls=0,decode,vibrations=0,stopped=0,respond=async()=>{throw Error('network unavailable');};
+  Object.assign(get('asset-camera-video'),{play:async()=>{},pause(){},readyState:2,videoWidth:2,videoHeight:2});
+  get('created').getContext=()=>({drawImage(){},getImageData:()=>({data:new Uint8ClampedArray(16)})});
+  let calls=0,vibrations=0,stopped=0,respond=async()=>{throw Error('network unavailable');};
   const context={
     document:{createElement:()=>get('created'),getElementById:get,querySelectorAll:()=>[],addEventListener(k,f){(listeners[k]??=[]).push(f);},dispatchEvent(e){for(const f of listeners[e.type]||[])f(e);}},
     window:{AssetLedger:{catalog:{can_manage:true,campuses:[]},showDialog(){},esc:String,input(){},reason(){},options(){},api:async(...args)=>{calls++;return respond(...args);}},AssetUnits:{selection:[]},isSecureContext:true,addEventListener(k,f){(windowListeners[k]??=[]).push(f);}},
     navigator:{vibrate(){vibrations++;},mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){stopped++;}}]})}},
-    ZXing:{BrowserMultiFormatReader:class{reset(){} async decodeFromStream(s,v,cb){decode=cb;}}},
+    HTMLMediaElement:{HAVE_CURRENT_DATA:2},
+    ZXing:{MultiFormatReader:class{reset(){} decode(){return {getText:()=>'{on:SYNTHETIC,pc:C123,pm:TEST,qty:2}'};}},RGBLuminanceSource:class{},BinaryBitmap:class{},HybridBinarizer:class{}},
     CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}},AbortController,setTimeout(fn,ms){timers.set(++timerID,{fn,ms});return timerID;},clearTimeout(id){timers.delete(id);},
     matchMedia:()=>({matches:false}),Map,console
   };
   vm.createContext(context);
   for(const f of ['static/asset-scan.js','static/asset-camera.js'])vm.runInContext(fs.readFileSync(f,'utf8'),context,{filename:f});
-  return {get,context,expire(){for(const [id,t] of [...timers])if(t.ms>=1000){timers.delete(id);t.fn();}},set respond(f){respond=f;},get calls(){return calls;},get vibrations(){return vibrations;},get stopped(){return stopped;},emit:name=>{for(const f of windowListeners[name]||[])f();},frame:()=>decode({getText:()=>'{on:SYNTHETIC,pc:C123,pm:TEST,qty:2}'}),tick:()=>new Promise(r=>setImmediate(r))};
+  return {get,context,expire(){for(const [id,t] of [...timers])if(t.ms>=1000){timers.delete(id);t.fn();}},set respond(f){respond=f;},get calls(){return calls;},get vibrations(){return vibrations;},get stopped(){return stopped;},emit:name=>{for(const f of windowListeners[name]||[])f();},frame:()=>{const entry=[...timers].find(([,t])=>t.ms===260);if(entry){timers.delete(entry[0]);entry[1].fn();}},tick:()=>new Promise(r=>setImmediate(r))};
 }
 
 test('camera releases tracks when a departing frame no longer exposes scanner globals',async()=>{
