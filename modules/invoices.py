@@ -368,7 +368,10 @@ def save_json(path, data):
 
 
 load_meta = lambda: load_json(META_FILE)
-save_meta = lambda d: save_json(META_FILE, d)
+def save_meta(data):
+    if load_meta() != data:
+        _snapshot_before_mutation()
+    save_json(META_FILE, data)
 def load_cache():
     cache = load_json(CACHE_FILE, decimal_numbers=True)
     for key, entry in cache.items():
@@ -717,7 +720,9 @@ def move_invoice_file(inv_id, new_status):
 
     try:
         old_rel = os.path.relpath(old_path, BASE_DIR).replace('\\', '/')
-        if os.path.isfile(old_path): shutil.move(old_path, new_path)
+        if os.path.isfile(old_path):
+            _snapshot_before_mutation(old_path, new_path)
+            shutil.move(old_path, new_path)
         new_rel = os.path.relpath(new_path, BASE_DIR).replace('\\', '/')
         inv_meta['rel_path'] = new_rel
         inv_meta['filename'] = os.path.basename(new_path)
@@ -837,6 +842,7 @@ def _do_move(results, meta, inv_id, old_path, new_path, month, status):
 
     try:
         if os.path.isfile(old_path):
+            _snapshot_before_mutation(old_path, new_path)
             shutil.move(old_path, new_path)
             results['moved'] += 1
             old_rel = os.path.relpath(old_path, BASE_DIR).replace('\\', '/')
@@ -1067,14 +1073,14 @@ def _fail_invoice_snapshot():
         logging.error('无法保存发票快照失败状态，请检查发票目录权限和磁盘空间')
 
 
-def _publish_invoice_snapshot():
+def _publish_invoice_snapshot(records=None):
     """Publish a complete scan atomically; failed scans retain the last snapshot.
 
     These records contain only scan results. Permissions and ownership are
     checked again on every read, never trusted from this persisted cache.
     """
     try:
-        records = scan_invoices(persist_cache=False)
+        records = scan_invoices(persist_cache=False) if records is None else records
         for item in records:
             item['amount'] = str(item['amount'])
         generation = uuid.uuid4().hex
@@ -1432,6 +1438,7 @@ def api_invoice_update():
             while os.path.exists(dest):
                 dest = os.path.join(directory, f'{stem}_{counter}{ext}')
                 counter += 1
+            _snapshot_before_mutation(source, dest)
             shutil.move(source, dest)
             # Build the public relative path from validated logical components;
             # avoid platform-specific path rendering on Windows.
@@ -1921,6 +1928,7 @@ def _commit_upload(tmp_path, new_path, meta, rel_path, amount, vendor):
         raise RuntimeError('入库信息保存失败，临时文件已保留，请稍后重试') from exc
     try:
         # Both paths normally share INVOICES_DIR. EXDEV is an error, not a copy.
+        _snapshot_before_mutation(tmp_path, new_path)
         os.rename(tmp_path, new_path)
     except OSError as exc:
         try:
@@ -2220,6 +2228,8 @@ def api_organize_preview():
 @finance_required
 # ---- 刷新 PDF 金额（管理，后台任务）----
 def api_refresh():
+    _snapshot_before_mutation()
+    g.invoice_snapshot_force = True
     invoices = scan_invoices(use_cache=False)
     cache = {}
     for inv in invoices:
@@ -2227,6 +2237,7 @@ def api_refresh():
             cache[inv['id']] = {'amount': inv['amount'], 'vendor': inv['vendor'],
                                 'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     save_cache(cache)
+    g.invoice_snapshot_scanned = invoices
     pdf_count = sum(1 for i in invoices if i['source'] == 'PDF')
     return jsonify({'success': True, 'total': len(invoices), 'pdf_extracted': pdf_count,
                     'message': f"刷新完成：共 {len(invoices)} 张，{pdf_count} 张从PDF提取金额"})
@@ -2395,24 +2406,55 @@ def _invoices_guard():
             reply.headers['Retry-After'] = '5'
             return reply
         g.invoice_lock_held = True
-        if request.endpoint in _SNAPSHOT_WRITE_ENDPOINTS:
-            try:
-                _begin_invoice_snapshot()
-            except (OSError, RuntimeError) as exc:
-                logging.warning('无法开始发票快照更新: %s', exc)
-                return jsonify(success=False, error='发票状态保存失败，请稍后重试'), 503
-            g.invoice_snapshot_write = True
     return None
+
+
+def _file_stamp(path):
+    try:
+        stat = os.stat(path)
+        return stat.st_ino, stat.st_size, stat.st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def _snapshot_before_mutation(*paths):
+    # Called only after business validation, immediately before an actual
+    # metadata/file operation. Track affected paths, never walk all PDFs here.
+    if not has_request_context() or request.endpoint not in _SNAPSHOT_WRITE_ENDPOINTS:
+        return
+    if not hasattr(g, 'invoice_snapshot_change'):
+        change = {'meta': load_meta(), 'files': {}, 'state': load_json(SNAPSHOT_STATE_FILE),
+                  'state_exists': os.path.exists(SNAPSHOT_STATE_FILE)}
+        _begin_invoice_snapshot()
+        g.invoice_snapshot_change = change
+    for path in paths:
+        g.invoice_snapshot_change['files'].setdefault(path, _file_stamp(path))
+
+
+def _complete_request_snapshot(failed=False):
+    change = g.pop('invoice_snapshot_change', None)
+    if change is None:
+        return
+    try:
+        changed = (g.pop('invoice_snapshot_force', False) or change['meta'] != load_meta()
+                   or any(_file_stamp(path) != before for path, before in change['files'].items()))
+        if changed:
+            _publish_invoice_snapshot(g.pop('invoice_snapshot_scanned', None))
+            if failed:
+                # A failed batch can still have durable partial writes. Publish
+                # their complete truth, but retain the visible failure warning.
+                _fail_invoice_snapshot()
+        elif change['state_exists']:
+            save_json(SNAPSHOT_STATE_FILE, change['state'])
+        elif os.path.exists(SNAPSHOT_STATE_FILE):
+            os.remove(SNAPSHOT_STATE_FILE)
+    except (OSError, RuntimeError, ValueError):
+        _fail_invoice_snapshot()
 
 
 @bp.after_request
 def _finish_invoice_snapshot(response):
-    if getattr(g, 'invoice_snapshot_write', False):
-        g.invoice_snapshot_write = False
-        if response.status_code >= 500:
-            _fail_invoice_snapshot()
-        else:
-            _publish_invoice_snapshot()
+    _complete_request_snapshot(response.status_code >= 500)
     if hasattr(g, 'invoice_snapshot_state'):
         response.headers['X-Invoice-Snapshot-State'] = g.invoice_snapshot_state
         if getattr(g, 'invoice_snapshot_updated_at', ''):
@@ -2422,9 +2464,7 @@ def _finish_invoice_snapshot(response):
 
 @bp.teardown_request
 def _release_invoice_lock(exc):
-    if getattr(g, 'invoice_snapshot_write', False):
-        g.invoice_snapshot_write = False
-        _fail_invoice_snapshot()
+    _complete_request_snapshot(failed=True)
     if getattr(g, 'invoice_lock_held', False):
         g.invoice_lock_held = False
         _invoice_lock.release()

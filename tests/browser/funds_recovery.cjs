@@ -33,6 +33,11 @@ const root = path.resolve(__dirname, '../..');
         password='Funds-recovery-password-2026';
       }
       await page.goto(base+'/funds/');
+      await page.locator('#funds-ledger-state').filter({hasText:'TXT 台账已同步'}).waitFor();
+      const ledgerBefore=(await api('/funds/api/records')).body.data;
+      await page.locator('#funds-ledger-repair').click();
+      await page.locator('#funds-feedback').filter({hasText:'资金记录未改变'}).waitFor();
+      assert.deepEqual((await api('/funds/api/records')).body.data,ledgerBefore);
       for(const mode of ['html','truncated','structure','mismatch','server-error']){
         await page.locator('[data-bs-target="#t-add"]').click();
         await page.locator('#aT').selectOption('进');
