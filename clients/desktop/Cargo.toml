@@ -1,6 +1,6 @@
 [package]
 name = "xtyf-manager"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2021"
 description = "巡天御风管理系统本地客户端"
 authors = ["巡天御风 <1546742976@qq.com>"]

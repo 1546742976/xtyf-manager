@@ -36,6 +36,20 @@ fn release(bundle: Bundle,sequence:u64) -> Release { Release { format:1,sequence
     assert!(parse_release_with_key(&vec![b' ';METADATA_LIMIT as usize+1],key).is_err());
     assert!(parse_release_with_key(br#"{"ok":true,"available":false}"#,key).unwrap().is_none());
 }
+#[test] fn parses_beta_release_versions_and_preserves_semver_precedence() {
+    assert_eq!(client_version("1.2.0"), Some(([1, 2, 0], false)));
+    assert_eq!(client_version("1.2.0-beta.1"), Some(([1, 2, 0], true)));
+    assert!(client_version("1.2.0-beta.0").is_none());
+    assert!(client_version("1.2.0-beta.01").is_none());
+    assert!(client_version("1.2.0-alpha.1").is_none());
+    assert!(client_version("1.2").is_none());
+
+    assert_eq!(version_meets_minimum([1, 2, 0], "1.2.0-beta.1"), Some(false));
+    assert_eq!(version_meets_minimum([1, 2, 0], "1.2.0"), Some(true));
+    assert_eq!(version_meets_minimum([1, 0, 10], "1.2.0-beta.1"), Some(true));
+    assert_eq!(version_meets_minimum([2, 0, 0], "1.2.0-beta.1"), Some(false));
+}
+
 #[test] fn compatibility_checks_protocol_bridge_capability_and_version() {
     let (bundle,_)=fixture("A");assert!(compatibility(&bundle).is_ok());
     for change in 0..5 {let mut bad=bundle.clone();match change {0=>bad.protocol_min=2,1=>bad.bridge_min=3,2=>bad.capabilities.push("unknown".into()),3=>bad.min_client_version="99.0.0".into(),_=>bad.min_client_version="invalid".into()};assert!(compatibility(&bad).is_err());}

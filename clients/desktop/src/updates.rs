@@ -102,7 +102,7 @@ pub(crate) fn parse_release_with_key(bytes: &[u8], key: &str) -> Result<Option<(
         || bundle.url != format!("/api/client/ui/{}.zip", bundle.id) || bundle.size == 0 || bundle.size > ZIP_LIMIT
         || bundle.unpacked_size == 0 || bundle.unpacked_size > UNPACKED_LIMIT || bundle.file_count == 0 || bundle.file_count > FILE_LIMIT
         || bundle.protocol_min > bundle.protocol_max || bundle.version.is_empty()
-        || release.installers.values().any(|i| !safe_url(&i.url) || !valid_hash(&i.sha256) || version(&i.version).is_none()) {
+        || release.installers.values().any(|i| !safe_url(&i.url) || !valid_hash(&i.sha256) || client_version(&i.version).is_none()) {
         return Err(invalid("清单字段"));
     }
     Ok(Some((release, hash(&payload))))
@@ -112,11 +112,29 @@ fn version(value: &str) -> Option<[u64; 3]> {
     if parts.len() != 3 || parts.iter().any(|s| s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit())) { return None; }
     Some([parts[0].parse().ok()?, parts[1].parse().ok()?, parts[2].parse().ok()?])
 }
+/// Parse stable versions and the only supported prerelease channel (beta.N).
+/// The bool is true for prereleases, which sort below the matching stable version.
+fn client_version(value: &str) -> Option<([u64; 3], bool)> {
+    if let Some((stable, beta)) = value.split_once("-beta.") {
+        if beta.is_empty() || beta.starts_with('0') || !beta.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        beta.parse::<u64>().ok()?;
+        Some((version(stable)?, true))
+    } else {
+        Some((version(value)?, false))
+    }
+}
+fn version_meets_minimum(minimum: [u64; 3], current: &str) -> Option<bool> {
+    let (current, prerelease) = client_version(current)?;
+    Some(current > minimum || (current == minimum && !prerelease))
+}
 pub fn compatibility(bundle: &Bundle) -> Result<(), String> {
     if !(bundle.protocol_min..=bundle.protocol_max).contains(&1) { return Err("业务协议不兼容，请升级客户端".into()); }
     if bundle.bridge_min > 2 || bundle.capabilities.iter().any(|c| !CAPABILITIES.contains(&c.as_str())) { return Err("新版页面需要新的原生能力，请升级客户端".into()); }
     let minimum = version(&bundle.min_client_version).ok_or_else(|| invalid("最低客户端版本"))?;
-    if minimum > version(env!("CARGO_PKG_VERSION")).unwrap() { return Err(format!("请先升级客户端至 {} 或更高版本", bundle.min_client_version)); }
+    if !version_meets_minimum(minimum, env!("CARGO_PKG_VERSION"))
+        .ok_or_else(|| invalid("当前客户端版本"))? { return Err(format!("请先升级客户端至 {} 或更高版本", bundle.min_client_version)); }
     Ok(())
 }
 fn linux_distribution() -> bool {
