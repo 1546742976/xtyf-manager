@@ -62,7 +62,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const more = document.getElementById("audit-more");
     more.disabled = true;
     try {
-      const data = await api(`/api/admin/audit${!reset && nextBefore ? `?before=${nextBefore}` : ""}`);
+      const level = document.getElementById("audit-level")?.value || "critical";
+      const data = await api(`/api/admin/audit?level=${encodeURIComponent(level)}${!reset && nextBefore ? `&before=${nextBefore}` : ""}`);
       const rows = data.events.map((event) => `<tr><td>${escape(event.created_at)}</td><td>${escape(event.actor_name || "未登录")} ${event.actor_id ? `#${Number(event.actor_id)}` : ""}</td><td>${escape(event.action)}<br><small>${escape(event.method)} ${escape(event.target)}</small></td><td>${escape({success: "成功", failure: "失败", partial: "部分成功", pending: "未完成"}[event.outcome] || event.outcome)} ${event.http_status || ""}</td><td><details><summary>查看摘要</summary><pre class="audit-details">${escape(event.details)}</pre></details></td></tr>`).join("");
       const host = document.getElementById("audit-events");
       if (reset) host.innerHTML = rows || '<tr><td colspan="5">暂无操作记录</td></tr>';
@@ -79,6 +80,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   let auditLoading=false;
   document.getElementById("audit-refresh").addEventListener("click", () => loadAudit(true));
+  document.getElementById("audit-level")?.addEventListener("change", () => loadAudit(true));
   document.getElementById("audit-more").addEventListener("click", () => loadAudit(false));
   loadMembers().catch((error) => { result.textContent = error.message; });
   loadAudit(true);
