@@ -160,9 +160,22 @@ async function adjustCrop(page, mobile) {
       browser = await engine.launch({headless:true, ...(executablePath ? {executablePath} : {})});
       const context = await browser.newContext(mobile ? {...devices['iPhone 13'], reducedMotion:'reduce'} :
         {viewport:{width:1280, height:900}, reducedMotion:'reduce'});
-      // Public assets must load locally; no network CDN fallback is permitted.
-      await context.route(/^https:\/\/(cdn\.bootcdn\.net|cdn\.jsdelivr\.net)\//, route => route.abort());
-      assert.equal((await context.request.get(base+'/vendor/bootstrap/bootstrap.min.css')).status(),200);
+      // Keep the real Bootstrap resources, but remove CDN availability from this
+      // avatar regression. Versions match the URLs in the funds page.
+      const bootstrap = path.dirname(require.resolve('bootstrap/package.json'));
+      const icons = path.dirname(require.resolve('bootstrap-icons/package.json'));
+      const resources = {
+        'bootstrap.min.css': path.join(bootstrap, 'dist/css/bootstrap.min.css'),
+        'bootstrap.bundle.min.js': path.join(bootstrap, 'dist/js/bootstrap.bundle.min.js'),
+        'bootstrap-icons.min.css': path.join(icons, 'font/bootstrap-icons.min.css'),
+        'bootstrap-icons.css': path.join(icons, 'font/bootstrap-icons.css'),
+        'bootstrap-icons.woff': path.join(icons, 'font/fonts/bootstrap-icons.woff'),
+        'bootstrap-icons.woff2': path.join(icons, 'font/fonts/bootstrap-icons.woff2'),
+      };
+      await context.route(/^https:\/\/(cdn\.bootcdn\.net|cdn\.jsdelivr\.net)\//, route => {
+        const resource = resources[path.posix.basename(new URL(route.request().url()).pathname)];
+        return resource ? route.fulfill({path:resource}) : route.continue();
+      });
       const page = await context.newPage(); currentPage = page;
       await page.addInitScript(() => {
         const original = window.fetch;
