@@ -174,6 +174,8 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     checks.push('dashboard daily block below work hints on right at 1280/1606; no overflow at seven widths');
 
     // Personal work comes first; each group retains composite urgency ranking.
+    // Daily cards load independently; wait for the task/account snapshot as well.
+    await page.waitForFunction(() => Boolean(state.me?.id));
     const homeRanking = await page.evaluate(() => {
       const self = Number(state.me.id);
       state.tasks = [
@@ -211,6 +213,39 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
       await phone.goto(base+'/tasks?type=daily#create');await ready(phone);assert.equal(await phone.locator('#task-create-type').inputValue(),'daily');await phone.locator('#daily-form [name=title]').fill('WebKit 日常草稿');
       await phone.locator('#task-create-type').selectOption('vehicle');await ready(phone);await phone.locator('#task-create-type').selectOption('daily');await ready(phone);assert.equal(await phone.locator('#daily-form [name=title]').inputValue(),'WebKit 日常草稿');
       assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);checks.push('iPhone WebKit simulated create, close and shared type switching');
+    }
+    // Ordinary members must be able to finish both creation forms, not merely see them.
+    for (const engine of ['chromium', 'webkit']) {
+      const username='creator_'+engine;
+      const created=await api(page,'/api/member',{name:username,username,password:'member-initial',role:'member'});
+      assert.equal(created.status,200);
+      const memberBrowser=engine==='chromium'?browser:await webkit.launch({headless:true,...(process.env.REVIEW_WEBKIT_PATH?{executablePath:process.env.REVIEW_WEBKIT_PATH}:{})});
+      const context=await memberBrowser.newContext({viewport:{width:390,height:844}});
+      try {
+        const memberPage=await context.newPage();memberPage.on('pageerror',error=>errors.push(error.message));
+        await memberPage.goto(base+'/login');
+        await memberPage.locator('[name=username]').fill(username);await memberPage.locator('[name=password]').fill('member-initial');
+        await memberPage.locator('#login-form [type=submit]').click();await memberPage.waitForURL('**/account');
+        assert.equal((await api(memberPage,'/api/password',{old:'member-initial',new:'member-updated'})).status,200);
+        await memberPage.goto(base+'/tasks#create');await ready(memberPage);
+        await memberPage.locator('#create-form [name=title]').fill(engine+'成员造车任务');
+        await memberPage.locator('#create-owner').selectOption(String(created.body.id));
+        await memberPage.locator('#create-form [type=submit]').click();
+        await memberPage.locator('#task-create-feedback').filter({hasText:'任务已创建'}).waitFor();
+        await memberPage.goto(base+'/tasks?type=daily#create');await ready(memberPage);
+        await memberPage.locator('#daily-form [name=title]').fill(engine+'成员日常任务');
+        await memberPage.locator(`[name=enabled][value=${mechanical}]`).check();
+        await memberPage.locator(`[name=owners-${mechanical}][value="${created.body.id}"]`).check();
+        await memberPage.locator('#daily-form [type=submit]').click();
+        await memberPage.waitForURL(/project=\d+/);
+        await memberPage.locator('#daily-edit').waitFor({state:'visible'});
+        assert.equal(await memberPage.locator('#daily-edit').count(),1);
+        await memberPage.locator('#daily-edit').click();await memberPage.locator('#daily-form [name=title]').waitFor();
+        assert.equal(await memberPage.locator('#daily-form [name=status],#daily-form [name=enabled]').count(),0);
+        await memberPage.keyboard.press('Escape');
+        assert.equal((await api(memberPage,'/api/projects',{name:'不可越权'})).status,403);
+        checks.push(engine+' ordinary member completes vehicle and daily creation; management remains restricted');
+      } finally {await context.close();if(engine==='webkit')await memberBrowser.close();}
     }
     assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:true,checks,errors},null,2));console.log('TASK_CENTER_BROWSER_OK '+JSON.stringify(checks));
   } catch(error) { console.error(error);console.error(errors);console.error(log.slice(-2000));process.exitCode=1; }

@@ -33,3 +33,5 @@ body { background: var(--bg); font-family: system-ui, -apple-system, "Segoe UI",
 #chartImg { max-width: 100%; border-radius: 8px; }
 #sumC table { font-size: 12px; }
 
+
+@media(max-width:767px){.ux-funds .nav-link,.ux-funds .btn-sm,.ux-funds .form-select-sm{min-height:44px}.ux-funds .btn-sm{min-width:44px}}

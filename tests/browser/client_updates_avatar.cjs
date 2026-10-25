@@ -16,7 +16,7 @@ execFileSync(python, ['-B','clients/build_frontend.py','--output-dir',dist], {cw
 const fixture = execFileSync(python, ['-c','from PIL import Image; import sys; im=Image.new("RGB",(96,64),"#268eb0"); im.paste("#e8a070",(20,10,60,40)); im.save(sys.stdout.buffer,format="PNG")']);
 // DocumentsProvider metadata can be generic; the native reader identifies the original bytes.
 const file = {handle:'session-avatar-1', name:'synthetic.png', mime:'application/octet-stream', size:fixture.length};
-const mime = {'.js':'application/javascript','.css':'text/css','.html':'text/html','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2'};
+const mime = {'.js':'application/javascript','.mjs':'application/javascript','.css':'text/css','.html':'text/html','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2'};
 const server = http.createServer((req,res) => {
   const relative = decodeURIComponent(new URL(req.url,'http://local').pathname).slice(1) || 'index.html';
   const filename = path.resolve(dist, relative);
@@ -66,11 +66,11 @@ async function main() {
     await context.exposeFunction('__testNative',async(action,args)=>{
       state.calls.push({action,args});
       const update=()=>({status:state.pending?'pending':'current',currentVersion:state.current,pendingVersion:state.pending,message:state.pending?'新页面已下载，将在下次启动生效。':'当前页面已是最新版本。',installer:{version:'1.0.11',url:'/api/client/installers/test',sha256:'a'.repeat(64)}});
-      if(action==='get_config')return {serverUrl:base,version:'1.0.10',bridgeVersion:2,capabilities:state.capable?['ui_updates','image_preview']:['ui_updates'],platform:label==='webkit'?'android':'windows-x86_64'};
+      if(action==='get_config')return {serverUrl:base,version:'1.0.10',bridgeVersion:2,capabilities:state.capable?['ui_updates','image_preview','pdf_save']:['ui_updates'],platform:label==='webkit'?'android':'windows-x86_64'};
       if(action==='check_updates'||action==='update_status')return update();
       if(action==='apply_update'){state.applies++;state.current=state.pending;state.pending=null;return {};}
       if(action==='ui_ready'||action==='cancel')return {};
-      if(action==='download')return {cancelled:true};
+      if(action==='download'){if(args.pdfBody)state.onPdfSave?.();return {cancelled:true};}
       if(action==='pick_files')return [file];
       if(action==='read_selected_image'){assert.equal(args.handle,file.handle);return {body:fixture.toString('base64'),mime:'image/png',size:file.size};}
       if(action==='request'||action==='read_resource'){
@@ -141,6 +141,17 @@ async function main() {
     await account().locator('#avatar-remove').click();await account().locator('#avatar-result').filter({hasText:'已恢复'}).waitFor();
     assert.equal(await account().locator('[data-avatar-image]').count(),0);assert.equal(await page.evaluate(()=>XTYF.bootstrap.me.avatar_url),null);
     await page.screenshot({path:path.join(output,label+'-account.png'),fullPage:true});
+    activePhase='packaged asset PDF';
+    const itemReply=await transport({path:'/api/assets/catalog/items',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:crypto.randomUUID(),name:'客户端中文标签 '+label,kind:'consumable',unit:'颗'})});
+    assert.equal(itemReply.status,200);const material=JSON.parse(itemReply.body);
+    await page.evaluate(()=>XTYF.navigate('/assets'));await account().locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
+    await page.evaluate(async id=>{await document.querySelector('#page-host iframe').contentWindow.AssetLabels.open([{id,name:'客户端中文标签'}]);},material.id);
+    const pdfSaved=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('PDF native save not invoked')),15000);state.onPdfSave=()=>{clearTimeout(timer);resolve();};});
+    await account().locator('#asset-label-download').click();await pdfSaved;
+    assert(state.calls.some(c=>c.action==='read_resource'&&c.args.path.startsWith('/api/assets/labels.pdf?')));
+    assert(state.calls.some(c=>c.action==='download'&&c.args.pdfBody&&Buffer.from(c.args.pdfBody,'base64').subarray(0,5).toString()==='%PDF-'));
+    assert(!state.calls.some(c=>c.action==='request'&&c.args.path.startsWith('/vendor/pdfjs/')),'PDF resources must stay local');
+    await account().locator('#asset-label-close').click();await page.evaluate(()=>XTYF.navigate('/account'));await account().locator('h1').waitFor();
     activePhase='capability reload';state.capable=false;await restartDocument();await account().locator('h1').waitFor();await page.waitForFunction(()=>XTYF.compatible);
     assert.equal(await account().locator('#avatar-editor').isVisible(),false);
     activePhase='incompatible bootstrap reload';state.incompatible=true;await restartDocument();await page.getByRole('heading',{name:'服务器需要更新'}).waitFor();

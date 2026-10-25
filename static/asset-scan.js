@@ -12,7 +12,37 @@
   let nextEntry=0,localEdit=null;
   const effectiveItem=v=>v.item||v.draft&&({...v.draft,active:true,tracking:v.draft.kind==='returnable'?(v.draft.returnable_mode||'unit'):'quantity'});
   let task='general',context={},resolved=null,sequence=0,refreshAfterSave=false;
-  let receiptLookups=Promise.resolve(),batchReason='';
+  let batchReason='';
+  let receiptEpoch=0;
+  const lookupJobs=new Map();let activeLookups=0,flushingLookups=false;
+  function drainLookups(){
+    if(flushingLookups)return;
+    for(const job of lookupJobs.values()){
+      if(activeLookups>=4)break;
+      if(job.started)continue;
+      job.started=true;activeLookups++;
+      Promise.resolve().then(()=>job.done?undefined:core.api('scan/resolve',{raw:job.raw},{signal:job.controller.signal}))
+        .then(value=>job.finish(null,value),error=>job.finish(error));
+    }
+  }
+  function lookup(raw,key){
+    lookupJobs.get(key)?.cancel();
+    return new Promise((resolve,reject)=>{
+      const job={raw,controller:new AbortController(),started:false,done:false};
+      job.finish=(error,value)=>{
+        if(job.done)return;job.done=true;clearTimeout(job.timer);
+        if(lookupJobs.get(key)===job)lookupJobs.delete(key);
+        if(job.started)activeLookups--;
+        if(error){job.controller.abort();reject(error);}else resolve(value);
+        drainLookups();
+      };
+      job.cancel=()=>job.finish(new Error('识别已中断，请重试'));
+      // Includes queue wait; even a native bridge ignoring AbortSignal cannot
+      // retain the scheduler slot or apply its eventual stale response.
+      job.timer=setTimeout(()=>job.finish(new Error('查询超时，标签已保留，请重试')),15000);
+      lookupJobs.set(key,job);drainLookups();
+    });
+  }
   const status=message=>$('asset-scan-status').textContent=message;
   const button=(action,label,primary=false,extra='')=>`<button type="button" class="btn${primary?' primary':''}" data-scan-action="${action}" ${extra}>${label}</button>`;
   const officialUrl=code=>/^C[1-9][0-9]{0,17}$/.test(code||'')?'https://www.lcsc.com/product-detail/'+code+'.html':'';
@@ -38,12 +68,13 @@
     return '';
   }
   function refreshReceipt(entry){
+    const epoch=receiptEpoch;
     const token=(entry.lookup||0)+1;entry.lookup=token;entry.state='loading';entry.error='';
-    receiptLookups=receiptLookups.then(async()=>{
-      if(packages.get(entry.key)!==entry||entry.lookup!==token)return;
+    const result=(async()=>{
+      if(epoch!==receiptEpoch||packages.get(entry.key)!==entry||entry.lookup!==token)return {status:'stale'};
       try{
-        const value=await core.api('scan/resolve',{raw:entry.parsed.raw});
-        if(packages.get(entry.key)!==entry||entry.lookup!==token)return;
+        const value=await lookup(entry.parsed.raw,entry.key);
+        if(epoch!==receiptEpoch||packages.get(entry.key)!==entry||entry.lookup!==token)return {status:'stale'};
         const edited=entry.edited?Object.fromEntries(['item','draft','draft_id','intent','code_role','force_new','conflict_reason','target_type','target_id'].map(k=>[k,entry[k]])):null;
         Object.assign(entry,value,{state:'ready'});if(edited)Object.assign(entry,edited);
         if(intake()){
@@ -56,28 +87,29 @@
         }else if(value.parsed.type!=='package')entry.error='请使用采购包装二维码；物料编号或单件标签不能作为包装批次入库';
         if(task==='receive'&&dialog.open&&currentPackages().includes(entry)){
           const issue=receiptIssue(entry);
-          feedback(issue?'attention':'success',entry.item?.name||entry.supplier_lookup?.product?.name||entry.parsed.code||'待处理标签',issue||`标签数量 ${entry.parsed.label_quantity??'待填写'} · 已加入清单`);
+          feedback(issue?'attention':'success',entry.item?.name||entry.supplier_lookup?.product?.name||entry.parsed.code||'待处理标签',issue||`标签数量 ${entry.parsed.label_quantity??'待填写'} · 已加入清单`,true);
         }
       }catch(error){
-        if(packages.get(entry.key)!==entry||entry.lookup!==token)return;
+        if(epoch!==receiptEpoch||packages.get(entry.key)!==entry||entry.lookup!==token)return {status:'stale'};
         entry.state='error';entry.error=error.message;
         if(task==='receive'&&dialog.open)feedback('error','此条查询失败','标签已保留，可以在清单中重试');
       }
       if(task==='receive'){queue();if(resolved===entry&&!entry.error)renderResult(entry);}
-    });
+      return entry.error?{status:'failure',message:entry.error}:{status:'success'};
+    })();
     if(task==='receive')queue();
-    return receiptLookups;
+    return result;
   }
   function collectReceipt(raw){
     raw=typeof raw==='string'?raw.trim():'';
-    if(!raw||raw.length>4096){status('标签内容为空或过长');feedback('error','未加入清单','请重新扫描有效包装标签',true);return false;}
-    if([...packages.values()].some(v=>v.parsed.raw===raw)){status('同一标签已在清单中，不重复累计数量；确为另一物品可从清单选择“新增重码条目”。');feedback('duplicate','已扫描过','此标签已在清单中，未重复增加',true);return false;}
-    if(currentPackages().length>=20){status('每批最多 20 个包装，请先核对入库。');feedback('attention','本批已满 20 个','请先核对整批入库',true);return false;}
+    if(!raw||raw.length>4096){status('标签内容为空或过长');feedback('error','未加入清单','请重新扫描有效包装标签',true);return {status:'failure',message:'标签内容为空或过长'};}
+    if([...packages.values()].some(v=>v.parsed.raw===raw)){status('同一标签已在清单中，不重复累计数量；确为另一物品可从清单选择“新增重码条目”。');feedback('duplicate','已扫描过','此标签已在清单中，未重复增加',true);return {status:'duplicate'};}
+    if(currentPackages().length>=20){status('每批最多 20 个包装，请先核对入库。');feedback('attention','本批已满 20 个','请先核对整批入库',true);return {status:'failure',message:'每批最多 20 个包装'};}
     const key='scan-'+(++nextEntry),entry={key,parsed:{raw},item:null,state:'loading',scopeItemId:Number(context.itemId)||null,campusId:context.campusId||''};
     packages.set(key,entry);$('asset-scan-raw').value='';
-    refreshReceipt(entry);status(`已收集 ${currentPackages().length} 个标签，可继续扫描；查询结果会更新到清单。`);
-    feedback('accepted','已读到标签','已加入清单，正在查询资料；请继续扫描',true);
-    return true;
+    const lookup=refreshReceipt(entry);status(`已收集 ${currentPackages().length} 个标签，可继续扫描；查询结果会更新到清单。`);
+    feedback('loading','正在识别标签','已保留标签，等待查询结果');
+    return lookup;
   }
   const currentUnits=()=>{
     const key=task+':'+(task==='count'?context.takeId||'':context.itemId||'');
@@ -96,6 +128,7 @@
     feedback('idle',taskNames[task],hints[task]);
   }
   function open(value='general',nextContext={}){
+    cancel();
     clearResult();context={...nextContext};setTask(aliases[value]||value);
     core.showDialog(dialog);status(hints[task]+(context.takeId?' 当前盘点 #'+context.takeId+'。':''));
     $('asset-scan-raw').value='';
@@ -190,7 +223,7 @@
     if(task==='receive')return collectReceipt(raw);
     const own=++sequence;resolved=null;$('asset-scan-preview').replaceChildren();status('正在识别标签并查询资料…');
     try{
-      const value=await core.api('scan/resolve',{raw});if(own!==sequence)return false;
+      const value=await lookup(raw,'general');if(own!==sequence)return {status:'stale'};
       resolved=value;renderResult(value);queue();
       let message=value.parsed.quantity_error||'已识别，库存尚未改变。';
       if(context.itemId&&value.item&&Number(context.itemId)!==value.item.id)message='扫描结果不是当前物料，请核对标签后重扫。';
@@ -198,8 +231,8 @@
         if(task==='count'&&!context.takeId)message='已找到实物。请选择盘点任务，再扫描加入该任务。';
         else message=addUnit(value);
       }
-      status(message);$('asset-scan-raw').value='';feedback('success',value.item?.name||value.supplier_lookup?.product?.name||value.parsed.code||'识别成功',message,true);return true;
-    }catch(error){if(own===sequence){status(error.message);feedback('error','识别未完成',error.message,true);}return false;}
+      status(message);$('asset-scan-raw').value='';feedback('success',value.item?.name||value.supplier_lookup?.product?.name||value.parsed.code||'识别成功',message,true);return {status:'success'};
+    }catch(error){if(own!==sequence)return {status:'stale'};status(error.message);feedback('error','识别未完成',error.message,true);return {status:'failure',message:error.message};}
   }
   function receive(value){
     if(value.item.tracking==='unit'){
@@ -364,8 +397,8 @@
       if(action==='retry-package'){refreshReceipt(value);return;}
       resolved=value;renderResult(value);$('asset-scan-preview').scrollIntoView({block:'start'});return;
     }
-    if(action==='remove-package'){const value=currentPackages()[Number(element.dataset.index)];if(value){packages.delete(value.key);if(resolved===value)clearResult();}queue();return;}
-    if(action==='clear-packages'){for(const value of currentPackages()){packages.delete(value.key);if(resolved===value)clearResult();}if(!packages.size){batchReason='';drafts.clear();}queue();return;}
+    if(action==='remove-package'){const value=currentPackages()[Number(element.dataset.index)];if(value){packages.delete(value.key);lookupJobs.get(value.key)?.cancel();if(resolved===value)clearResult();}queue();return;}
+    if(action==='clear-packages'){for(const value of currentPackages()){packages.delete(value.key);lookupJobs.get(value.key)?.cancel();if(resolved===value)clearResult();}if(!packages.size){batchReason='';drafts.clear();}queue();return;}
     if(action==='batch-receive'){batchReceive();return;}
     if(action==='remove-unit'){currentUnits().delete(Number(element.dataset.unitId));queue();return;}
     if(action==='clear-units'){currentUnits().clear();queue();return;}
@@ -423,7 +456,7 @@
   $('asset-scan-raw').onkeydown=e=>{if(e.key===$('asset-scan-end').value&&!e.shiftKey&&!e.isComposing){e.preventDefault();resolve(e.target.value);}};
   dialog.addEventListener('click',e=>{const target=e.target.closest('[data-scan-action]');if(target)act(target.dataset.scanAction,target).catch(error=>status(error.message));});
   dialog.addEventListener('change',e=>{if(e.target.dataset.scanSelect){const v=packages.get(e.target.dataset.scanSelect);if(v)v.checked=e.target.checked;}});
-  dialog.addEventListener('close',()=>{sequence++;});
+  dialog.addEventListener('close',cancel);
   dialog.addEventListener('asset-dialog-resumed',()=>{
     queue();
     if(refreshAfterSave&&resolved){refreshAfterSave=false;if(task==='receive')renderResult(resolved);else resolve(resolved.parsed.raw);}
@@ -453,5 +486,14 @@
     else if(path==='units/receive'){clearResult();status('实物已入库，可以继续扫描。');}
     else if(path==='operations'){clearResult();status('操作已保存，可以继续扫描。');}
   });
-  window.AssetScan={open,resolve,dialog,get resolved(){return resolved;},get task(){return task;}};
+  function cancel(){
+    sequence++;receiptEpoch++;
+    flushingLookups=true;for(const job of [...lookupJobs.values()])job.cancel();flushingLookups=false;
+    for(const entry of packages.values())if(entry.state==='loading'){entry.lookup++;entry.state='error';entry.error='识别已中断，请重试';}
+  }
+  function retry(raw){
+    const entry=task==='receive'?[...packages.values()].find(v=>v.parsed.raw===raw):null;
+    return entry?refreshReceipt(entry):resolve(raw);
+  }
+  window.AssetScan={open,resolve,retry,cancel,dialog,get resolved(){return resolved;},get task(){return task;}};
 })();

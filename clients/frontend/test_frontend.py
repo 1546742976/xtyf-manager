@@ -44,7 +44,7 @@ class FrontendTests(unittest.TestCase):
             for dark in (False,True):
                 for forced in (False,True):
                     user={'id':42,'name':'王<&"同学','username':'tester','role':role,'group_name':'电控','must_change_password':forced,'ui_theme':'dark' if dark else 'light','theme_mode':'system','light_theme':'paw','dark_theme':'xueli'}
-                    context={'me':user,'role_names':{'admin':'管理员','manager':'项管','member':'成员'},'statuses':['未开始','进行中','已完成'],'priorities':['高','中','低'],'can_review_funds':role=='admin' and not forced,'can_review':role=='admin' and not forced,'is_finance':role=='admin' and not forced,'can_manage_invoices':role=='admin' and not forced,'page':'tasks','task_type':'daily' if dark else 'vehicle','project_id':'12' if dark else ''}
+                    context={'me':user,'role_names':{'admin':'超级管理员','manager':'项管','member':'成员'},'statuses':['未开始','进行中','已完成'],'priorities':['高','中','低'],'can_review_funds':role=='admin' and not forced,'can_review':role=='admin' and not forced,'is_finance':role=='admin' and not forced,'can_manage_invoices':role=='admin' and not forced,'page':'tasks','task_type':'daily' if dark else 'vehicle','project_id':'12' if dark else ''}
                     for name in self.templates:
                         fixtures.append({'name':name,'context':context,'expected':env.get_template(name).render(**context)})
         context={'me':None,'page':'login','role_names':{}}
@@ -64,12 +64,24 @@ class FrontendTests(unittest.TestCase):
         for name in ('index.html','page-runtime.js','external.html','vendor/bootstrap/bootstrap.min.css','vendor/bootstrap-icons/fonts/bootstrap-icons.woff2','vendor/pdfjs/pdf.mjs','vendor/pdfjs/pdf.worker.mjs'):
             self.assertIn(name,self.manifest['files'])
 
+    def test_public_bootstrap_is_not_duplicated_but_asset_scanner_remains_packaged(self):
+        lock = json.loads((ROOT/'frontend/vendor-lock.json').read_text(encoding='utf-8'))
+        for name, digest in lock['files'].items():
+            if name.startswith(('bootstrap/', 'bootstrap-icons/')):
+                self.assertEqual(hashlib.sha256((ROOT.parent/'static/vendor'/name).read_bytes()).hexdigest(), digest, name)
+        self.assertNotIn('static/vendor/bootstrap/bootstrap.min.css', self.manifest['files'])
+        self.assertNotIn('static/vendor/bootstrap-icons/bootstrap-icons.min.css', self.manifest['files'])
+        self.assertIn('static/vendor/asset-tools/zxing.js', self.manifest['files'])
+        self.assertIn('static/vendor/asset-tools/barcode.js', self.manifest['files'])
+
     def test_templates_have_no_remote_scripts_styles_or_security_shims(self):
         for name,template in self.templates.items():
             self.assertNotRegex(template,r'<(?:script|link)\b[^>]*(?:src|href)=["\']https?://',name)
         self.assertNotIn('security.js',self.templates['_security_head.html'])
         self.assertNotIn('new EventSource',(self.dist/'static/invoices.js').read_text(encoding='utf-8'))
-        self.assertIn('new XTYFJobPoller',(self.dist/'static/invoices.js').read_text(encoding='utf-8'))
+        self.assertIn('InvoiceJobPolling.create',(self.dist/'static/invoices.js').read_text(encoding='utf-8'))
+        self.assertIn('static/invoice-polling.js', self.templates['invoices.html'])
+        self.assertTrue((self.dist/'static/invoice-polling.js').is_file())
 
     def test_navigation_adaptation_preserves_unrelated_identifiers(self):
         source="location.assign('/');window.location.href='/';other.location.href='/';history.replaceState(null,'','/');"

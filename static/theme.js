@@ -77,7 +77,7 @@ document.addEventListener('DOMContentLoaded',()=>{
       results.forEach(el=>{el.textContent='外观已保存，其他设备下次打开或刷新时同步。';});
     } catch(error) {
       preferences=previous;apply();
-      results.forEach(el=>{el.classList.add('error');el.textContent=`${error.message}，已恢复原主题。`;});retries.forEach(el=>{el.hidden=false;});
+      results.forEach(el=>{el.classList.add('error');el.textContent=`${error.message.replace(/[。，\s]+$/, '')}，已恢复原主题。`;});retries.forEach(el=>{el.hidden=false;});
     } finally {
       saving=false;controls.forEach((el,i)=>{el.disabled=disabled[i];});
       if(returnFocus?.isConnected && returnFocus.getClientRects().length

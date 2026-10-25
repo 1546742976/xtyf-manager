@@ -89,7 +89,9 @@
   $('asset-objects').onclick=()=>show('objects');$('asset-takes').onclick=()=>show('takes');
   $('asset-lifecycle-close').onclick=()=>dialog.close();
   dialog.addEventListener('click',e=>{const b=e.target.closest('[data-life]');if(b)act(b.dataset.life,Number(b.dataset.id)).catch(e=>$('asset-lifecycle-status').textContent=e.message);});
-  dialog.addEventListener('asset-dialog-resumed',()=>{if(mode==='takes'&&take)detail(take.take.id).catch(e=>status(e.message));});
-  document.addEventListener('assets-loaded',()=>{$('asset-objects').hidden=!core.catalog.can_manage;$('asset-takes').hidden=!core.catalog.can_manage;if(dialog.open)refresh();});
+  dialog.addEventListener('asset-dialog-resumed',refresh);
+  const syncCatalog=()=>{$('asset-objects').hidden=!core.catalog.can_manage;$('asset-takes').hidden=!core.catalog.can_manage;if(dialog.open)refresh();};
+  document.addEventListener('assets-loaded',syncCatalog);
+  if(core.catalog)syncCatalog();
   window.AssetLifecycle={openCount};
 })();

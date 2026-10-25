@@ -26,6 +26,40 @@ public final class NativeHttpClientTest {
     }
     interface RunnableIO { void run() throws Exception; }
     public static void main(String[] args) throws Exception {
+        byte[] pdf = "%PDF-1.7\nsynthetic\n%%EOF".getBytes(StandardCharsets.UTF_8);
+        check(Arrays.equals(PdfSave.decode(Base64.getEncoder().encodeToString(pdf)), pdf), "Save exact authenticated PDF bytes");
+        fails(() -> PdfSave.decode("?"), "Reject invalid Base64");
+        fails(() -> PdfSave.decode(Base64.getEncoder().encodeToString("<html>".getBytes(StandardCharsets.UTF_8))), "Reject non PDF");
+        fails(() -> PdfSave.decode(new String(new char[28 * 1024 * 1024 + 1]).replace('\0', 'A')), "Bound PDF memory");
+        byte[] largePdf = new byte[20 * 1024 * 1024];
+        System.arraycopy(pdf, 0, largePdf, 0, pdf.length);
+        String largeEncoded = Base64.getEncoder().encodeToString(largePdf);
+        PdfSave.Prepared prepared = new PdfSave.Prepared();
+        ExecutorService decodeWorker = Executors.newSingleThreadExecutor();
+        try {
+            String uiThread = Thread.currentThread().getName();
+            String decodedThread = decodeWorker.submit(() -> {
+                prepared.prepare(largeEncoded);
+                return Thread.currentThread().getName();
+            }).get();
+            check(!uiThread.equals(decodedThread), "Large PDF is prepared off UI thread");
+            check(Arrays.equals(prepared.take(true), largePdf), "Save validated bytes without decoding again");
+            fails(() -> prepared.take(true), "Prepared PDF is consumed once");
+            PdfSave.Prepared cancelled = new PdfSave.Prepared();
+            cancelled.cancel();
+            fails(() -> cancelled.prepare(largeEncoded), "Cancel before background preparation");
+            PdfSave.Prepared cancelledSave = new PdfSave.Prepared();
+            cancelledSave.prepare(Base64.getEncoder().encodeToString(pdf));
+            cancelledSave.cancel();
+            fails(() -> cancelledSave.take(true), "Cancel releases bytes without saving");
+            PdfSave.Prepared stale = new PdfSave.Prepared();
+            stale.prepare(Base64.getEncoder().encodeToString(pdf));
+            fails(() -> stale.take(false), "Page or server switch invalidates saved bytes");
+            fails(() -> stale.take(true), "Invalidated PDF cannot revive on another page");
+            PdfSave.Prepared invalid = new PdfSave.Prepared();
+            fails(() -> invalid.prepare("?"), "Prepared invalid Base64 is rejected");
+            fails(() -> invalid.take(true), "Invalid PDF leaves no save result");
+        } finally { decodeWorker.shutdownNow(); }
         check("http://localhost:1234".equals(NativeHttpClient.normalize(" HTTP://LOCALHOST:1234/ ")), "Normalize scheme and host");
         for (String server : Arrays.asList("http://manager.skywalker-rm.online", " HTTP://MANAGER.SKYWALKER-RM.ONLINE/ "))
             check("http://manager.skywalker-rm.online".equals(NativeHttpClient.normalize(server)), "Preserve the built-in HTTP server: " + server);

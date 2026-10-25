@@ -91,10 +91,8 @@ async function checkPasswordVisibility(page, base) {
     });
     browser=await chromium.launch({headless:true});
     const context=await browser.newContext();
-    if(process.env.REVIEW_BOOTSTRAP_PATH){
-      await context.route(/https:\/\/.*\/bootstrap\.bundle\.min\.js/, route=>route.fulfill({
-        path:process.env.REVIEW_BOOTSTRAP_PATH,contentType:'application/javascript'}));
-    }
+    await context.route(/^https:\/\/(cdn\.bootcdn\.net|cdn\.jsdelivr\.net)\//,route=>route.abort());
+    assert.equal((await context.request.get(base+'/vendor/bootstrap/bootstrap.bundle.min.js')).status(),200);
     const admin=await context.newPage();
     const errors=[];
     admin.on('pageerror',error=>errors.push(error.message));
@@ -110,7 +108,7 @@ async function checkPasswordVisibility(page, base) {
     await admin.goto(base+'/invoices/');
     await admin.locator('#fileInput').setInputFiles({name:'receipt.pdf',mimeType:'application/pdf',
       buffer:Buffer.from('%PDF-1.4\nbrowser-unique-receipt')});
-    await admin.locator('#batchUploadModal.show').waitFor();
+    await admin.locator('#batchUploadModal[open]').waitFor();
     await admin.locator('#buSubmitter').selectOption(String(member.id));
     await admin.locator('.bu-amount-0').fill('99.99');
     await admin.locator('.bu-date-0').fill('2026-10-14');
@@ -118,7 +116,7 @@ async function checkPasswordVisibility(page, base) {
     const vendor="商家'-alert(9191)-'% +";
     await admin.locator('.bu-vendor-0').fill(vendor);
     await admin.locator('#batchUploadModal .btn-save').click();
-    await admin.locator('#batchUploadModal.show').waitFor({state:'hidden'});
+    await admin.locator('#batchUploadModal[open]').waitFor({state:'hidden'});
     await admin.waitForFunction(()=>document.querySelectorAll('#invoiceTableBody tr').length===1);
     assert.equal(await admin.locator('#invoiceTableBody [onclick],#invoiceTableBody [onchange]').count(),0);
     const invoices=(await api(admin,'/invoices/api/invoices')).body.data;
@@ -135,7 +133,7 @@ async function checkPasswordVisibility(page, base) {
     assert.equal((await api(memberPage,'/invoices/api/open_file?rel_path='+encodeURIComponent(invoices[0].rel_path))).status,200);
 
     // A displayed review must remain tied to its original version.
-    const record=(await api(memberPage,'/funds/api/records',{record_type:'进',amount:'5.00',record_date:'2026-10-14'})).body;
+    const record=(await api(memberPage,'/funds/api/records',{request_id:require('node:crypto').randomUUID(),record_type:'进',amount:'5.00',record_date:'2026-10-14'})).body;
     await admin.goto(base+'/funds/');
     await admin.waitForFunction(()=>typeof bootstrap!=='undefined');
     await admin.locator(`#tbody button[onclick^="reviewRecord(${record.id},"]`).waitFor();

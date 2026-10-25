@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 from flask import Blueprint, jsonify, render_template, request
+from modules.task_validation import InvalidIdError, parse_id
 
 from common import ROLE_NAMES, current_user, get_db, login_required
 from modules.security import has_permission
@@ -112,6 +113,10 @@ def text(data, key, required=True, maximum=120):
 
 
 def row(db, table, identity):
+    try:
+        identity = parse_id(identity, '记录 ID', False)
+    except InvalidIdError as exc:
+        raise Invalid(str(exc)) from exc
     value = db.execute(f"SELECT * FROM {table} WHERE id=?", (identity,)).fetchone()
     if value is None:
         raise Invalid("记录不存在", 404)
@@ -736,8 +741,10 @@ def events():
             # A transfer belongs to both campuses.
             if key == "campus_id":
                 where.append("(e.campus_id=? OR EXISTS (SELECT 1 FROM json_each(e.details,'$.deltas') d "
-                             "WHERE json_extract(d.value,'$[0]')=CAST(? AS INTEGER)))")
-                args.extend([request.args[key], request.args[key]])
+                             "WHERE json_extract(d.value,'$[0]')=CAST(? AS INTEGER)) "
+                             "OR json_extract(e.details,'$.before.campus_id')=CAST(? AS INTEGER) "
+                             "OR json_extract(e.details,'$.after.campus_id')=CAST(? AS INTEGER))")
+                args.extend([request.args[key]] * 4)
             else:
                 where.append("e.item_id=?")
                 args.append(request.args[key])

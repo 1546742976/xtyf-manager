@@ -24,6 +24,12 @@ CREATE TABLE IF NOT EXISTS daily_updates (
  created_at TEXT NOT NULL, FOREIGN KEY(project_id,stage) REFERENCES daily_groups(project_id,stage)
 );
 CREATE INDEX IF NOT EXISTS daily_updates_group ON daily_updates(project_id,stage,id);
+CREATE TABLE IF NOT EXISTS daily_changes (
+ id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL REFERENCES daily_projects(id),
+ actor_id INTEGER NOT NULL REFERENCES members(id), actor_name TEXT NOT NULL,
+ action TEXT NOT NULL, note TEXT NOT NULL, before_json TEXT NOT NULL,
+ after_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS daily_attachments (
  id INTEGER PRIMARY KEY, update_id INTEGER NOT NULL REFERENCES daily_updates(id),
  original_name TEXT NOT NULL, stored_name TEXT UNIQUE NOT NULL, mime_type TEXT NOT NULL
@@ -66,6 +72,8 @@ def migrate(db):
             if statement.strip():
                 db.execute(statement)
         columns = {row[1] for row in db.execute('PRAGMA table_info(daily_projects)')}
+        if 'created_by' not in columns:
+            db.execute('ALTER TABLE daily_projects ADD COLUMN created_by INTEGER REFERENCES members(id)')
         if 'completed_at' not in columns:
             # Historical updated_at is not evidence of completion.
             db.execute('ALTER TABLE daily_projects ADD COLUMN completed_at TEXT')
@@ -87,6 +95,11 @@ def migrate(db):
                 db.execute('UPDATE daily_groups SET label_snapshot=? WHERE stage=?', (label, stage))
         db.execute('CREATE UNIQUE INDEX IF NOT EXISTS daily_groups_catalog ON daily_groups(project_id,group_id) WHERE group_id IS NOT NULL')
         email_columns = {row[1] for row in db.execute('PRAGMA table_info(member_email)')}
+        if 'assignment_enabled' not in email_columns:
+            db.execute('ALTER TABLE member_email ADD COLUMN assignment_enabled INTEGER NOT NULL DEFAULT 1 CHECK(assignment_enabled IN (0,1))')
+        job_columns = {row[1] for row in db.execute('PRAGMA table_info(mail_jobs)')}
+        if 'payload_json' not in job_columns:
+            db.execute('ALTER TABLE mail_jobs ADD COLUMN payload_json TEXT')
         if 'verify_attempts' not in email_columns:
             db.execute('ALTER TABLE member_email ADD COLUMN verify_attempts INTEGER NOT NULL DEFAULT 0')
             # Invalidate existing link-based challenges when switching to numeric codes.

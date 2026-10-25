@@ -2,14 +2,13 @@
 <!DOCTYPE html>
 <html lang="zh-CN" {% include "_theme_attributes.html" %}>
 <head>
+<link rel="icon" href="/static/brand/app-icon-256.png">
 <meta charset="UTF-8">
 {% include "_security_head.html" %}
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>巡天御风 - 资金管理系统</title>
-<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css"
-      onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css'">
-<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css"
-      onerror="this.onerror=null;this.href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css'">
+<link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css">
+<link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css">
 <link rel="stylesheet" href="{{ url_for('static', filename='funds.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='ui.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='workspace.css') }}">
@@ -27,6 +26,7 @@
 <div class="page-head"><div><p class="ux-eyebrow">FINANCE / LEDGER</p><h1>资金台账</h1><p class="ux-head-sub">统一管理经费收支、审批状态与资金流向。</p></div><div class="actions"><button type="button" onclick="doExport()">导出资金 CSV</button></div></div>
 
 <div class="container-fluid px-3 py-3">
+  <div class="actions"><p id="funds-ledger-state" role="status" aria-live="polite">正在核对 TXT 台账同步状态…</p>{% if can_review %}<button type="button" id="funds-ledger-repair" onclick="repairFundsLedger(this)">重新同步台账</button>{% endif %}</div>
   <div class="row mb-3">
     <div class="col-md-3 col-6 mb-2"><div class="card stat-card income"><div class="value" id="sIn">--</div><div class="label">总进账</div></div></div>
     <div class="col-md-3 col-6 mb-2"><div class="card stat-card expense"><div class="value" id="sOut">--</div><div class="label">总支出</div></div></div>
@@ -46,19 +46,19 @@
       <div class="filter-bar">
         <div class="row g-2 align-items-end">
           <div class="col-lg-2 col-md-4 col-6">
-            <label class="form-label">类型</label>
+            <label class="form-label" for="ft">类型</label>
             <select class="form-select form-select-sm" id="ft"><option value="">全部</option><option value="进">进账</option><option value="出">支出</option></select></div>
           <div class="col-lg-2 col-md-4 col-6">
-            <label class="form-label">关键字</label>
+            <label class="form-label" for="fkw">关键字</label>
             <input class="form-control form-control-sm" id="fkw" placeholder="来源/去向/人员..."></div>
           <div class="col-lg-1 col-md-3 col-6">
-            <label class="form-label">金额≥</label><input type="number" class="form-control form-control-sm" id="famin" placeholder="0" step="any"></div>
+            <label class="form-label" for="famin">金额≥</label><input type="number" class="form-control form-control-sm" id="famin" placeholder="0" step="any"></div>
           <div class="col-lg-1 col-md-3 col-6">
-            <label class="form-label">金额≤</label><input type="number" class="form-control form-control-sm" id="famax" placeholder="999999" step="any"></div>
+            <label class="form-label" for="famax">金额≤</label><input type="number" class="form-control form-control-sm" id="famax" placeholder="999999" step="any"></div>
           <div class="col-lg-2 col-md-3 col-6">
-            <label class="form-label">起始</label><input type="date" class="form-control form-control-sm" id="fdf"></div>
+            <label class="form-label" for="fdf">起始</label><input type="date" class="form-control form-control-sm" id="fdf"></div>
           <div class="col-lg-2 col-md-3 col-6">
-            <label class="form-label">截止</label><input type="date" class="form-control form-control-sm" id="fdt"></div>
+            <label class="form-label" for="fdt">截止</label><input type="date" class="form-control form-control-sm" id="fdt"></div>
           <div class="col-lg-2 col-md-6 col-12 d-flex gap-1">
             <button class="btn btn-primary btn-sm flex-fill" onclick="reload()">筛选</button>
             <button class="btn btn-outline-secondary btn-sm flex-fill" onclick="resetF()">重置</button>
@@ -83,13 +83,16 @@
       <div class="row justify-content-center"><div class="col-lg-8">
         <div class="card"><div class="card-header">新增资金记录</div>
           <div class="card-body">
+            <p id="funds-create-status" role="status" aria-live="polite">正在检查新增能力…</p>
+            <button id="funds-create-retry" type="button" class="btn btn-outline-primary mb-2" hidden>重试原请求</button>
             <form id="addF" onsubmit="handleAdd(event); return false;">
+              <fieldset id="funds-create-fields" disabled>
               <div class="row mb-2">
-                <div class="col-md-4"><label class="form-label required">类型</label>
+                <div class="col-md-4"><label class="form-label required" for="aT">类型</label>
                   <select class="form-select" id="aT" required onchange="toggleF()"><option value="">请选择</option><option value="进">进账</option><option value="出">支出</option></select></div>
-                <div class="col-md-4"><label class="form-label required">金额（元，按分四舍五入）</label>
+                <div class="col-md-4"><label class="form-label required" for="aAmt">金额（元，按分四舍五入）</label>
                   <input type="number" step="any" min="0" class="form-control" id="aAmt" required placeholder="0.00"></div>
-                <div class="col-md-4"><label class="form-label">类别</label>
+                <div class="col-md-4"><label class="form-label" for="aCat">类别</label>
                   <select class="form-select" id="aCat">
                     <option value="">未分类</option>
                     <optgroup label="-- 支出类 --"><option value="材料费">材料费</option><option value="设备费">设备费</option><option value="加工费">加工费</option><option value="差旅费">差旅费</option><option value="办公费">办公费</option><option value="宣传费">宣传费</option><option value="餐饮费">餐饮费</option></optgroup>
@@ -97,23 +100,24 @@
                     <option value="其他">其他</option></select></div>
               </div>
               <div class="row mb-2">
-                <div class="col-md-6"><label class="form-label" id="lSD">来源 / 去向</label>
-                  <input class="form-control" id="aSD" placeholder="例如：学校拨款"></div>
-                <div class="col-md-6"><label class="form-label required">日期</label>
+                <div class="col-md-6"><label class="form-label" id="lSD" for="aSD">来源 / 去向</label>
+                  <input class="form-control" id="aSD" maxlength="200" placeholder="例如：学校拨款"></div>
+                <div class="col-md-6"><label class="form-label required" for="aDt">日期</label>
                   <input type="date" class="form-control" id="aDt" required></div>
               </div>
               <div id="expF" style="display:none;">
                 <div class="row mb-2">
-                  <div class="col-md-4"><label class="form-label required" id="lApl">申请人</label><input class="form-control" id="aApplicant" placeholder="经手采购人"></div>
-                  <div class="col-md-4"><label class="form-label required" id="lInv">发票数目</label><input type="number" min="1" class="form-control" id="aInvCnt" value="1"></div>
-                  <div class="col-md-4"><label class="form-label required" id="lHdl">处理人</label><input class="form-control" id="aHandler" placeholder="审核/报销处理人"></div>
+                  <div class="col-md-4"><label class="form-label required" id="lApl" for="aApplicant">申请人</label><input class="form-control" id="aApplicant" maxlength="64" placeholder="经手采购人"></div>
+                  <div class="col-md-4"><label class="form-label required" id="lInv" for="aInvCnt">发票数目</label><input type="number" min="1" class="form-control" id="aInvCnt" value="1"></div>
+                  <div class="col-md-4"><label class="form-label required" id="lHdl" for="aHandler">处理人</label><input class="form-control" id="aHandler" maxlength="64" placeholder="审核/报销处理人"></div>
                 </div>
               </div>
-              <div class="mb-2"><label class="form-label">备注</label>
-                <textarea class="form-control" id="aNotes" rows="2" placeholder="补充说明..."></textarea></div>
+              <div class="mb-2"><label class="form-label" for="aNotes">备注</label>
+                <textarea class="form-control" id="aNotes" maxlength="2000" data-count-text rows="2" placeholder="补充说明..."></textarea></div>
               <div class="d-flex gap-2">
                 <button type="submit" class="btn btn-primary px-4">提交</button>
                 <button type="reset" class="btn btn-outline-secondary" onclick="clearF()">清空</button></div>
+              </fieldset>
             </form>
           </div>
         </div>
@@ -132,7 +136,7 @@
       <div class="row">
         <div class="col-lg-8"><div class="card"><div class="card-header">统计图</div>
           <div class="card-body text-center funds-chart-surface">
-            <img id="chartImg" src="" alt="资金收支统计图" style="display:none;max-width:100%;">
+            <img id="chartImg" hidden alt="资金收支统计图" style="display:none;max-width:100%;">
             <div id="chartEmp" class="empty-state"><i class="bi bi-bar-chart" style="font-size:42px;"></i><p>点击上方按钮加载图表</p></div>
           </div></div></div>
         <div class="col-lg-4"><div class="card"><div class="card-header">统计摘要</div>
@@ -147,32 +151,31 @@
 </div>
 <div class="modal fade" id="editMd">
   <div class="modal-dialog modal-lg"><div class="modal-content">
-    <div class="modal-header"><h5 class="modal-title">编辑记录</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+    <div class="modal-header"><h5 class="modal-title">编辑记录</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="关闭编辑记录"></button></div>
     <div class="modal-body">
       <form><input type="hidden" id="eId">
         <div class="row mb-2">
-          <div class="col-md-4"><label class="form-label">类型</label><select class="form-select form-select-sm" id="eT"><option value="进">进账</option><option value="出">支出</option></select></div>
-          <div class="col-md-4"><label class="form-label">金额</label><input type="number" step="any" class="form-control form-control-sm" id="eAmt"></div>
-          <div class="col-md-4"><label class="form-label">类别</label><select class="form-select form-select-sm" id="eCat"><option value="">未分类</option><option>材料费</option><option>设备费</option><option>加工费</option><option>差旅费</option><option>办公费</option><option>宣传费</option><option>餐饮费</option><option>赞助</option><option>拨款</option><option>奖金</option><option>队费</option><option>其他</option></select></div>
+          <div class="col-md-4"><label class="form-label" for="eT">类型</label><select class="form-select form-select-sm" id="eT"><option value="进">进账</option><option value="出">支出</option></select></div>
+          <div class="col-md-4"><label class="form-label" for="eAmt">金额</label><input type="number" step="any" class="form-control form-control-sm" id="eAmt"></div>
+          <div class="col-md-4"><label class="form-label" for="eCat">类别</label><select class="form-select form-select-sm" id="eCat"><option value="">未分类</option><option>材料费</option><option>设备费</option><option>加工费</option><option>差旅费</option><option>办公费</option><option>宣传费</option><option>餐饮费</option><option>赞助</option><option>拨款</option><option>奖金</option><option>队费</option><option>其他</option></select></div>
         </div>
         <div class="row mb-2">
-          <div class="col-md-6"><label class="form-label">来源/去向</label><input class="form-control form-control-sm" id="eSD"></div>
-          <div class="col-md-3"><label class="form-label">日期</label><input type="date" class="form-control form-control-sm" id="eDt"></div>
-          <div class="col-md-3"><label class="form-label">发票数</label><input type="number" min="0" class="form-control form-control-sm" id="eInv"></div>
+          <div class="col-md-6"><label class="form-label" for="eSD">来源/去向</label><input class="form-control form-control-sm" id="eSD" maxlength="200"></div>
+          <div class="col-md-3"><label class="form-label" for="eDt">日期</label><input type="date" class="form-control form-control-sm" id="eDt"></div>
+          <div class="col-md-3"><label class="form-label" for="eInv">发票数</label><input type="number" min="0" class="form-control form-control-sm" id="eInv"></div>
         </div>
         <div class="row mb-2">
-          <div class="col-md-6"><label class="form-label">申请人</label><input class="form-control form-control-sm" id="eApl"></div>
-          <div class="col-md-6"><label class="form-label">处理人</label><input class="form-control form-control-sm" id="eHdl"></div>
+          <div class="col-md-6"><label class="form-label" for="eApl">申请人</label><input class="form-control form-control-sm" id="eApl" maxlength="64"></div>
+          <div class="col-md-6"><label class="form-label" for="eHdl">处理人</label><input class="form-control form-control-sm" id="eHdl" maxlength="64"></div>
         </div>
-        <div class="mb-2"><label class="form-label">备注</label><textarea class="form-control form-control-sm" id="eNts" rows="2"></textarea></div>
+        <div class="mb-2"><label class="form-label" for="eNts">备注</label><textarea class="form-control form-control-sm" id="eNts" maxlength="2000" data-count-text rows="2"></textarea></div>
       </form>
     </div>
     <div class="modal-footer"><button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">取消</button><button class="btn btn-primary btn-sm" onclick="saveE()">保存</button></div>
   </div></div>
 </div>
 
-<script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/js/bootstrap.bundle.min.js"
-        onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js'"></script>
+<script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>
 
 <!-- ==================== 前端逻辑 ==================== -->
 <script>
@@ -184,6 +187,7 @@ window.XTYF_USER = {
 </script>
 <script src="{{ url_for('static', filename='workspace.js') }}"></script>
 <script src="{{ url_for('static', filename='money.js') }}"></script>
+<script src="{{ url_for('static', filename='funds-create.js') }}"></script>
 <script src="{{ url_for('static', filename='funds.js') }}"></script>
 <div id="funds-feedback" class="ux-toast" role="status" aria-live="polite" hidden></div>
 </body>

@@ -46,7 +46,7 @@ async function main(){
   await post('/api/admin/permissions/'+member,{permissions:['invoices.manage']});
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]){
     engineName=label;browser=await engine.launch();const context=await browser.newContext({...options,storageState:await api.storageState()});
-    page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+    page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>{errors.push(e.message);console.error('Asset page error ['+engineName+']',e.stack);});
     await page.goto(base+'/admin/security');
     const permissionRow=page.locator(`[data-member-id="${member}"]`);
     await permissionRow.locator('[data-permission="assets.manage"]').check();
@@ -60,6 +60,29 @@ async function main(){
     assert(granted.includes('assets.manage'));assert(granted.includes('invoices.manage'));
     assert.deepEqual(permissionState.permissions,[],'Unchanged initial password still blocks effective permissions');
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
+    // A catalog response can arrive while navigation freezes the old page.
+    // It must not start the subsequent item fetch from an inactive document.
+    const hiddenRead=await page.evaluate(async()=>{
+      const original=window.fetch;let release,arrived,signal,itemRequests=0,held=false;
+      const gate=new Promise(resolve=>release=resolve),seen=new Promise(resolve=>arrived=resolve);
+      window.fetch=async(url,options)=>{
+        if(String(url).startsWith('/api/assets/items?'))itemRequests++;
+        const response=await original(url,options);
+        if(String(url)==='/api/assets/catalog'&&!held){held=true;signal=options?.signal;arrived();await gate;}
+        return response;
+      };
+      try{
+        const loading=window.AssetLedger.load();
+        await Promise.race([seen,loading.then(()=>{throw Error('catalog response was not intercepted');})]);
+        window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));
+        release();await loading;
+        return {itemRequests,aborted:!!signal?.aborted};
+      }finally{release();window.fetch=original;}
+    });
+    assert.deepEqual(hiddenRead,{itemRequests:0,aborted:true},'leaving the page cancels reads and invalidates late catalog responses');
+    await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));
+    await page.locator('#asset-content[aria-busy=false]').waitFor();
+    await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();
     await page.locator('#asset-form [name=name]').fill('测试电机 '+label);
     await page.locator('#asset-form [name=specification]').fill('3508 <测试>');
@@ -122,7 +145,7 @@ async function main(){
     await page.screenshot({path:path.join(output,label+'.png'),fullPage:true});
     passed.push(label+': permission grants preserve invoice permissions, create, receive, cancel, lost response retry, partial return, transfer, campus log filter, reload, mobile layout');
     const managerContext=await browser.newContext({...options,storageState:await managerApi.storageState()});
-    page=await managerContext.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+    page=await managerContext.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>{errors.push(e.message);console.error('Asset page error ['+engineName+']',e.stack);});
     await page.goto(base+'/assets');await page.locator('#asset-categories').waitFor();
     await page.locator('#asset-categories').click();await page.getByRole('button',{name:'新增类别',exact:true}).click();
     await page.getByLabel('名称',{exact:true}).fill('登记分类 '+label);await page.locator('#asset-save').click();
@@ -137,7 +160,7 @@ async function main(){
     await post('/api/assets/operations',{request_id:crypto.randomUUID(),action:'receive',item_id:supply.id,campus_id:campus,quantity:10,reason:'合成库存'});
     await post('/api/assets/operations',{request_id:crypto.randomUUID(),action:'receive',item_id:supply.id,campus_id:west,quantity:5,reason:'合成库存'});
     const ordinaryContext=await browser.newContext({...options,storageState:await ordinaryApi.storageState()});
-    page=await ordinaryContext.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+    page=await ordinaryContext.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>{errors.push(e.message);console.error('Asset page error ['+engineName+']',e.stack);});
     await page.goto(base+'/assets');await page.getByRole('link',{name:'自助耗材 '+label,exact:true}).waitFor();
     await page.locator('#asset-create').click();
     assert.equal(await page.locator('#asset-add-manual').isVisible(),false);
@@ -190,7 +213,7 @@ async function main(){
   const local='http://127.0.0.1:'+uiServer.address().port;
   for(const [label,engine] of [['chromium',chromium],['webkit',webkit]]){
     engineName=label+'-local';browser=await engine.launch();page=await browser.newPage({viewport:{width:1280,height:900}});
-    page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
+    page.setDefaultTimeout(15000);page.on('pageerror',e=>{errors.push(e.message);console.error('Asset page error ['+engineName+']',e.stack);});
     const state={offline:false,old:false};const remoteHtml=[];
     page.on('request',r=>{if(r.url().startsWith(base))remoteHtml.push(r.url());});
     await page.exposeFunction('__assetsNative',async(action,args)=>{

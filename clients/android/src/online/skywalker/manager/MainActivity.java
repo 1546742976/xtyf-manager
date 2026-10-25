@@ -33,16 +33,18 @@ public class MainActivity extends Activity {
     private final ExecutorService workers = Executors.newFixedThreadPool(4);
     private final Map<String, Uri> files = new ConcurrentHashMap<>();
     private Pending picker, download;
+    private boolean saveDialogOpen;
     private ValueCallback<Uri[]> legacyPicker;
     private WebView pickerView;
     private WebsiteView website;
     private WebsiteDownload websiteDownload;
-    private boolean destroyed;
+    private volatile boolean destroyed;
     private static final class WebsiteDownload {
         final WebsiteView owner; final File file; final long generation;
         WebsiteDownload(WebsiteView owner, File file, long generation) { this.owner=owner; this.file=file; this.generation=generation; }
     }
     private static final class Pending {
+        final PdfSave.Prepared pdf = new PdfSave.Prepared();
         final Object id; final JSONObject args; final WebMessagePort channel; final NativeHttpClient client; final UiUpdateStore updates;
         Pending(Object id, JSONObject args, WebMessagePort channel, NativeHttpClient client, UiUpdateStore updates) { this.id=id; this.args=args; this.channel=channel; this.client=client; this.updates=updates; }
     }
@@ -138,7 +140,10 @@ public class MainActivity extends Activity {
     private static WebResourceResponse denied(int status, String reason) {
         return new WebResourceResponse("text/plain", "UTF-8", status, reason, Collections.emptyMap(), new ByteArrayInputStream(reason.getBytes(StandardCharsets.UTF_8)));
     }
-    private void closePort() { if (port != null) { port.close(); port = null; } }
+    private void closePort() {
+        if (download != null) { download.pdf.cancel(); download = null; }
+        if (port != null) { port.close(); port = null; }
+    }
     private void attachPort() {
         closePort(); WebMessagePort[] pair = web.createWebMessageChannel(); port = pair[0];
         port.setWebMessageCallback(new WebMessagePort.WebMessageCallback() {
@@ -211,7 +216,7 @@ public class MainActivity extends Activity {
     }
     private JSONObject configuration() throws JSONException {
         return new JSONObject().put("serverUrl", server).put("effectiveServerUrl", client.effectiveServer()).put("version", BuildConfig.VERSION).put("bridgeVersion", 2)
-            .put("capabilities", new JSONArray(Arrays.asList("ui_updates", "image_preview", "website_fallback"))).put("platform", "android");
+            .put("capabilities", new JSONArray(Arrays.asList("ui_updates", "image_preview", "website_fallback", "pdf_save"))).put("platform", "android");
     }
     private JSONObject selectedImage(Pending request) throws Exception {
         Uri uri = files.get(request.args.getString("handle"));
@@ -268,14 +273,27 @@ public class MainActivity extends Activity {
         if (!types.isEmpty()) intent.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[0])); return intent;
     }
     private void saveFile(Pending request) throws Exception {
-        if (download != null) throw new IOException("请先完成当前保存选择"); request.client.resolve(request.args.getString("path")); download = request;
-        if (request.args.has("expectedSha256")) {
-            try { request.updates.validateInstaller(request.args.getString("path"), request.args.getString("expectedSha256")); }
-            catch (Exception error) { download = null; throw error; }
-        }
-        String filename = request.args.optString("filename", "download").replaceAll("[\\\\/\r\n]", "_");
-        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime(filename)).putExtra(Intent.EXTRA_TITLE, filename);
-        try { startActivityForResult(intent, SAVE_FILE); } catch (ActivityNotFoundException error) { download = null; throw new IOException("无法打开保存窗口", error); }
+        if (download != null || saveDialogOpen) throw new IOException("请先完成当前保存选择");
+        download = request;
+        workers.execute(() -> {
+            try {
+                if (request.args.has("pdfBody")) request.pdf.prepare(request.args.getString("pdfBody"));
+                else request.client.resolve(request.args.getString("path"));
+                if (request.args.has("expectedSha256")) request.updates.validateInstaller(request.args.getString("path"), request.args.getString("expectedSha256"));
+                runOnUiThread(() -> {
+                    if (destroyed || download != request || request.client != client || request.channel != port) {
+                        request.pdf.cancel(); if (download == request) download = null; return;
+                    }
+                    String filename = request.args.optString("filename", "download").replaceAll("[\\\\/\r\n]", "_");
+                    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime(filename)).putExtra(Intent.EXTRA_TITLE, filename);
+                    try { startActivityForResult(intent, SAVE_FILE); saveDialogOpen = true; }
+                    catch (ActivityNotFoundException error) { download = null; request.pdf.cancel(); reply(request, null, new IOException("无法打开保存窗口", error)); }
+                });
+            } catch (Exception error) {
+                request.pdf.cancel();
+                runOnUiThread(() -> { if (download == request) download = null; reply(request, null, error); });
+            }
+        });
     }
     private JSONObject selected(Uri uri) throws Exception {
         String handle = UUID.randomUUID().toString(), name = "upload"; long size = -1;
@@ -299,11 +317,24 @@ public class MainActivity extends Activity {
             if (legacyPicker != null) { legacyPicker.onReceiveValue(uris.isEmpty() ? null : uris.toArray(new Uri[0])); legacyPicker = null; pickerView = null; }
             if (request != null && request.client == client && request.channel == port) try { JSONArray result = new JSONArray(); for (Uri uri : uris) result.put(selected(uri)); reply(request, result, null); } catch (Exception error) { reply(request, null, error); }
         }
+        if (requestCode == SAVE_FILE) saveDialogOpen = false;
         if (requestCode == SAVE_FILE && download != null) {
             Pending request = download; download = null;
-            if (resultCode != RESULT_OK || data == null || data.getData() == null) { try { reply(request, new JSONObject().put("cancelled", true), null); } catch (JSONException ignored) {} return; }
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) { request.pdf.cancel(); try { reply(request, new JSONObject().put("cancelled", true), null); } catch (JSONException ignored) {} return; }
             Uri destination = data.getData(); workers.execute(() -> {
                 try {
+                    if (destroyed || request.client != client || request.channel != port) throw new IOException("页面或服务器已切换，保存已取消");
+                    if (request.args.has("pdfBody")) {
+                        byte[] bytes = request.pdf.take(!destroyed && request.client == client && request.channel == port);
+                        try (OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                            if (output == null) throw new IOException("无法写入所选位置");
+                            for (int offset = 0; offset < bytes.length; offset += 65536) {
+                                if (destroyed || request.client != client || request.channel != port) throw new IOException("页面或服务器已切换，保存已取消");
+                                output.write(bytes, offset, Math.min(65536, bytes.length - offset));
+                            }
+                        }
+                        reply(request, new JSONObject().put("cancelled", false), null); return;
+                    }
                     request.client.request(request.args.getString("path"), "GET", Collections.emptyMap(), null, request.args.optString("requestId", request.id.toString()), (status, headers, input) -> {
                         String type = headers.getOrDefault("content-type", "");
                         if (status < 200 || status >= 300 || type.contains("text/html") || type.contains("application/json")) throw new IOException("服务器拒绝下载，请检查登录状态（" + status + "）");
@@ -363,7 +394,7 @@ public class MainActivity extends Activity {
         camera.cancel(null);
         if (legacyPicker != null) legacyPicker.onReceiveValue(null); legacyPicker = null; pickerView = null;
         if (picker != null) reply(picker, null, new IOException("服务器已切换，文件选择已取消")); picker = null;
-        if (download != null) reply(download, null, new IOException("服务器已切换，下载已取消")); download = null;
+        if (download != null) { download.pdf.cancel(); reply(download, null, new IOException("服务器已切换，下载已取消")); } download = null;
         if (websiteDownload != null) websiteDownload.owner.consumed(websiteDownload.file); websiteDownload = null;
     }
     private void openWebsite() {

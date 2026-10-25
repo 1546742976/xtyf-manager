@@ -69,7 +69,7 @@ This is an internal operations workstation for team members, project managers, a
 - Task-center person lanes initially show one task, with a bottom-right button to reveal remaining tasks. Expansion survives refresh polling in page memory, independently of tree expansion. Compact cards show a single-line note only when nonempty, using the latest note author and content; cards without notes omit the note section, and full history and screenshots remain in details. Authorized administrators/managers create tasks from the task center; the management page retains catalogs, scheduling and existing-task operations. All active members, including administrators, may own or participate in vehicle tasks; inactive members cannot receive new assignments.
 - Collaboration is a local topic board. Desktop uses list/conversation columns; below 768px use list/detail navigation with an explicit back button. Retain the eight theme tokens, 44px touch targets, safe text rendering, inline file previews and upload progress. Preserve per-topic drafts on failure and switching; uncertain submissions are reconciled by ID before retry. Polling must preserve reading position and keyboard focus; only actually visible messages advance read position. Withdrawals use tombstones and never expose originals through the UI.
 
-- Legacy styles retain structural rules; `static/apple.css` retains shared component styling; `static/themes.css` is the final palette/decorative layer and reuses the semantic tokens. The finance Bootstrap and invoice modal containers keep their original layout behavior.
+- Legacy styles retain structural rules; `static/apple.css` retains shared component styling; `static/themes.css` is the final palette/decorative layer and reuses the semantic tokens. Finance retains Bootstrap 5.3.3, served locally through a resource whitelist. Invoice dialogs use native dialog focus and keyboard behavior.
 - The task table remains horizontally scrollable on narrow screens because all columns are operationally meaningful.
 - Browser screenshot and interaction QA is a separate final verification lane after backend integration; this implementation must still pass static syntax and server render checks first.
 
@@ -78,15 +78,19 @@ This is an internal operations workstation for team members, project managers, a
 
 | Mode | ID | Name | Visual identity |
 | --- | --- | --- | --- |
-| Light | silver | 银白蓝 | Silver-white surfaces, blue actions |
+| Light | silver | Mistral 暖橙 | Warm ivory surfaces, orange actions |
 | Light | rm-light | RM 机甲红蓝 | Broad red sidebar, blue banner, light metal cards, armor seams/rivets |
 | Light | mist | 云雾绿 | Mist-white background, restrained green accent |
 | Light | paw | 奶霜猫爪粉 | Cream/blush surfaces, pink controls, furry cat-paw details |
-| Dark | space | 深空蓝 | Navy/charcoal surfaces, pale blue accent |
-| Dark | rm-dark | RM 机甲红蓝 | Red sidebar, blue armor banner, dark metal cards |
+| Dark | space | GitHub 暗黑 | Black surfaces, restrained neutral borders |
+| Dark | rm-dark | 黑白极简 | Black and white minimal surfaces |
 | Dark | graphite | 石墨灰金 | Graphite surfaces, warm gold accent, no forest green |
 | Dark | xueli | 雪梨星语 | Translucent dark rose, pink controls, white-haired Xueli mascots, blue/mint eyes and star details |
 
 Decorations are noninteractive and `aria-hidden`, with reserved layout space. The image atlas is local in `static/theme-assets`, loaded only for the two illustrated palettes. Keep labels, numbers, navigation and actions clear. Main text, secondary text and primary-button labels must meet 4.5:1 contrast. Danger/success retain semantic tokens. Finance plots refresh their resolved palette without letting older requests overwrite them.
 
 The homepage countdown is a single admin-configured target, not a task. Calculate by Beijing calendar date; today and elapsed dates have explicit neutral wording. Clear both title and date to hide. Conflicts retain input and require explicit latest-setting reload. The target updates on minute/visibility events without overwriting an open draft.
+
+## 10. Review repairs (2026-10-22)
+
+Bootstrap styles, scripts, icons and licenses are local and checksum-verified against the client vendor lock; clients keep dist/vendor without duplicate assets. Invoice dialogs have labelled headings, named close controls, Escape handling and focus return. Mobile finance and invoice controls have 44px touch targets. Hidden fields use the HTML hidden contract. Xueli uses a local WebP atlas with the original PNG fallback; palette IDs remain stable. Funds pagination, sidebar positioning, task-modal layout redesign and asset versioning remain deferred (C2).

@@ -5,12 +5,27 @@ the original M:/U: identity; vendor C numbers are secondary item metadata.
 """
 from io import BytesIO
 from math import isfinite
+import json
+from pathlib import Path
 
-from flask import Blueprint, request, send_file, jsonify
-from common import get_db, login_required
+from flask import Blueprint, request, send_file, jsonify, abort
+from common import BASE_DIR, get_db, login_required
 from modules.assets import Invalid, row
 
 bp = Blueprint("asset_labels", __name__)
+
+
+@bp.get("/vendor/pdfjs/<path:resource>")
+def pdf_resource(resource):
+    """Expose only pinned public PDF.js assets, never the client source tree."""
+    frontend = Path(BASE_DIR) / "clients" / "frontend"
+    locked = json.loads((frontend / "vendor-lock.json").read_text(encoding="utf-8"))["files"]
+    name = "pdfjs/" + resource
+    root = (frontend / "vendor" / "pdfjs").resolve()
+    target = (root / resource).resolve()
+    if name not in locked or not target.is_relative_to(root) or not target.is_file():
+        abort(404)
+    return send_file(target, mimetype="text/javascript" if resource.endswith(".mjs") else None, max_age=86400)
 
 
 def _clamp(value, low, high):

@@ -1,6 +1,6 @@
 [package]
 name = "xtyf-manager"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 description = "巡天御风管理系统本地客户端"
 authors = ["巡天御风 <1546742976@qq.com>"]
@@ -25,6 +25,10 @@ ring = "0.17"
 sha2 = "0.10"
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already used by Tauri; enable its existing camera capture setting explicitly.
+webkit2gtk = "=2.0.2"
 
 [profile.release]
 strip = true

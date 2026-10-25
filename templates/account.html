@@ -3,7 +3,7 @@
 {% block content %}
 <div class="ux-page-head">
   <div><p class="ux-eyebrow">WORKSPACE / ACCOUNT</p><h1>账户设置</h1>
-    <p>维护个人登录名、专业组和造车组别，安全更新密码；姓名由管理员统一维护。</p></div>
+    <p>维护个人登录名、专业组和造车组别，安全更新密码；姓名由超级管理员统一维护。</p></div>
 </div>
 {% if me.must_change_password %}<p class="panel error account-password-warning" role="alert">当前使用的是初始或重置密码。请先设置一个与当前密码不同的新密码，之后才能进入工作区。</p>{% endif %}
 <div class="ux-account-grid{% if me.must_change_password %} ux-account-password-required{% endif %}">
@@ -28,17 +28,11 @@
       <dt>造车组别</dt><dd id="account-project-names">{{ '改密后查看' if me.must_change_password else '加载中…' }}</dd>
       <dt>系统角色</dt><dd>{{ role_names[me.role] }}</dd>
     </dl>
-    <p class="ux-note">成员 ID 是数据库中的固定身份标识，不会随用户名修改而改变。需要修改真实姓名或权限角色请联系管理员。</p>
+    <p class="ux-note">成员 ID 是数据库中的固定身份标识，不会随用户名修改而改变。需要修改真实姓名或权限角色请联系超级管理员。</p>
+    {% if not me.must_change_password %}{% set intro_listing = false %}{% set intro_embedded = true %}{% include "_member_introductions.html" %}{% endif %}
   </section>
-  {% include "_email_settings.html" %}
-    <section class="panel appearance-panel ux-account-appearance" aria-labelledby="appearance-title">
-      <h2 id="appearance-title">外观</h2>
-      <p class="appearance-description">选择适合你的工作界面，主题会随账户同步到其他设备。</p>
-      {% set theme_control_id = "account" %}{% include "_theme_choices.html" %}
-      <p id="theme-result" data-theme-result class="ux-account-result" role="status" aria-live="polite">{% if me.must_change_password %}修改初始密码后即可设置外观。{% endif %}</p>
-      <button id="theme-retry" data-theme-retry class="btn" hidden type="button">重试保存主题</button>
-    </section>
-    {% if not me.must_change_password %}<section class="panel ux-account-editor">
+    <section class="panel ux-account-editor">
+      {% if not me.must_change_password %}
       <h2>修改个人资料</h2>
       <p class="ux-note">用户名用于登录，修改成功后旧用户名不能再登录。专业组和造车组别均可多选。</p>
       <form id="account-profile-form" class="ux-account-form">
@@ -48,17 +42,26 @@
         <button class="btn primary" type="submit">保存个人资料</button>
         <p class="ux-account-result" id="account-profile-result" role="status" aria-live="polite"></p>
       </form>
-    </section>{% endif %}
-    <section class="panel ux-account-password">
-      <h2>修改登录密码</h2>
+      {% endif %}
+    <section class="ux-account-password{% if not me.must_change_password %} ux-account-subsection{% endif %}" aria-labelledby="account-password-title">
+      <h2 id="account-password-title">修改登录密码</h2>
       <p class="ux-note">请输入原密码验证身份。建议使用与其他网站不同的高强度密码。</p>
       <form id="account-password-form" class="ux-account-form" data-required-change="{{ '1' if me.must_change_password else '0' }}">
-        <label>当前密码<input type="password" name="old" required autocomplete="current-password"></label>
-        <label>新密码<input type="password" name="new" minlength="8" required autocomplete="new-password"></label>
-        <label>确认新密码<input type="password" name="confirm" minlength="8" required autocomplete="new-password"></label>
+        <label>当前密码<input type="password" name="old" maxlength="1024" required autocomplete="current-password"></label>
+        <label>新密码<input type="password" name="new" minlength="8" maxlength="1024" required autocomplete="new-password"></label>
+        <label>确认新密码<input type="password" name="confirm" minlength="8" maxlength="1024" required autocomplete="new-password"></label>
         <button class="btn primary" type="submit">保存新密码</button>
         <p class="ux-account-result" id="account-result" role="status" aria-live="polite"></p>
       </form>
+    </section>
+    </section>
+  {% include "_email_settings.html" %}
+    <section class="panel appearance-panel ux-account-appearance" aria-labelledby="appearance-title">
+      <h2 id="appearance-title">外观</h2>
+      <p class="appearance-description">选择适合你的工作界面，主题会随账户同步到其他设备。</p>
+      {% set theme_control_id = "account" %}{% include "_theme_choices.html" %}
+      <p id="theme-result" data-theme-result class="ux-account-result" role="status" aria-live="polite">{% if me.must_change_password %}修改初始密码后即可设置外观。{% endif %}</p>
+      <button id="theme-retry" data-theme-retry class="btn" hidden type="button">重试保存主题</button>
     </section>
 </div>
 {% if not me.must_change_password %}<dialog id="avatar-crop-dialog" class="avatar-crop-dialog" aria-labelledby="avatar-crop-title" aria-describedby="avatar-crop-help">
@@ -80,8 +83,10 @@
   <p id="avatar-crop-result" class="ux-account-result" role="status" aria-live="polite"></p>
   <div class="avatar-crop-actions"><button type="button" class="btn" id="avatar-reselect">重新选图</button><button type="button" class="btn primary" id="avatar-save">保存头像</button></div>
 </dialog>{% endif %}
+
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='member-introductions.js') }}"></script>
 <script src="{{ url_for('static', filename='account.js') }}"></script>
 <script src="{{ url_for('static', filename='account-avatar.js') }}"></script>
 <script src="{{ url_for('static', filename='email.js') }}"></script>

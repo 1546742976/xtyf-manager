@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::{BTreeMap, HashSet}, fs, io::{Read, Write}, path::{Path, PathBuf}};
 
-pub const CAPABILITIES: &[&str] = &["ui_updates", "image_preview", "website_fallback"];
+pub const CAPABILITIES: &[&str] = &["ui_updates", "image_preview", "website_fallback", "pdf_save"];
 pub const METADATA_LIMIT: u64 = 256 * 1024;
 pub const ZIP_LIMIT: u64 = 128 * 1024 * 1024;
 pub const UNPACKED_LIMIT: u64 = 256 * 1024 * 1024;

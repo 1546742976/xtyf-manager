@@ -39,7 +39,7 @@ from datetime import datetime
 from decimal import Decimal
 from functools import wraps
 from flask import (Blueprint, Response, g, has_request_context, jsonify, redirect, request, render_template,
-                   send_file, stream_with_context)
+                   send_file)
 from urllib.parse import quote
 
 from common import ROLE_NAMES, current_user, get_db
@@ -57,6 +57,8 @@ BASE_DIR = os.environ.get(
 os.makedirs(BASE_DIR, exist_ok=True)
 CACHE_FILE = os.path.join(BASE_DIR, '.invoice_cache.json')
 META_FILE = os.path.join(BASE_DIR, '.invoice_meta.json')
+SNAPSHOT_FILE = os.path.join(BASE_DIR, '.invoice_snapshot.json')
+SNAPSHOT_STATE_FILE = os.path.join(BASE_DIR, '.invoice_snapshot_state.json')
 UPLOAD_DIR = os.path.join(BASE_DIR, '.uploads')
 
 bp = Blueprint('invoices', __name__)
@@ -176,14 +178,19 @@ _worker_guard = threading.Lock()
 _worker_thread = None
 _worker_pid = None
 _worker_wakeup = threading.Event()
+_sse_guard = threading.Lock()
+_sse_members = set()
 
 
 def _reset_worker_after_fork():
     global _worker_guard, _worker_thread, _worker_pid, _worker_wakeup
+    global _sse_guard, _sse_members
     _worker_guard = threading.Lock()
     _worker_thread = None
     _worker_pid = None
     _worker_wakeup = threading.Event()
+    _sse_guard = threading.Lock()
+    _sse_members = set()
 
 
 if hasattr(os, 'register_at_fork'):
@@ -209,14 +216,20 @@ def _invoice_worker():
         try:
             if _invoice_lock.acquire(blocking=False):
                 try:
+                    if not os.path.exists(SNAPSHOT_FILE) and not os.path.exists(SNAPSHOT_STATE_FILE):
+                        _begin_invoice_snapshot()
+                        _publish_invoice_snapshot()
                     claimed = invoice_jobs.recover_and_claim()
                     if claimed:
+                        _begin_invoice_snapshot()
                         try:
                             result = handlers[claimed['type']](claimed['id'])
                         except Exception as exc:
+                            _fail_invoice_snapshot()
                             logging.exception('Invoice job failed: %s', claimed['id'])
                             invoice_jobs.finish_job(claimed['id'], error=exc)
                         else:
+                            _publish_invoice_snapshot()
                             invoice_jobs.finish_job(claimed['id'], result=result)
                 finally:
                     _invoice_lock.release()
@@ -231,36 +244,53 @@ def _update_job(jid, progress, message):
     invoice_jobs.update_job(jid, progress, message)
 
 
-def _job_sse(jid):
+def _job_sse(jid, user_id, session_version):
     """Read persisted progress without blocking invoice writes or other workers."""
+    with _sse_guard:
+        if user_id in _sse_members or len(_sse_members) >= 4:
+            return jsonify(error='进度连接已达上限，请稍后重试或查看任务列表', reason='sse_capacity'), 429, {'Retry-After': '5'}
+        _sse_members.add(user_id)
+    released = False
+
+    def release():
+        nonlocal released
+        with _sse_guard:
+            if not released:
+                _sse_members.discard(user_id)
+                released = True
+
     def generate():
         previous = None
-        heartbeat = time.monotonic()
-        while True:
-            # Revalidate the session and permission while a long-lived stream is open.
-            if not _is_finance():
-                yield 'data: ' + json.dumps({'status': 'error', 'message': '登录或财务授权已失效'}, ensure_ascii=False) + '\n\n'
-                break
-            job = invoice_jobs.get_job(jid)
-            if job is None:
-                yield 'data: ' + json.dumps({'status': 'error', 'message': '任务不存在'}, ensure_ascii=False) + '\n\n'
-                break
-            payload = {key: job[key] for key in ('id', 'type', 'status', 'progress', 'message')}
-            if job['status'] in invoice_jobs.TERMINAL:
-                payload['result'] = job['result']
-            encoded = json.dumps(payload, ensure_ascii=False)
-            if encoded != previous:
-                yield f'data: {encoded}\n\n'
-                previous = encoded
-                heartbeat = time.monotonic()
-            elif time.monotonic() - heartbeat >= 15:
-                yield ': keep-alive\n\n'
-                heartbeat = time.monotonic()
-            if job['status'] in invoice_jobs.TERMINAL:
-                break
-            time.sleep(1)
-    return Response(stream_with_context(generate()), mimetype='text/event-stream',
-                    headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+        started = heartbeat = time.monotonic()
+        try:
+            while time.monotonic() - started < 30:
+                if not invoice_jobs.actor_is_current(user_id, session_version):
+                    yield 'data: ' + json.dumps({'status': 'error', 'message': '登录或财务授权已失效'}, ensure_ascii=False) + '\n\n'
+                    break
+                job = invoice_jobs.get_job(jid)
+                if job is None:
+                    yield 'data: ' + json.dumps({'status': 'error', 'message': '任务不存在'}, ensure_ascii=False) + '\n\n'
+                    break
+                payload = {key: job[key] for key in ('id', 'type', 'status', 'progress', 'message')}
+                if job['status'] in invoice_jobs.TERMINAL:
+                    payload['result'] = job['result']
+                encoded = json.dumps(payload, ensure_ascii=False)
+                if encoded != previous:
+                    yield f'data: {encoded}\n\n'
+                    previous = encoded
+                    heartbeat = time.monotonic()
+                elif time.monotonic() - heartbeat >= 5:
+                    yield ': keep-alive\n\n'
+                    heartbeat = time.monotonic()
+                if job['status'] in invoice_jobs.TERMINAL:
+                    break
+                time.sleep(1)
+        finally:
+            release()
+    response = Response(generate(), mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+    response.call_on_close(release)  # Also releases a response never iterated by WSGI.
+    return response
 
 
 def _normalize_month(s):
@@ -338,7 +368,10 @@ def save_json(path, data):
 
 
 load_meta = lambda: load_json(META_FILE)
-save_meta = lambda d: save_json(META_FILE, d)
+def save_meta(data):
+    if load_meta() != data:
+        _snapshot_before_mutation()
+    save_json(META_FILE, data)
 def load_cache():
     cache = load_json(CACHE_FILE, decimal_numbers=True)
     for key, entry in cache.items():
@@ -687,7 +720,9 @@ def move_invoice_file(inv_id, new_status):
 
     try:
         old_rel = os.path.relpath(old_path, BASE_DIR).replace('\\', '/')
-        if os.path.isfile(old_path): shutil.move(old_path, new_path)
+        if os.path.isfile(old_path):
+            _snapshot_before_mutation(old_path, new_path)
+            shutil.move(old_path, new_path)
         new_rel = os.path.relpath(new_path, BASE_DIR).replace('\\', '/')
         inv_meta['rel_path'] = new_rel
         inv_meta['filename'] = os.path.basename(new_path)
@@ -807,6 +842,7 @@ def _do_move(results, meta, inv_id, old_path, new_path, month, status):
 
     try:
         if os.path.isfile(old_path):
+            _snapshot_before_mutation(old_path, new_path)
             shutil.move(old_path, new_path)
             results['moved'] += 1
             old_rel = os.path.relpath(old_path, BASE_DIR).replace('\\', '/')
@@ -963,7 +999,7 @@ def duplicate_guard(data, rel_path, index=None, hashes=None):
 # ===================== 发票扫描 =====================
 
 # ---- 全量扫描：遍历文件夹并合并元数据 → 发票列表（元数据键做了反斜杠→正斜杠归一化）----
-def scan_invoices(use_cache=True):
+def scan_invoices(use_cache=True, persist_cache=True):
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
     # 一次扫描只读写金额缓存一份：逐张 load/save 会把列表接口拖成 O(N²) I/O。
     cache = {k.replace('\\', '/'): v for k, v in load_cache().items()} if use_cache else {}
@@ -1002,7 +1038,7 @@ def scan_invoices(use_cache=True):
                     month = _normalize_month(m.group(1)) if m else entry
                     cache_dirty |= bool(_add_invoice(invoices, meta, month, found_status, os.path.join(root, f), use_cache, cache))
 
-    if use_cache and cache_dirty:
+    if use_cache and cache_dirty and persist_cache:
         save_cache(cache)
 
     seen = set()
@@ -1021,6 +1057,67 @@ def scan_invoices(use_cache=True):
                 invoice['submitter_original'] = invoice['submitter']
                 invoice['submitter'] = names[owner_id]
     return unique
+
+
+def _begin_invoice_snapshot():
+    """Called only under the cross-process writer lock, before any file changes."""
+    previous = load_json(SNAPSHOT_FILE)
+    save_json(SNAPSHOT_STATE_FILE, {'state': 'updating', 'generation': previous.get('generation')})
+
+
+def _fail_invoice_snapshot():
+    try:
+        previous = load_json(SNAPSHOT_FILE)
+        save_json(SNAPSHOT_STATE_FILE, {'state': 'failed', 'generation': previous.get('generation')})
+    except (OSError, RuntimeError):
+        logging.error('无法保存发票快照失败状态，请检查发票目录权限和磁盘空间')
+
+
+def _publish_invoice_snapshot(records=None):
+    """Publish a complete scan atomically; failed scans retain the last snapshot.
+
+    These records contain only scan results. Permissions and ownership are
+    checked again on every read, never trusted from this persisted cache.
+    """
+    try:
+        records = scan_invoices(persist_cache=False) if records is None else records
+        for item in records:
+            item['amount'] = str(item['amount'])
+        generation = uuid.uuid4().hex
+        save_json(SNAPSHOT_FILE, {'records': records, 'generation': generation,
+                                 'updated_at': datetime.now().astimezone().isoformat(timespec='seconds')})
+        save_json(SNAPSHOT_STATE_FILE, {'state': 'current', 'generation': generation})
+        return True
+    except (OSError, RuntimeError, ValueError) as exc:
+        logging.warning('发票快照更新失败，继续提供上次完成结果: %s', exc)
+        _fail_invoice_snapshot()
+        return False
+
+
+def _read_invoice_snapshot(user):
+    """Never scans PDFs or writes cache files on the read path."""
+    snapshot = load_json(SNAPSHOT_FILE)
+    state = load_json(SNAPSHOT_STATE_FILE).get('state', 'updating')
+    g.invoice_snapshot_state = state
+    g.invoice_snapshot_updated_at = snapshot.get('updated_at', '')
+    if 'records' not in snapshot:
+        return None
+    meta = {key.replace('\\', '/'): value for key, value in load_meta().items()}
+    finance = _is_finance(user)
+    names = {row['id']: row['name'] for row in get_db().execute('SELECT id,name FROM members')}
+    result = []
+    for original in snapshot['records']:
+        item = dict(original)
+        owner = meta.get(item['id'], {})
+        if not finance and not _belongs_to_user(owner, user):
+            continue
+        item['submitter_id'] = owner.get('submitter_id')
+        item['ownership_unresolved'] = not bool(item['submitter_id'])
+        item['submitter_original'] = owner.get('submitter', item.get('submitter', ''))
+        item['submitter'] = names.get(item['submitter_id'], item['submitter_original'])
+        item['amount'] = decimal_amount(item['amount'])
+        result.append(item)
+    return result
 
 
 # ---- 单文件 → 发票字典（合并元数据字段，ID 使用正斜杠相对路径）----
@@ -1173,7 +1270,7 @@ def index():
 # ---- 列表：成员仅返回自己的（服务端过滤 submitter）----
 def api_invoices():
     user = current_user()
-    invoices = scan_invoices()
+    invoices = g.invoice_snapshot_records
     if not _is_finance(user):
         invoices = [i for i in invoices if _belongs_to_user(i, user)]
     result = invoices
@@ -1246,7 +1343,7 @@ def api_invoices():
 # ---- 统计：成员仅统计自己的 ----
 def api_stats():
     user = current_user()
-    invoices = scan_invoices()
+    invoices = g.invoice_snapshot_records
     if not _is_finance(user):
         invoices = [i for i in invoices if _belongs_to_user(i, user)]
     return jsonify(get_stats(invoices))
@@ -1258,9 +1355,8 @@ def api_submitters():
     user = current_user()
     if not _is_finance(user):
         return jsonify([user['name']])
-    meta = load_meta()
     subs = set()
-    for v in meta.values():
+    for v in g.invoice_snapshot_records:
         s = v.get('submitter', '').strip()
         if s: subs.add(s)
     return jsonify(sorted(subs))
@@ -1342,6 +1438,7 @@ def api_invoice_update():
             while os.path.exists(dest):
                 dest = os.path.join(directory, f'{stem}_{counter}{ext}')
                 counter += 1
+            _snapshot_before_mutation(source, dest)
             shutil.move(source, dest)
             # Build the public relative path from validated logical components;
             # avoid platform-specific path rendering on Windows.
@@ -1421,6 +1518,8 @@ def api_check_duplicate():
     rel_path = request.args.get('rel_path', '')
     invoice_number = request.args.get('invoice_number', '')
     tmp_path = request.args.get('tmp_path', '')
+    if len(invoice_number) > 64:
+        return jsonify({'success': False, 'error': '发票号码过长'}), 400
 
     path = None
     if tmp_path:
@@ -1431,29 +1530,24 @@ def api_check_duplicate():
         if not _is_safe_rel(rel_path) or not _user_can_view(rel_path):
             return jsonify({'success': False, 'error': '无权限'}), 403
         path = _safe_join(rel_path)
-    elif not tmp_path and not rel_path:
+    elif invoice_number and not _is_finance():
+        return jsonify({'success': False, 'error': '仅财务可按发票号码独立查询'}), 403
+    elif not invoice_number:
         return jsonify({'success': True, 'duplicates': []})
 
     duplicates = []
+    index, hashes = invoice_dedupe_indexes()
     if path and os.path.isfile(path):
-        duplicates = check_duplicates(os.path.relpath(path, BASE_DIR)) or []
+        duplicates = check_duplicates(os.path.relpath(path, BASE_DIR), index=index, hashes=hashes) or []
 
     # 同时按发票号码查
     if invoice_number:
-        if len(invoice_number) > 64:
-            return jsonify({'success': False, 'error': '发票号码过长'}), 400
-        for entry in os.listdir(BASE_DIR):
-            entry_path = os.path.join(BASE_DIR, entry)
-            if not os.path.isdir(entry_path) or is_skipped(entry): continue
-            for root, dirs, files in os.walk(entry_path):
-                dirs[:] = [d for d in dirs if not is_skipped(d)]
-                for f in files:
-                    if not f.lower().endswith('.pdf'): continue
-                    fp = os.path.join(root, f)
-                    if extract_invoice_number(fp) == invoice_number:
-                        rp = os.path.relpath(fp, BASE_DIR)
-                        if rp not in [d['path'] for d in duplicates]:
-                            duplicates.append({'type': '发票号码匹配', 'path': rp})
+        known = {d['path'].replace('\\', '/') for d in duplicates}
+        for rp in index.get(invoice_number, []):
+            rp = rp.replace('\\', '/')
+            if rp not in known:
+                duplicates.append({'type': '发票号码匹配', 'path': rp})
+                known.add(rp)
 
     return jsonify({'success': True, 'duplicates': _visible_duplicates(duplicates)})
 
@@ -1491,9 +1585,10 @@ def api_job_detail(job_id):
 @bp.route('/api/job/stream/<job_id>')
 @finance_required
 def api_job_stream(job_id):
+    user = current_user()
     if invoice_jobs.get_job(job_id) is None:
         return jsonify(error='任务不存在'), 404
-    return _job_sse(job_id)
+    return _job_sse(job_id, user['id'], user['session_version'])
 
 
 # ---- 后台任务实现 ----
@@ -1819,6 +1914,37 @@ def api_upload_cleanup():
     return jsonify({'success': True, 'removed': removed})
 
 
+def _commit_upload(tmp_path, new_path, meta, rel_path, amount, vendor):
+    """The caller holds the invoice lock; no cross-device copy fallback is allowed.
+
+    Publish ownership before the atomic rename, retaining the upload on failure.
+    A crash between these two steps can leave metadata without a PDF; it never
+    publishes an ownerless PDF. Cache persistence is not part of the commit.
+    """
+    previous = load_meta()
+    try:
+        save_meta(meta)
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError('入库信息保存失败，临时文件已保留，请稍后重试') from exc
+    try:
+        # Both paths normally share INVOICES_DIR. EXDEV is an error, not a copy.
+        _snapshot_before_mutation(tmp_path, new_path)
+        os.rename(tmp_path, new_path)
+    except OSError as exc:
+        try:
+            save_meta(previous)
+        except (OSError, RuntimeError) as rollback_exc:
+            raise RuntimeError('文件未移动，临时文件已保留；元数据恢复失败，请联系管理员核对后重试') from rollback_exc
+        raise RuntimeError('文件移动失败，临时文件已保留，请稍后重试') from exc
+    try:
+        cache = load_cache()
+        cache[rel_path] = {'amount': amount, 'vendor': vendor,
+                           'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        save_cache(cache)
+    except (OSError, RuntimeError, ValueError) as exc:
+        logging.warning('Invoice committed; optional amount cache update failed: %s', exc)
+
+
 @bp.route('/api/upload/confirm', methods=['POST'])
 # ---- 入库确认：成员提交人/状态被服务端强制为 本人 / 未报销 ----
 def api_upload_confirm():
@@ -1845,6 +1971,8 @@ def api_upload_confirm():
     amount = _valid_amount(data.get('amount', 0))
     if amount is None:
         return jsonify({'success': False, 'error': '金额必须是范围内的非负数，按分四舍五入'}), 400
+    if amount <= 0:
+        return jsonify(success=False, code='AMOUNT_REQUIRED', error='请先人工补录金额，按分四舍五入后必须大于 0'), 400
     vendor = data.get('vendor', '')
     invoice_number = data.get('invoice_number', '')
 
@@ -1879,11 +2007,6 @@ def api_upload_confirm():
         new_path = os.path.join(target_dir, f"{name}_{counter}{ext}")
         counter += 1
 
-    try:
-        shutil.move(tmp_path, new_path)
-    except Exception as e:
-        return jsonify({'success': False, 'error': f'文件移动失败: {e}'})
-
     rel_path = os.path.relpath(new_path, BASE_DIR).replace('\\', '/')
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
     meta[rel_path] = {
@@ -1900,13 +2023,11 @@ def api_upload_confirm():
         meta[rel_path]['confirmed_date'] = corrected_date
     if 'vendor' in data:
         meta[rel_path]['confirmed_vendor'] = data['vendor']
-    save_meta(meta)
-
-    if amount > 0:
-        cache = load_cache()
-        cache[rel_path] = {'amount': amount, 'vendor': vendor,
-                           'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        save_cache(cache)
+    try:
+        _commit_upload(tmp_path, new_path, meta, rel_path, amount, vendor)
+    except (OSError, RuntimeError) as exc:
+        logging.warning('Invoice confirmation failed: %s', exc)
+        return jsonify(success=False, code='UPLOAD_COMMIT_FAILED', error=str(exc)), 503
 
     return jsonify({'success': True, 'rel_path': rel_path, 'message': f'已入库: {os.path.basename(new_path)}',
                     **money_fields(to_cents(amount))})
@@ -1956,6 +2077,10 @@ def api_upload_confirm_batch():
         if amount is None:
             results.append({'file': item.get('original_name', ''), 'status': 'error', 'reason': '金额无效'})
             continue
+        if amount <= 0:
+            results.append({'file': item.get('original_name', ''), 'status': 'error',
+                            'code': 'AMOUNT_REQUIRED', 'reason': '请先人工补录金额，按分四舍五入后必须大于 0'})
+            continue
         vendor = item.get('vendor', '')
         original_name = item.get('original_name', '')
         invoice_number = item.get('invoice_number', '')
@@ -2003,7 +2128,6 @@ def api_upload_confirm_batch():
             counter += 1
 
         try:
-            shutil.move(tmp_path, new_path)
             rel_path = os.path.relpath(new_path, BASE_DIR).replace('\\', '/')
             meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
             meta[rel_path] = {
@@ -2020,11 +2144,7 @@ def api_upload_confirm_batch():
                 meta[rel_path]['confirmed_date'] = corrected_date
             if 'vendor' in item:
                 meta[rel_path]['confirmed_vendor'] = item['vendor']
-            save_meta(meta)
-            if amount > 0:
-                cache = load_cache()
-                cache[rel_path] = {'amount': amount, 'vendor': vendor, 'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                save_cache(cache)
+            _commit_upload(tmp_path, new_path, meta, rel_path, amount, vendor)
             # 更新本次请求内的查重索引，让同一批次里的重复文件也能被拦住。
             new_digest = _file_hash(new_path)
             if new_digest:
@@ -2108,6 +2228,8 @@ def api_organize_preview():
 @finance_required
 # ---- 刷新 PDF 金额（管理，后台任务）----
 def api_refresh():
+    _snapshot_before_mutation()
+    g.invoice_snapshot_force = True
     invoices = scan_invoices(use_cache=False)
     cache = {}
     for inv in invoices:
@@ -2115,6 +2237,7 @@ def api_refresh():
             cache[inv['id']] = {'amount': inv['amount'], 'vendor': inv['vendor'],
                                 'updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     save_cache(cache)
+    g.invoice_snapshot_scanned = invoices
     pdf_count = sum(1 for i in invoices if i['source'] == 'PDF')
     return jsonify({'success': True, 'total': len(invoices), 'pdf_extracted': pdf_count,
                     'message': f"刷新完成：共 {len(invoices)} 张，{pdf_count} 张从PDF提取金额"})
@@ -2179,7 +2302,7 @@ def api_export_download():
     writer = csv.writer(output)
     writer.writerow(['月份', '文件夹', '状态', '提交人', '序号', '类别', '金额', '金额来源',
                      '供应商', '开票日期', '报销日期', '备注', '发票号码', '文件名', '文件路径'])
-    for inv in scan_invoices():
+    for inv in g.invoice_snapshot_records:
         writer.writerow([safe_csv_cell(value) for value in (
             inv.get('month', ''), inv.get('folder', ''), inv.get('status', ''),
             inv.get('submitter', ''), inv.get('seq', ''), inv.get('category', ''),
@@ -2239,6 +2362,12 @@ def api_export_zip():
 
 # ===================== 集成适配 =====================
 
+_SNAPSHOT_READ_ENDPOINTS = {'invoices.api_invoices', 'invoices.api_stats',
+                            'invoices.api_submitters', 'invoices.api_export_download'}
+_SNAPSHOT_WRITE_ENDPOINTS = {'invoices.api_invoice_update', 'invoices.api_invoice_batch',
+                            'invoices.api_upload_confirm', 'invoices.api_upload_confirm_batch',
+                            'invoices.api_organize', 'invoices.api_refresh'}
+
 
 @bp.before_request
 # ---- 模块守卫：登录即可访问（管理接口与数据级权限在各自位置控制）----
@@ -2249,8 +2378,25 @@ def _invoices_guard():
             return jsonify({'success': False, 'error': '未登录'}), 401
         return redirect('/login')
     start_invoice_worker()
+    if request.endpoint in _SNAPSHOT_READ_ENDPOINTS:
+        try:
+            records = _read_invoice_snapshot(user)
+        except (OSError, RuntimeError, ValueError) as exc:
+            logging.warning('无法读取发票快照: %s', exc)
+            records = None
+            g.invoice_snapshot_state = 'failed'
+        if records is None:
+            failed = g.invoice_snapshot_state == 'failed'
+            reply = jsonify(success=False,
+                            code='INVOICE_SNAPSHOT_FAILED' if failed else 'INVOICE_SNAPSHOT_INITIALIZING',
+                            error='发票快照初始化失败，请联系财务刷新重试' if failed else '发票快照正在初始化，请稍后重试')
+            reply.status_code = 503
+            reply.headers['Retry-After'] = '2'
+            return reply
+        g.invoice_snapshot_records = records
+        return None
     if request.endpoint not in {'invoices.index', 'invoices.api_job_stream', 'invoices.api_job_start',
-                                'invoices.api_job_detail', 'invoices.api_jobs'}:
+                                'invoices.api_job_detail', 'invoices.api_jobs', 'invoices.api_owners'}:
         if not _invoice_lock.acquire(timeout=_INVOICE_LOCK_TIMEOUT):
             # 拿不到锁时返回可重试的 503，而不是让请求无限期挂着。
             message = '发票系统正忙，请稍后重试'
@@ -2263,8 +2409,62 @@ def _invoices_guard():
     return None
 
 
+def _file_stamp(path):
+    try:
+        stat = os.stat(path)
+        return stat.st_ino, stat.st_size, stat.st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def _snapshot_before_mutation(*paths):
+    # Called only after business validation, immediately before an actual
+    # metadata/file operation. Track affected paths, never walk all PDFs here.
+    if not has_request_context() or request.endpoint not in _SNAPSHOT_WRITE_ENDPOINTS:
+        return
+    if not hasattr(g, 'invoice_snapshot_change'):
+        change = {'meta': load_meta(), 'files': {}, 'state': load_json(SNAPSHOT_STATE_FILE),
+                  'state_exists': os.path.exists(SNAPSHOT_STATE_FILE)}
+        _begin_invoice_snapshot()
+        g.invoice_snapshot_change = change
+    for path in paths:
+        g.invoice_snapshot_change['files'].setdefault(path, _file_stamp(path))
+
+
+def _complete_request_snapshot(failed=False):
+    change = g.pop('invoice_snapshot_change', None)
+    if change is None:
+        return
+    try:
+        changed = (g.pop('invoice_snapshot_force', False) or change['meta'] != load_meta()
+                   or any(_file_stamp(path) != before for path, before in change['files'].items()))
+        if changed:
+            _publish_invoice_snapshot(g.pop('invoice_snapshot_scanned', None))
+            if failed:
+                # A failed batch can still have durable partial writes. Publish
+                # their complete truth, but retain the visible failure warning.
+                _fail_invoice_snapshot()
+        elif change['state_exists']:
+            save_json(SNAPSHOT_STATE_FILE, change['state'])
+        elif os.path.exists(SNAPSHOT_STATE_FILE):
+            os.remove(SNAPSHOT_STATE_FILE)
+    except (OSError, RuntimeError, ValueError):
+        _fail_invoice_snapshot()
+
+
+@bp.after_request
+def _finish_invoice_snapshot(response):
+    _complete_request_snapshot(response.status_code >= 500)
+    if hasattr(g, 'invoice_snapshot_state'):
+        response.headers['X-Invoice-Snapshot-State'] = g.invoice_snapshot_state
+        if getattr(g, 'invoice_snapshot_updated_at', ''):
+            response.headers['X-Invoice-Snapshot-Updated-At'] = g.invoice_snapshot_updated_at
+    return response
+
+
 @bp.teardown_request
 def _release_invoice_lock(exc):
+    _complete_request_snapshot(failed=True)
     if getattr(g, 'invoice_lock_held', False):
         g.invoice_lock_held = False
         _invoice_lock.release()
@@ -2314,3 +2514,5 @@ with _invoice_lock:
     build_folder_structure()
     ensure_dir(UPLOAD_DIR)
     cleanup_uploads()
+    _begin_invoice_snapshot()
+    _publish_invoice_snapshot()

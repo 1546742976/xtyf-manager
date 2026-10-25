@@ -1,4 +1,4 @@
-"""Build Tauri Ubuntu 22.04 ARM64 DEB and Fedora x86_64 RPM in Ubuntu WSL.
+"""Build Tauri Ubuntu DEB and Fedora RPM for x86_64 and ARM64 in Ubuntu WSL.
 
 --setup installs the native/cross toolchain and checksum-pinned Linux Node.js.
 --check is read-only; builds use a Linux-only cache, never Windows node_modules.
@@ -182,7 +182,7 @@ def verify_package(package, target, config, source, executable_source, env, cach
             raise RuntimeError('Native client protocol implementation missing from executable')
         if manifest.read_bytes() not in binary_data:
             raise RuntimeError('Frontend manifest is not embedded in the Tauri executable')
-        if target == 'rpm':
+        if arch == 'x86_64':
             build_info = extracted / 'build-info.json'
             run([executable, '--build-info', build_info], env=env)
             info = json.loads(build_info.read_text(encoding='utf-8'))
@@ -199,7 +199,7 @@ def verify_package(package, target, config, source, executable_source, env, cach
             'desktopEntryVerified': True, 'clientPayloadVerified': True,
             'localFrontendManifestSha256': sha256(manifest),
             'embeddedFrontendManifestVerified': True,
-            'nativeBuildInfoExecuted': target == 'rpm',
+            'nativeBuildInfoExecuted': arch == 'x86_64',
             'runtimeUiVerified': False, 'targetRuntimeStatus': 'not-tested',
         }
         if target == 'deb':
@@ -250,14 +250,16 @@ def build(root, output, cache, env):
     for target, triple, key, suffix in (
         ('rpm', HOST_TARGET, 'fedora', 'x86_64.rpm'),
         ('deb', ARM_TARGET, 'ubuntu', 'arm64.deb'),
+        ('deb', HOST_TARGET, 'ubuntu-amd64', 'amd64.deb'),
+        ('rpm', ARM_TARGET, 'fedora-aarch64', 'aarch64.rpm'),
     ):
-        target_env = arm_environment(env, cache) if target == 'deb' else env
+        target_env = arm_environment(env, cache) if triple == ARM_TARGET else env
         run([cli, 'build', '--ci', '--target', triple, '--bundles', target, '--', '--locked'], cwd=source, env=target_env)
         release = project / 'target' / triple / 'release'
         packages = list((release / 'bundle' / target).glob(f'*{config["version"]}*.{target}'))
         if len(packages) != 1:
             raise RuntimeError(f'Expected one current {target} package, found {packages}')
-        report[key] = verify_package(packages[0], target, config, source, release / 'xtyf-manager', env, cache)
+        report[key] = verify_package(packages[0], target, config, source, release / 'xtyf-manager', env, cache, architecture='arm64' if triple == ARM_TARGET else 'x86_64')
         artifacts.append((packages[0], f'XTYF-Manager-{config["version"]}-{suffix}'))
     report['builder'] = {
         'environment': platform.freedesktop_os_release()['PRETTY_NAME'] + ' ' + platform.machine(),

@@ -37,6 +37,30 @@ async function openSchedule(page) {
   await page.locator("[data-schedule-root] #schedule-body .schedule-task").first().waitFor();
 }
 
+async function checkScheduleEntry(page, base, emptyProject) {
+  await page.goto(base + "/manage");
+  await page.locator("#t-filter-project option[value='" + emptyProject + "']").waitFor({state: "attached"});
+  assert.equal(await page.locator("#schedule-project").isEnabled(), true,
+    "default all-groups view must offer group selection instead of a silent disabled button");
+  let previews = 0;
+  const observe = request => { if (request.url().endsWith("/schedule/preview")) previews++; };
+  page.on("request", observe);
+  await page.locator("#schedule-project").click();
+  await page.locator("#schedule-project-choice").waitFor();
+  assert.equal(previews, 0, "opening the chooser must not schedule an arbitrary group");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#schedule-project").evaluate(el => el === document.activeElement), true);
+  await page.locator("#schedule-project").click();
+  await page.locator("#schedule-project-choice [name=project]").selectOption(String(emptyProject));
+  await page.locator("#schedule-project-choice [type=submit]").click();
+  await page.locator("#schedule-feedback").filter({hasText:"先在任务中心创建任务"}).waitFor();
+  assert.equal(await page.locator("#schedule-apply").isDisabled(), true);
+  assert.equal(await page.locator("#schedule-body a").getAttribute("href"), "/tasks?type=vehicle");
+  assert.equal(previews, 1);
+  page.off("request", observe);
+  await page.locator("[data-schedule-close]").click();
+}
+
 (async () => {
   const server = spawn(process.env.REVIEW_PYTHON || "python", ["-B", path.join(__dirname, "server.py")],
     {cwd: root, env: {...process.env, MAIL_MODE: "off"}, stdio: ["ignore","pipe","pipe"]});
@@ -58,6 +82,8 @@ async function openSchedule(page) {
     const pageErrors = [];
     page.on("pageerror", error => pageErrors.push(error.message));
     await login(page, base, "browser-test-initial", true);
+    const emptyProject = (await api(page, "/api/projects", {name: "空组排期入口"})).body.id;
+    await checkScheduleEntry(page, base, emptyProject);
     const project = (await api(page, "/api/projects", {name: "依赖排期集成测试"})).body.id;
     assert.ok(project);
     const parent = (await api(page, "/api/task", {title: "前置 A", project_id: project,
@@ -124,6 +150,7 @@ async function openSchedule(page) {
     const mobile = await webkitBrowser.newPage({viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true});
     mobile.setDefaultTimeout(15000);
     await login(mobile, base, "schedule-e2e-password");
+    await checkScheduleEntry(mobile, base, emptyProject);
     await selectProject(mobile, base, project);
     await openSchedule(mobile);
     await mobile.locator("[data-schedule-close]").click();

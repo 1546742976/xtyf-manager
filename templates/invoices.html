@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN" {% include "_theme_attributes.html" %}>
 <head>
+<link rel="icon" href="/static/brand/app-icon-256.png">
 <meta charset="UTF-8">
 {% include "_security_head.html" %}
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -41,6 +42,7 @@
 </div>
 <input type="file" id="fileInput" accept=".pdf" multiple style="display:none" onchange="handleFiles(this.files)">
 
+<p id="invoice-snapshot-status" role="status" aria-live="polite" hidden></p>
 <div class="stats-grid" id="statsGrid"></div>
 
 {% if is_finance %}
@@ -53,22 +55,22 @@
 
 <div class="batch-bar finance-only" id="batchBar">
 <span id="batchCount">已选 0 张</span>
-<select id="batchStatus"><option value="">-- 批量改状态 --</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
-<select id="batchSubmitter"><option value="">-- 批量设提交人 --</option></select>
+<select id="batchStatus" aria-label="批量修改状态"><option value="">-- 批量改状态 --</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
+<select id="batchSubmitter" aria-label="批量设置提交人"><option value="">-- 批量设提交人 --</option></select>
 <button onclick="doBatchUpdate()">执行</button>
 <button class="cancel" onclick="clearSelection()">取消选择</button>
 </div>
 
 <div class="toolbar">
-<select id="filterStatus" onchange="applyFilters()"><option value="">全部状态</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
-<select id="filterMonth" onchange="applyFilters()"><option value="">全部月份</option></select>
-<select id="filterCategory" onchange="applyFilters()"><option value="">全部分类</option></select>
-<select id="filterSubmitter" onchange="applyFilters()"><option value="">全部提交人</option></select>
+<select id="filterStatus" aria-label="筛选状态" onchange="applyFilters()"><option value="">全部状态</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
+<select id="filterMonth" aria-label="筛选月份" onchange="applyFilters()"><option value="">全部月份</option></select>
+<select id="filterCategory" aria-label="筛选分类" onchange="applyFilters()"><option value="">全部分类</option></select>
+<select id="filterSubmitter" aria-label="筛选提交人" onchange="applyFilters()"><option value="">全部提交人</option></select>
 <label class="finance-only"><input type="checkbox" id="filterOwnership" onchange="applyFilters()"> 归属待确认</label>
 <div class="sep"></div>
-<input type="date" id="filterDateFrom" onchange="applyFilters()" title="开始日期" style="width:125px">
+<input type="date" id="filterDateFrom" aria-label="开始日期" onchange="applyFilters()" title="开始日期" style="width:125px">
 <span style="color:#888;font-size:11px">至</span>
-<input type="date" id="filterDateTo" onchange="applyFilters()" title="结束日期" style="width:125px">
+<input type="date" id="filterDateTo" aria-label="结束日期" onchange="applyFilters()" title="结束日期" style="width:125px">
 <div class="sep"></div>
 <div class="sort-controls">
 <label for="invoiceSortBy" class="sort-label">排序</label>
@@ -90,7 +92,7 @@
 <div class="table-wrap">
 <table>
 <thead><tr>
-<th class="col-check" style="width:32px"><input type="checkbox" id="selectAll" onclick="toggleSelectAll()" title="全选"></th>
+<th class="col-check" style="width:32px"><input type="checkbox" id="selectAll" aria-label="全选发票" onclick="toggleSelectAll()" title="全选"></th>
 <th class="sortable-header" data-sort="month" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('month')">月份<span class="sort-indicator" aria-hidden="true"></span></button></th>
 <th class="sortable-header" data-sort="date" aria-sort="descending"><button type="button" class="sort-head" onclick="setInvoiceSort('date')">日期<span class="sort-indicator" aria-hidden="true"> ↓</span></button></th>
 <th class="sortable-header" data-sort="status" aria-sort="none"><button type="button" class="sort-head" onclick="setInvoiceSort('status')">状态<span class="sort-indicator" aria-hidden="true"></span></button></th>
@@ -111,47 +113,47 @@
 </main>
 </div>
 <!-- 统计弹窗 (略) -->
-<div class="modal" id="statsModal"><div class="modal-content wide">
-<div class="modal-header"><h2>发票统计</h2><button class="modal-close" onclick="StatsModal.close()">&times;</button></div>
+<dialog class="modal" id="statsModal" aria-modal="true" aria-labelledby="statsModalTitle"><div class="modal-content wide">
+<div class="modal-header"><h2 id="statsModalTitle">发票统计</h2><button class="modal-close" type="button" aria-label="关闭" onclick="StatsModal.close()">&times;</button></div>
 <div class="stats-grid" id="modalStatsGrid"></div>
 <div class="chart-row three"><div class="chart-box"><h3>状态分布</h3><div id="statusChart"></div></div><div class="chart-box"><h3>按月份</h3><div id="monthChart"></div></div><div class="chart-box"><h3>按类别</h3><div id="categoryChart"></div></div></div>
 <div class="chart-row"><div class="chart-box"><h3>按提交人</h3><div id="submitterChart"></div></div></div>
-</div></div>
+</div></dialog>
 
 <!-- 详情弹窗 -->
-<div class="modal" id="detailModal"><div class="modal-content">
-<div class="modal-header"><h2>发票详情</h2><button class="modal-close" onclick="DetailModal.close()">&times;</button></div>
+<dialog class="modal" id="detailModal" aria-modal="true" aria-labelledby="detailModalTitle"><div class="modal-content">
+<div class="modal-header"><h2 id="detailModalTitle">发票详情</h2><button class="modal-close" type="button" aria-label="关闭" onclick="DetailModal.close()">&times;</button></div>
 <div class="detail-grid">
 <div class="field"><label for="detMonth">月份</label><input id="detMonth" placeholder="YYYY.M" inputmode="decimal" {{ 'readonly' if not is_finance else '' }}></div>
 <div class="field"><label for="detDate">开票日期</label><input type="date" id="detDate" {{ 'readonly' if not is_finance else '' }}></div>
-<div class="field"><label>状态</label><select id="detStatus"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select></div>
-<div class="field"><label>报销日期</label><input type="date" id="detReimbursedDate"></div>
-<div class="field"><label>提交人</label><select id="detSubmitter" aria-label="提交人"><option value="0">待确认 / 未指定</option></select></div>
-<div class="field"><label>类别</label><input id="detCategory" placeholder="类别"></div>
-<div class="field"><label>供应商</label><input id="detVendor" readonly></div>
-<div class="field"><label>金额</label><input id="detAmount" readonly></div>
-<div class="field full"><label>备注</label><textarea id="detNotes" placeholder="添加备注..." rows="2"></textarea></div>
-<div class="field"><label>发票号码</label><input id="detInvNum" placeholder="发票号码"></div>
-<div class="field"><label>标签</label><input id="detTags" placeholder="逗号分隔"></div>
-<div class="field"><label>文件名</label><input id="detFilename" readonly></div>
-<div class="field"><label>金额来源</label><input id="detSource" readonly></div>
-<div class="field full"><label>文件路径</label><input id="detPath" readonly style="font-size:11px;color:#888"></div>
+<div class="field"><label for="detStatus">状态</label><select id="detStatus"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select></div>
+<div class="field"><label for="detReimbursedDate">报销日期</label><input type="date" id="detReimbursedDate"></div>
+<div class="field"><label for="detSubmitter">提交人</label><select id="detSubmitter" aria-label="提交人"><option value="0">待确认 / 未指定</option></select></div>
+<div class="field"><label for="detCategory">类别</label><input id="detCategory" placeholder="类别"></div>
+<div class="field"><label for="detVendor">供应商</label><input id="detVendor" readonly></div>
+<div class="field"><label for="detAmount">金额</label><input id="detAmount" readonly></div>
+<div class="field full"><label for="detNotes">备注</label><textarea id="detNotes" placeholder="添加备注..." rows="2"></textarea></div>
+<div class="field"><label for="detInvNum">发票号码</label><input id="detInvNum" placeholder="发票号码"></div>
+<div class="field"><label for="detTags">标签</label><input id="detTags" placeholder="逗号分隔"></div>
+<div class="field"><label for="detFilename">文件名</label><input id="detFilename" readonly></div>
+<div class="field"><label for="detSource">金额来源</label><input id="detSource" readonly></div>
+<div class="field full"><label for="detPath">文件路径</label><input id="detPath" readonly style="font-size:11px;color:#888"></div>
 </div>
 <div class="detail-actions">
 <button class="btn-danger finance-only" onclick="DetailModal.clearMeta()">清除元数据</button>
 <button class="btn-cancel" onclick="DetailModal.close()">取消</button>
 <button class="btn-save finance-only" onclick="DetailModal.save()">保存</button>
 </div>
-</div></div>
+</div></dialog>
 
 <!-- 批量上传确认弹窗 -->
-<div class="modal" id="batchUploadModal"><div class="modal-content xwide">
-<div class="modal-header"><h2>批量确认发票入库 (<span id="buTotal">0</span> 张)</h2><button class="modal-close" onclick="BUModal.close()">&times;</button></div>
+<dialog class="modal" id="batchUploadModal" aria-modal="true" aria-labelledby="batchUploadModalTitle"><div class="modal-content xwide">
+<div class="modal-header"><h2 id="batchUploadModalTitle">批量确认发票入库 (<span id="buTotal">0</span> 张)</h2><button class="modal-close" type="button" aria-label="关闭" onclick="BUModal.close()">&times;</button></div>
 <div class="finance-only" style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
 <label style="font-size:12px;color:#888;white-space:nowrap">统一提交人:</label>
 <select id="buSubmitter" aria-label="统一提交人" style="flex:1;padding:7px 10px"><option value="">选择统一提交人</option></select>
 <label style="font-size:12px;color:#888;white-space:nowrap">统一状态:</label>
-<select id="buStatus" style="padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:12px"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
+<select id="buStatus" aria-label="统一状态" style="padding:7px 10px;border:1px solid #ddd;border-radius:5px;font-size:12px"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
 </div>
 <div style="max-height:55vh;overflow-y:auto">
 <table class="upload-list" id="buTable"><thead><tr><th style="width:30px">#</th><th>文件名</th><th>金额</th><th>日期</th><th>月份</th><th>供应商</th><th>发票号</th><th>类别</th><th>提交人</th><th>重复</th></tr></thead><tbody id="buTbody"></tbody></table>
@@ -160,11 +162,11 @@
 <button class="btn-cancel" onclick="BUModal.close()">取消</button>
 <button class="btn-save" onclick="BUModal.confirm()">全部确认入库</button>
 </div>
-</div></div>
+</div></dialog>
 
 <!-- 删除重复确认弹窗 -->
-<div class="modal" id="delDupModal"><div class="modal-content">
-<div class="modal-header"><h2>删除重复发票</h2><button class="modal-close" onclick="DelDupModal.close()">&times;</button></div>
+<dialog class="modal" id="delDupModal" aria-modal="true" aria-labelledby="delDupModalTitle"><div class="modal-content">
+<div class="modal-header"><h2 id="delDupModalTitle">删除重复发票</h2><button class="modal-close" type="button" aria-label="关闭" onclick="DelDupModal.close()">&times;</button></div>
 <div class="dup-warning">
 <div class="dup-title" style="font-size:14px">发现 <span id="delDupCount">0</span> 个重复项</div>
 <div style="color:#888;margin-top:6px;font-size:12px">每组重复将保留较早的一个文件，删除其余副本<br>此操作<b>不可恢复</b>，建议先确认后再执行</div>
@@ -174,15 +176,15 @@
 <button class="btn-cancel" onclick="DelDupModal.close()">保留重复文件</button>
 <button class="btn-danger" onclick="DelDupModal.confirm()" style="background:#d93025;color:#fff;border:none;padding:8px 18px;border-radius:5px;cursor:pointer">确认删除重复文件</button>
 </div>
-</div></div>
+</div></dialog>
 
 <div class="toast" id="toast"></div>
 {% if is_finance %}
-<div class="modal" id="invoiceJobModal" role="dialog" aria-modal="true" aria-labelledby="invoiceJobResultTitle"><div class="modal-content">
-<div class="modal-header"><h2 id="invoiceJobResultTitle">任务结果</h2><button class="modal-close" type="button" onclick="document.getElementById('invoiceJobModal').classList.remove('show')" aria-label="关闭">&times;</button></div>
+<dialog class="modal" id="invoiceJobModal" aria-modal="true" aria-labelledby="invoiceJobModalTitle"><div class="modal-content">
+<div class="modal-header"><h2 id="invoiceJobModalTitle">任务结果</h2><button class="modal-close" type="button" data-close-invoice-job aria-label="关闭">&times;</button></div>
 <p id="invoiceJobResultMessage"></p>
 <pre id="invoiceJobResultDetails" class="invoice-job-result"></pre>
-</div></div>
+</div></dialog>
 {% endif %}
 <!-- 进度条 -->
 <div id="progressBar" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:14px;padding:28px 36px;box-shadow:0 12px 40px rgba(0,0,0,0.2);z-index:10000;text-align:center;min-width:320px">
@@ -195,6 +197,7 @@
 
 <script src="/static/workspace.js"></script>
 <script src="/static/money.js"></script>
+<script src="/static/invoice-polling.js"></script>
 <script src="/static/invoices.js"></script>
 </body>
 </html>

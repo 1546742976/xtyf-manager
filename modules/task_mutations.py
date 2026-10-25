@@ -5,6 +5,8 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from common import now_str
+from modules.input_validation import clean_text
+from modules.task_assignment_mail import enqueue_assignments, executors
 from modules.task_dates import apply_start_date_request
 from modules.task_types import Actor, JsonObject
 from modules.task_state import BLOCKER_FIELDS, COMPLETION_FIELDS, blocker_values, completion_values, record_blocker_event
@@ -137,16 +139,24 @@ def create_task(
         if manage_transaction:
             db.rollback()
 
+    try:
+        title = clean_text(data.get('title'), '任务标题', 200, allow_newlines=False)
+        detail = clean_text(data.get('detail', ''), '任务详情', 10000, required=False)
+    except ValueError as exc:
+        rollback_owned(); return None, None, str(exc), 400
     if "schedule_locked" in data and type(data["schedule_locked"]) is not bool:
         rollback_owned(); return None, None, "自动排期固定日期必须为布尔值", 400
     owner_id = parse_id(data.get("owner_id"), "owner_id")
     project_id = parse_id(data.get("project_id"), "project_id")
     if "project" in data:
-        legacy_id = _legacy_catalog(db, "projects", str(data.get("project") or ""), True)
+        project_name = str(data.get("project") or "").strip()
+        legacy_id = _legacy_catalog(db, "projects", project_name, actor['role'] in ('admin', 'manager'))
+        if project_name and legacy_id is None:
+            rollback_owned(); return None, None, "造车组别不存在", 400
         if "project_id" in data and project_id != legacy_id:
             rollback_owned(); return None, None, "project 与 project_id 冲突", 400
         project_id = legacy_id
-    values = {"title": str(data.get("title") or "").strip(), "detail": str(data.get("detail") or "").strip(),
+    values = {"title": title, "detail": detail,
               "owner_id": owner_id, "project_id": project_id,
               "parent_id": parse_id(data.get("parent_id"), "parent_id"),
               "priority": data.get("priority", "中"), "status": data.get("status", "未开始"),
@@ -178,6 +188,7 @@ def create_task(
         after = dict(values) | dict(relations)
         _revision(db, task_id, actor, {}, after, 1, "create")
         record_blocker_event(db, task_id, actor, blocker_event, stamp)
+        enqueue_assignments(db, 'vehicle', task_id, actor)
         if manage_transaction:
             db.commit()
         return task_id, 1, None, 200
@@ -194,10 +205,33 @@ def update_task(
     if row is None:
         db.rollback(); return None, "任务不存在", 404
     prior = dict(row)
+    previous_executors = executors(db, 'vehicle', task_id)
     participant_ids = _relations(db, task_id)["participant_ids"]
     management = actor["role"] in ("admin", "manager")
-    if not management and actor["id"] != prior["owner_id"] and actor["id"] not in participant_ids:
+    executor = management or actor['id'] == prior['owner_id'] or actor['id'] in participant_ids
+    creator = actor['id'] == prior.get('created_by')
+    if not executor and not creator:
         db.rollback(); return None, "无权限", 403
+    if 'created_by' in data:
+        db.rollback(); return None, '创建者身份不能修改', 403
+    if not executor and set(data) - {'version', 'title', 'detail', 'start_date', 'due_date', 'note'}:
+        db.rollback(); return None, '创建者只能修改标题、说明及计划日期', 403
+    if not executor and 'version' not in data:
+        db.rollback(); return None, '修改必须提供版本号', 400
+    note = data.get('note', '')
+    if not isinstance(note, str) or len(note) > 2000:
+        db.rollback(); return None, '修改原因最多 2000 字', 400
+    terminal = prior['status'] in ('已完成', '已取消')
+    reopening = terminal and data.get('status', prior['status']) in ('未开始', '进行中', '阻塞')
+    correction = management and data.get('correction') is True
+    if terminal and not reopening and not correction:
+        db.rollback(); return None, '请先明确重新打开任务', 409
+    if terminal and not reopening and any(key in data and data[key] != prior[key] for key in COMPLETION_FIELDS):
+        db.rollback(); return None, '终态进度必须通过重新打开修改', 409
+    if (reopening or correction or data.get('status') == '已取消' and not terminal) and not note.strip():
+        db.rollback(); return None, '取消、重新打开或纠错必须填写原因', 400
+    if reopening and not executor:
+        db.rollback(); return None, '只有执行成员可以重新打开', 403
     if "schedule_locked" in data and type(data["schedule_locked"]) is not bool:
         db.rollback(); return None, "自动排期固定日期必须为布尔值", 400
     state_requested = 'progress' in data or data.get('status', prior['status']) != prior['status']
@@ -221,8 +255,13 @@ def update_task(
             db.rollback(); return None, "project 与 project_id 冲突", 400
         values["project_id"] = legacy_id
         touched.add("project_id")
-    for key in ("title", "detail", "start_date", "due_date"):
-        values[key] = str(values[key] or "").strip()
+    try:
+        values['title'] = clean_text(values['title'], '任务标题', 200, allow_newlines=False)
+        values['detail'] = clean_text(values['detail'], '任务详情', 10000, required=False)
+    except ValueError as exc:
+        db.rollback(); return None, str(exc), 400
+    for key in ('start_date', 'due_date'):
+        values[key] = str(values[key] or '').strip()
     date_error = apply_start_date_request(db, data, values, prior)
     if date_error:
         db.rollback(); return None, date_error, 400
@@ -251,7 +290,7 @@ def update_task(
                 ownership.append(label)
         if ownership:
             db.rollback()
-            return None, "只有管理员或项管可以调整" + "、".join(ownership), 403
+            return None, "只有超级管理员或项管可以调整" + "、".join(ownership), 403
     active_members = [item for item in relations["participant_ids"] if item not in old_relations["participant_ids"]]
     if values["owner_id"] != prior["owner_id"] and values["owner_id"] is not None:
         active_members.append(values["owner_id"])
@@ -274,6 +313,8 @@ def update_task(
     before = {key: (prior[key] if key in SCALAR_FIELDS else _relations(db, task_id)[key]) for key in touched}
     after = {key: (values[key] if key in SCALAR_FIELDS else relations[key]) for key in touched}
     changed = {key for key in touched if before[key] != after[key]}
+    if reopening and changed - set(COMPLETION_FIELDS) - set(BLOCKER_FIELDS):
+        db.rollback(); return None, '请先重开，再修改任务内容', 409
     note = str(data.get("note") or "").strip()
     try:
         current = db.execute("SELECT version FROM tasks WHERE id=? AND deleted_at IS NULL", (task_id,)).fetchone()
@@ -299,6 +340,7 @@ def update_task(
                 db.execute('INSERT INTO task_progress_updates(task_id,actor_id,actor_name,progress,note,created_at) VALUES(?,?,?,?,?,?)',
                            (task_id, actor['id'], actor['name'], values['progress'], note or '任务状态与进度同步', now_str()))
             record_blocker_event(db, task_id, actor, blocker_event, now_str())
+            enqueue_assignments(db, 'vehicle', task_id, actor, previous_executors)
         if changed or note:
             db.execute("INSERT INTO logs(task_id,member_id,member_name,note,changes,created_at) VALUES(?,?,?,?,?,?)",
                        (task_id, actor["id"], actor["name"], note, "；".join(sorted(changed)), now_str()))

@@ -51,7 +51,7 @@ async function login(page,base,first){
       await page.screenshot({path:path.join(output,name+'-alerts.png'),fullPage:true});
       await page.goto(base+'/tasks?task='+task.id);await page.locator('#progress-form [name=progress]').fill('100');await page.locator('#progress-form [type=submit]').click();
       await page.locator('#modal-mask').waitFor({state:'hidden'});await page.goto(base+'/tasks?task='+task.id);await page.locator('#modal .modal-info').filter({hasText:'已完成'}).waitFor();
-      await page.locator('#progress-form [name=progress]').fill('45');await page.locator('#progress-form [type=submit]').click();await page.locator('#modal-mask').waitFor({state:'hidden'});await page.goto(base+'/tasks?task='+task.id);await page.locator('#modal .modal-info').filter({hasText:'进行中'}).waitFor();
+      await page.locator('#task-form [name=status]').selectOption('进行中');await page.locator('#task-form [name=progress]').fill('45');await page.locator('#task-form [name=note]').fill('实测仍需调试');await page.locator('#task-form [type=submit]').click();await page.locator('#modal-mask').waitFor({state:'hidden'});await page.goto(base+'/tasks?task='+task.id);await page.locator('#modal .modal-info').filter({hasText:'进行中'}).waitFor();
       const updated=(await api(page,'/api/data')).body.tasks.find(t=>t.id===task.id);assert.equal(updated.progress,45);assert.equal(updated.completed_at,null);
       checks.push(name+': alerts, blocked completion and explicit actual-progress reopen');
       await page.goto(base+'/tasks?type=daily#create');await page.locator('#task-create-panel[aria-busy="false"] #daily-form').waitFor();
@@ -70,7 +70,7 @@ async function login(page,base,first){
       let project=(await api(page,'/api/daily-projects/'+pid)).body.project;assert.equal(project.status,'已完成');assert.equal(project.progress,100);
       assert.equal(await b.locator('[name=note]').inputValue(),'');
       await page.locator('#daily-edit').click();await page.locator('#task-create-panel[aria-busy="false"] #daily-form').waitFor();
-      await page.locator('#daily-form [name=status]').selectOption('进行中');await page.locator(`[name=reopen-${stages[0]}]`).fill('60');await page.locator('#daily-form [type=submit]').click();await page.locator('#task-create-panel').waitFor({state:'hidden'});
+      await page.locator('#daily-form [name=status]').selectOption('进行中');await page.locator(`[name=reopen-${stages[0]}]`).fill('60');await page.locator('#daily-form [name=note]').fill('继续联调');await page.locator('#daily-form [type=submit]').click();await page.locator('#task-create-panel').waitFor({state:'hidden'});
       await page.waitForFunction(stage=>document.querySelector(`[data-progress-form="${stage}"] [name=progress]`)?.value==='60',stages[0]);
       project=(await api(page,'/api/daily-projects/'+pid)).body.project;assert.equal(project.status,'进行中');assert.equal(project.groups.find(g=>g.stage===stages[0]).progress,60);
       await page.locator('#daily-blocker-form [name=blocker_reason]').fill('需要联调');await page.locator('#daily-blocker-form [name=blocker_next_action]').fill('安排时间');await page.locator('#daily-blocker-form [type=submit]').click();await page.locator('#daily-blocker-form [data-resolve-blocker]').waitFor();
