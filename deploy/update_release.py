@@ -20,8 +20,10 @@ from contextlib import closing, contextmanager
 from datetime import datetime
 if __package__:
     from .install_mail import install_mail
+    from .health_url import validate_health_url
 else:
     from install_mail import install_mail
+    from health_url import validate_health_url
 
 APP = Path('/opt/rm-progress')
 SERVICE = 'rm-progress'
@@ -169,10 +171,17 @@ def replace_web_unit(path, content):
             os.unlink(temporary)
 
 
+class NoHealthRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def healthy(url='http://127.0.0.1/login'):
+    validate_health_url(url)
+    opener = urllib.request.build_opener(NoHealthRedirect())
     for attempt in range(30):
         try:
-            with urllib.request.urlopen(url, timeout=2) as response:
+            with opener.open(url, timeout=2) as response:
                 if response.status == 200 and setting('ActiveState') == 'active':
                     return
         except OSError:
@@ -209,9 +218,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--health-url', default='http://127.0.0.1/login', help='更新后及回滚后的 HTTP 200 健康检查地址')
     args = parser.parse_args()
-    parsed = urllib.parse.urlsplit(args.health_url)
-    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
-        parser.error('--health-url 必须是不含账号密码的 HTTP/HTTPS 地址')
+    try:
+        validate_health_url(args.health_url)
+    except ValueError as exc:
+        parser.error(str(exc))
     if sys.platform != 'linux' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         raise RuntimeError('Run on the target Linux server: sudo python3 deploy/update_release.py')
     import fcntl

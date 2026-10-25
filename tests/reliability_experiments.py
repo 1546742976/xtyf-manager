@@ -149,7 +149,7 @@ def legacy_deploy():
         source, binaries = root / "source", root / "bin"
         (source / "deploy").mkdir(parents=True)
         binaries.mkdir()
-        for name in ("deploy.sh", "rm-progress.service"):
+        for name in ("deploy.sh", "health_url.py", "rm-progress.service"):
             shutil.copyfile(ROOT / "deploy" / name, source / "deploy" / name)
         scripts = {
             "sudo": '''#!/bin/bash

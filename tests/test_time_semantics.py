@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from test_tasks import app_module
 import common
-from modules import assets, security, task_mutations, task_queries
+from modules import assets, audit_retention, task_mutations, task_queries
 from modules.task_dates import dependency_start_date
 
 
@@ -49,13 +49,16 @@ class TimeSemanticsTests(unittest.TestCase):
 
     def test_audit_cutoff_is_strict_local_string_and_protects_pending(self):
         with closing(sqlite3.connect(':memory:')) as db:
-            db.executescript('CREATE TABLE security_audit(id INTEGER PRIMARY KEY,outcome TEXT,details TEXT,created_at TEXT);'
+            db.executescript("CREATE TABLE security_audit(id INTEGER PRIMARY KEY,outcome TEXT,details TEXT,created_at TEXT,level TEXT DEFAULT 'critical');"
                              'CREATE TABLE invoice_jobs(audit_id INTEGER);')
-            db.executemany('INSERT INTO security_audit VALUES(?,?,?,?)', [
+            db.executemany('INSERT INTO security_audit(id,outcome,details,created_at) VALUES(?,?,?,?)', [
                 (1, 'ok', '{}', '2026-10-30 23:59:59'), (2, 'ok', '{}', '2026-10-31 00:00:00'),
                 (3, 'ok', '{}', '2026-10-31 00:00:01'), (4, 'pending', '{}', '2020-01-01 00:00:00')])
             fixed = clock(datetime(2026, 11, 1, tzinfo=timezone.utc))
             with patch.dict(os.environ, {'AUDIT_RETENTION_DAYS': '1', 'AUDIT_MAX_ROWS': '0'}), \
-                    patch.object(security, 'datetime', fixed):
-                security.cleanup_audit_rows(db)
+                    patch.object(audit_retention, 'datetime', fixed):
+                plan = audit_retention.cleanup_audit_rows(db)
+                self.assertEqual(plan['ids'], [1])
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM security_audit').fetchone()[0], 4)
+                audit_retention.cleanup_audit_rows(db, confirmed=True)
             self.assertEqual([r[0] for r in db.execute('SELECT id FROM security_audit ORDER BY id')], [2, 3, 4])

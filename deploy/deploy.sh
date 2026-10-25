@@ -16,21 +16,7 @@ SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:80/login}"
 STAGE="配置检查"
 trap 'echo "部署失败：${STAGE}。服务可能已发生变更，请核对后再继续；未执行自动回滚。" >&2' ERR
-python3 - "$HEALTH_URL" <<'PY'
-import sys
-from urllib.parse import urlsplit
-try:
-    raw = sys.argv[1]
-    url = urlsplit(raw)
-    valid = (len(raw) <= 2048 and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in raw)
-             and url.scheme in ('http', 'https') and url.hostname
-             and url.username is None and url.password is None and not url.fragment)
-    url.port
-    if not valid:
-        raise ValueError()
-except ValueError:
-    sys.exit('HEALTH_URL 必须是不含账号密码或片段的有效 HTTP/HTTPS 地址')
-PY
+python3 "$SRC_DIR/deploy/health_url.py" "$HEALTH_URL"
 
 echo "==> 应用目录: $APP_DIR"
 echo "==> 运行用户: $APP_USER"

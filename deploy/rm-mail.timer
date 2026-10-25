@@ -4,8 +4,8 @@ Description=Check XTYF mail queue promptly after each worker finishes
 # Verification/test jobs have priority and can be sent at any hour.
 
 [Timer]
-OnBootSec=60s
-OnUnitInactiveSec=60s
+OnBootSec=15s
+OnUnitInactiveSec=15s
 AccuracySec=1s
 Unit=rm-mail.service
 
