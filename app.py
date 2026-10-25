@@ -345,13 +345,13 @@ def add_no_cache(resp):
 # ==================== 登录 / 登出 ====================
 _LOGIN_WINDOW = 15 * 60
 _LOGIN_FAILURE_LIMIT = 6
-_LOGIN_IP_LIMIT = int(os.environ.get("LOGIN_IP_FAILURE_LIMIT", "40"))
-_LOGIN_GLOBAL_LIMIT = int(os.environ.get("LOGIN_GLOBAL_FAILURE_LIMIT", "500"))
+_LOGIN_IP_LIMIT = int(os.environ.get("LOGIN_IP_FAILURE_LIMIT", "0"))
+_LOGIN_GLOBAL_LIMIT = int(os.environ.get("LOGIN_GLOBAL_FAILURE_LIMIT", "0"))
 
 
 def _login_attempt_key(username):
-    """IP 与用户名共同计数，不信任未经验证的代理转发地址头。"""
-    raw = client_address() + '\x00' + username.casefold()
+    """账号独立计数，不依赖共享代理地址或可伪造的转发头。"""
+    raw = username.casefold()
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
 
@@ -373,12 +373,12 @@ def _login_gate(db, keys, now):
     try:
         rows = {row['attempt_key']: row for row in db.execute(
             'SELECT * FROM login_attempts WHERE attempt_key IN (?,?,?)', keys)}
-        wait = max([0] + [rows[key]['locked_until'] - now for key in keys[:2] if key in rows])
+        wait = max([0] + [rows[key]['locked_until'] - now for key in (keys[:2] if _LOGIN_IP_LIMIT > 0 else keys[:1]) if key in rows])
         if wait > 0:
             db.commit()
             return wait
         global_row = rows.get('global:')
-        if global_row and global_row['locked_until'] > now:
+        if _LOGIN_GLOBAL_LIMIT > 0 and global_row and global_row['locked_until'] > now:
             probe = db.execute("SELECT locked_until FROM login_attempts WHERE attempt_key='global:probe'").fetchone()
             if probe and probe['locked_until'] > now:
                 db.commit()
@@ -397,6 +397,8 @@ def _failed_login(db, keys, now):
     try:
         waits = []
         for key, limit in zip(keys, (_LOGIN_FAILURE_LIMIT, _LOGIN_IP_LIMIT, _LOGIN_GLOBAL_LIMIT)):
+            if limit <= 0:
+                continue
             row = db.execute('SELECT * FROM login_attempts WHERE attempt_key=?', (key,)).fetchone()
             if row and (now - row['first_failed_at'] < _LOGIN_WINDOW or row['locked_until'] > now):
                 failures, first = row['failures'] + 1, row['first_failed_at']

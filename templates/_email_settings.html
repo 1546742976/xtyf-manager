@@ -13,7 +13,7 @@
   <label for="email-team-days">发送间隔（1–14 天）</label>
   <input id="email-team-days" type="number" name="daily_interval_days" min="1" max="14" step="1" required>
   <h3>首页倒计时</h3>
-  <label><input type="checkbox" name="assignment_enabled" checked> 接收即时任务指派邮件（默认开启）</label><p class="field-help">新任务或改派后由后台尽快发送，通常下一分钟处理；超过 24 小时或指派失效时跳过。暂停所有邮件仍然生效。</p>
+  <label><input type="checkbox" name="assignment_enabled" checked> 接收任务指派汇总邮件（默认开启）</label><p class="field-help">新任务或改派后按收件人汇总 10 分钟，再由后台发送；超过 24 小时或指派失效时跳过。暂停所有邮件仍然生效。</p>
   <label><input type="checkbox" name="countdown_enabled"> 接收超级管理员设置的首页目标倒计时邮件（默认关闭）</label>
   <label for="email-countdown-days">发送间隔（1–14 天）</label>
   <input id="email-countdown-days" type="number" name="countdown_interval_days" min="1" max="14" step="1" required>

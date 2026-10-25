@@ -26,8 +26,8 @@ class LoginLimitTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         with closing(sqlite3.connect(app_module.DB_PATH)) as db:
             keys = [row[0] for row in db.execute('SELECT attempt_key FROM login_attempts')]
-        self.assertIn('global:', keys)
-        self.assertTrue(any(key.startswith('ip:') for key in keys))
+        self.assertNotIn('global:', keys)
+        self.assertFalse(any(key.startswith('ip:') for key in keys))
 
     def test_ip_limit_across_usernames(self):
         client = app_module.app.test_client()
@@ -62,4 +62,4 @@ class LoginLimitTests(unittest.TestCase):
                 list(pool.map(fail, range(20)))
             with closing(sqlite3.connect(path)) as db:
                 counts = [row[0] for row in db.execute('SELECT failures FROM login_attempts')]
-            self.assertEqual(counts, [20, 20, 20])
+            self.assertEqual(counts, [20])

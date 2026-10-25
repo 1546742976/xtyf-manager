@@ -133,6 +133,17 @@ jobs:
       - name: Run browser logic unit tests
         run: node --test tests/js/*.test.cjs
 
+  browser-image-smoke:
+    name: Build and smoke browser image (no registry writes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f .github/ci/browser.Dockerfile -t xtyf-browser-smoke .
+      - name: Launch both browser engines in the built image
+        run: |
+          docker run --rm --ipc=host xtyf-browser-smoke node -e '(async()=>{const p=require("playwright");for(const name of ["chromium","webkit"]){const b=await p[name].launch({headless:true});const page=await b.newPage();await page.setContent("<title>smoke</title>");if(await page.title()!=="smoke")throw Error(name);await b.close();}})().catch(e=>{console.error(e);process.exit(1)})'
+
   browser-image:
     name: Prepare reusable browser container (GHCR)
     # Never publish untrusted code from forks; they use the vendor image fallback.
@@ -204,7 +215,7 @@ jobs:
           - group: ui-core
             suites: 'palette_workspace local_collaboration account_avatar ui_regressions funds_recovery'
           - group: ui-clients
-            suites: 'account_invoice_ui client_updates_avatar client_connection invoice_polling'
+            suites: 'account_invoice_ui client_updates_avatar client_connection invoice_polling camera_origin_probe'
           - group: assets-ledger
             suites: 'assets'
           - group: assets-serialized

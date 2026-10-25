@@ -126,19 +126,41 @@
       if(!confirm('删除该项目？项目将从列表移除，历史记录仍保留。'))return;
       action('daily-delete',host.querySelectorAll('button'),async()=>{await request(`/api/daily-projects/${id}/delete`,{version:current.version});location.assign('/tasks?type=daily');});
     });
+    const imagePreparation=new WeakMap();
+    const prepareSelected=file=>{
+      if(!imagePreparation.has(file))imagePreparation.set(file,DailyImages.prepare(file).then(value=>({value}),error=>({error})));
+      return imagePreparation.get(file);
+    };
+    host.querySelectorAll('[data-progress-form] [name=files]').forEach(input=>input.addEventListener('change',()=>{
+      if(input.files.length<=5)Array.from(input.files).forEach(prepareSelected);
+    }));
     host.querySelectorAll('[data-progress-form]').forEach(form=>form.addEventListener('submit',event=>{
       event.preventDefault();
       const stage=form.dataset.progressForm, group=current.groups.find(g=>g.stage===stage), local=form.querySelector('.form-message');
       BusinessUI.action('daily-progress:'+id+stage,form.querySelectorAll('button'),async()=>{
         if(form.elements.files.files.length>5)throw new Error('一次最多上传 5 张图片');
         const fields={progress:Number(form.elements.progress.value),note:form.elements.note.value,version:group.version,project_version:current.version};
-        let body=fields;
-        if(form.elements.files.files.length){body=new FormData(form);body.set('version',group.version);body.set('project_version',current.version);}
-        local.textContent='正在保存…';
+        let body=fields,uploadNotice='';
+        if(form.elements.files.files.length){
+          local.textContent='正在本地处理图片…';
+          const prepared=[];
+          for(const file of Array.from(form.elements.files.files)){
+            const result=await prepareSelected(file);
+            if(result.error){imagePreparation.delete(file);throw result.error;}
+            prepared.push(result.value);
+          }
+          local.textContent='正在核对权限与版本…';
+          await request(`/api/daily-projects/${id}/groups/${stage}/preflight?version=${fields.version}&project_version=${fields.project_version}`);
+          body=new FormData();
+          for(const [key,value] of Object.entries(fields))body.set(key,value);
+          for(const entry of prepared)body.append('files',entry.file);
+          if(prepared.some(entry=>entry.original))uploadNotice='；当前客户端使用原图安全上传';
+        }
+        local.textContent='正在保存…'+uploadNotice;
         const result=await request(`/api/daily-projects/${id}/groups/${stage}/progress`,body);
         group.version=result.version;group.progress=fields.progress;
         updateSummary(result.project);
-        form.elements.note.value='';form.elements.files.value='';local.textContent='进度已保存';
+        form.elements.note.value='';form.elements.files.value='';local.textContent='进度已保存'+uploadNotice;
         const section=form.closest('.daily-group');section.querySelector('progress').value=fields.progress;section.querySelector('.daily-meter strong').textContent=fields.progress+'%';
         // Refresh only this history and total; preserve drafts in the other groups.
         try {

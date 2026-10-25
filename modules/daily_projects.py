@@ -567,6 +567,37 @@ def delete(pid):
         db.rollback(); return failure(str(exc))
 
 
+def progress_access(db, pid, stage, version, project_version):
+    user = current_user()
+    if not user:
+        return None, None, failure('登录已失效', 401)
+    project = active_project(db, pid)
+    group = db.execute('SELECT * FROM daily_groups WHERE project_id=? AND stage=?', (pid, stage)).fetchone()
+    if not project or not group:
+        return project, group, failure('项目组不存在', 404)
+    owner = db.execute('SELECT 1 FROM daily_owners WHERE project_id=? AND stage=? AND member_id=?', (pid, stage, user['id'])).fetchone()
+    if not manager(user) and not owner:
+        return project, group, failure('只能更新自己负责的组', 403)
+    if not group['enabled'] or project['status'] in TERMINAL:
+        return project, group, failure('项目或组别为只读状态', 409)
+    if project['version'] != project_version or group['version'] != version:
+        return project, group, failure('分配或进度已变化，请重新加载并核对后提交', 409)
+    return project, group, None
+
+
+@bp.get('/api/daily-projects/<int:pid>/groups/<stage>/preflight')
+@login_required
+def progress_preflight(pid, stage):
+    try:
+        integer(pid, '项目 ID')
+        version = integer(parse_int_text(request.args.get('version', ''), '组版本'), '组版本')
+        project_version = integer(parse_int_text(request.args.get('project_version', ''), '项目版本'), '项目版本')
+        _, _, error = progress_access(get_db(), pid, stage, version, project_version)
+        return error if error is not None else jsonify(ok=True)
+    except ValueError as exc:
+        return failure(str(exc))
+
+
 @bp.route('/api/daily-projects/<int:pid>/groups/<stage>/progress', methods=['GET', 'POST'])
 @login_required
 def progress(pid, stage):
@@ -604,6 +635,9 @@ def progress(pid, stage):
         note = body.get('note', '')
         if not isinstance(note, str) or len(note) > 2000:
             raise ValueError('备注最多 2000 字')
+        _, _, error = progress_access(db, pid, stage, version, project_version)
+        if error is not None:
+            return error
         files = [f for f in request.files.getlist('files') if f.filename]
         if len(files) > MAX_FILES:
             raise ValueError('一次最多上传 5 张图片')
@@ -613,17 +647,9 @@ def progress(pid, stage):
         user = current_user()
         if user is None:
             db.rollback(); cleanup_staged(staged); return failure('登录已失效', 401)
-        project = active_project(db, pid)
-        group = db.execute('SELECT * FROM daily_groups WHERE project_id=? AND stage=?', (pid, stage)).fetchone()
-        if not project or not group:
-            db.rollback(); cleanup_staged(staged); return failure('项目组不存在', 404)
-        owner = db.execute('SELECT 1 FROM daily_owners WHERE project_id=? AND stage=? AND member_id=?', (pid, stage, user['id'])).fetchone()
-        if not manager(user) and not owner:
-            db.rollback(); cleanup_staged(staged); return failure('只能更新自己负责的组', 403)
-        if not group['enabled'] or project['status'] in TERMINAL:
-            db.rollback(); cleanup_staged(staged); return failure('项目或组别为只读状态', 409)
-        if project['version'] != project_version or group['version'] != version:
-            db.rollback(); cleanup_staged(staged); return failure('分配或进度已变化，请重新加载并核对后提交', 409)
+        project, group, error = progress_access(db, pid, stage, version, project_version)
+        if error is not None:
+            db.rollback(); cleanup_staged(staged); return error
         if percent == group['progress'] and not note.strip() and not files:
             raise ValueError('请改变进度、填写备注或添加图片')
         uid = db.execute('INSERT INTO daily_updates(project_id,stage,actor_id,actor_name,progress,note,created_at) VALUES(?,?,?,?,?,?,?)', (pid, stage, user['id'], user['name'], percent, note.strip(), stamp())).lastrowid

@@ -99,9 +99,9 @@
   }
   const requestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
   const status=(message,state='info')=>{$('asset-status').textContent=message;$('asset-status').dataset.state=state;};
-  async function api(path, body){
+  async function api(path, body, options={}){
     const response=await fetch('/api/assets/'+path, body?{
-      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:options.signal
     }:{signal:readController.signal});
     let data;
     try{data=await response.json();}catch(_){throw new Error('服务器返回了无法识别的内容');}

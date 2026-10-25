@@ -96,6 +96,24 @@ class FundsIdempotencyTests(unittest.TestCase):
             self.assertEqual(removed['ledger_sync'], 'failed')
         self.assertEqual(self.client.get(url).status_code, 404)
 
+    def test_manual_ledger_repair_keeps_committed_record_and_persists_state(self):
+        from modules import funds
+        with patch('modules.funds.os.replace', side_effect=PermissionError('synthetic')):
+            result = self.client.post('/funds/api/records', json=self.body).get_json()
+        self.assertEqual(result['ledger_sync'], 'failed')
+        state = self.client.get('/funds/api/ledger-sync')
+        self.assertEqual(state.status_code, 200)
+        self.assertNotEqual(state.get_json()['state'], 'ok')
+        before = self.client.get('/funds/api/records').get_json()['data']
+        repaired = self.client.post('/funds/api/ledger-sync', json={})
+        self.assertEqual(repaired.status_code, 200)
+        self.assertEqual(repaired.get_json()['state'], 'ok')
+        self.assertEqual(self.client.get('/funds/api/records').get_json()['data'], before)
+        with open(funds.FUNDS_TXT, encoding='utf-8-sig') as file:
+            self.assertIn(self.body['notes'], file.read())
+        with patch('modules.funds.can_review', return_value=False):
+            self.assertEqual(self.client.post('/funds/api/ledger-sync', json={}).status_code, 403)
+
     def test_concurrent_same_request(self):
         clients = [app_module.app.test_client() for _ in range(4)]
         for client in clients:
@@ -104,6 +122,27 @@ class FundsIdempotencyTests(unittest.TestCase):
             replies = list(executor.map(lambda c: c.post('/funds/api/records', json=self.body).get_json(), clients))
         self.assertEqual(len({r['id'] for r in replies}), 1)
         self.assertEqual(sum(not r['replayed'] for r in replies), 1)
+
+    def test_revision_changed_during_projection_remains_pending(self):
+        from modules import funds
+        record = self.client.post('/funds/api/records', json=self.body).get_json()
+        replace = funds.os.replace
+        def concurrent_write(source, target):
+            conn = funds.get_funds_db()
+            try:
+                conn.execute('UPDATE records SET notes=? WHERE id=?', ('concurrent synthetic revision', record['id']))
+                conn.commit()
+            finally:
+                conn.close()
+            return replace(source, target)
+        with patch('modules.funds.os.replace', side_effect=concurrent_write):
+            result = self.client.post('/funds/api/ledger-sync', json={}).get_json()
+        self.assertEqual(result['state'], 'pending')
+        self.assertGreater(result['revision'], result['synced_revision'])
+        with patch('modules.funds.os.replace', side_effect=PermissionError('synthetic repair fault')):
+            self.assertEqual(self.client.post('/funds/api/ledger-sync', json={}).status_code, 503)
+        self.assertEqual(self.client.get('/funds/api/ledger-sync').get_json()['state'], 'failed')
+        self.assertEqual(self.client.post('/funds/api/ledger-sync', json={}).get_json()['state'], 'ok')
 
     def test_account_isolation_and_account_switch_after_preflight(self):
         username = 'funds_' + uuid4().hex[:12]

@@ -44,7 +44,7 @@
 {% endblock %}
 {% block scripts %}
 {% if task_type == 'daily' %}
-<script src="{{ url_for('static', filename='daily-projects.js') }}"></script>
+<script src="{{ url_for('static', filename='daily-images.js') }}"></script><script src="{{ url_for('static', filename='daily-projects.js') }}"></script>
 {% else %}
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 <script src="{{ url_for('static', filename='ui-dialog.js') }}"></script>
