@@ -88,7 +88,7 @@ def workspace_countdown():
             db.execute("SELECT * FROM workspace_countdown WHERE id=1").fetchone()))
     actor = current_user()
     if actor["role"] != "admin":
-        return jsonify(ok=False, error="仅管理员可修改目标倒计时"), 403
+        return jsonify(ok=False, error="仅超级管理员可修改目标倒计时"), 403
     data = request.get_json(silent=True)
     if not isinstance(data, dict) or set(data) != {"title", "target_date", "version"}:
         return jsonify(ok=False, error="请提交目标名称、日期及版本"), 400

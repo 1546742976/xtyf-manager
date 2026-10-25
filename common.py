@@ -15,11 +15,17 @@ import sqlite3
 from datetime import datetime
 from functools import wraps
 
-from flask import g, jsonify, redirect, request, session, url_for
+from flask import g, jsonify, redirect, render_template, request, session, url_for
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("PROGRESS_DB", os.path.join(BASE_DIR, "data.db"))
-ROLE_NAMES = {"admin": "管理员", "manager": "项管", "member": "成员"}
+ROLE_NAMES = {"admin": "超级管理员", "manager": "项管", "member": "成员"}
+
+
+def error_response(status_code, message):
+    if '/api/' in request.path or request.path == '/api':
+        return jsonify(ok=False, success=False, code=status_code, error=message, msg=message), status_code
+    return render_template('error.html', status_code=status_code, title=message, message=message), status_code
 
 
 # ---- 当前时间字符串（服务器本地时间；线上系统时区已设为 Asia/Shanghai）----
@@ -75,7 +81,7 @@ def login_required(view):
     return wrapper
 
 
-# ---- 装饰器：要求 admin/manager 角色；无权限的页面请求跳回看板，API 返回 403 ----
+# ---- 装饰器：要求 admin/manager 角色；无权限页面返回中文 403，API 返回 JSON 403 ----
 def manager_required(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
@@ -87,6 +93,6 @@ def manager_required(view):
         if user["role"] not in ("admin", "manager"):
             if "/api/" in request.path:
                 return jsonify(ok=False, error="无权限"), 403
-            return redirect(url_for("index"))
+            return error_response(403, '无权限访问此页面')
         return view(*args, **kwargs)
     return wrapper

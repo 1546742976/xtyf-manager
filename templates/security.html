@@ -4,14 +4,15 @@
 <div class="ux-page-head"><div><p class="ux-eyebrow">ADMIN / SECURITY</p><h1>权限与审计</h1><p>按成员授予业务权限，并查看业务操作记录。</p></div></div>
 <section class="panel">
   <h2>业务权限</h2>
-  <p class="ux-note">权限绑定成员 ID，修改姓名或登录用户名后仍然有效。资金审核需要管理员或项管角色；发票管理允许查看、归档、修改及导出全部发票，请按职责授权。停用账号的权限不生效。</p>
+  <p class="ux-note">超级管理员自动拥有全部管理权限，不可单独撤销；调整角色后自动权限失效，独立授权仍按规则处理。权限绑定成员 ID，修改姓名或登录用户名后仍然有效。资金审核需要超级管理员或项管角色；发票管理允许查看、归档、修改及导出全部发票，请按职责授权。停用账号的权限不生效。</p>
   <label class="permission-member-filter">查找成员<input type="search" id="permission-search" placeholder="姓名、用户名或成员 ID"></label>
-  <p class="ux-note">资产管理允许维护目录、调拨及纠错；管理员和项管默认拥有，其他成员按职责单独授予。所有登录成员均可借还、领用及调整数量，操作须登记原因。</p>
+  <p class="ux-note">资产管理允许维护目录、调拨及纠错；超级管理员和项管默认拥有，其他成员按职责单独授予。所有登录成员均可借还、领用及调整数量，操作须登记原因。</p>
   <div class="table-wrap"><table><thead><tr><th>成员</th><th>角色 / 状态</th><th>资金审核</th><th>发票管理</th><th>资产管理</th><th>操作</th></tr></thead><tbody id="permission-members"></tbody></table></div>
   <p id="permission-result" role="status" aria-live="polite"></p>
 </section>
 <section class="panel">
   <div class="toolbar"><h2>业务操作记录</h2><button type="button" class="btn" id="audit-refresh">刷新记录</button></div>
+  <label>审计分类<select id="audit-level"><option value="critical">关键安全／业务审计</option><option value="routine">旧普通操作</option><option value="all">全部记录</option></select></label>
   <p class="ux-note">记录操作者、目标、请求内容摘要及处理结果，不记录密码或文件内容。“未完成”表示执行中或执行中断，不能据此判定业务已完成；批量操作可能部分成功。</p>
   <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>操作 / 目标</th><th>结果</th><th>摘要</th></tr></thead><tbody id="audit-events"></tbody></table></div>
   <button type="button" class="btn" id="audit-more" hidden>加载更早记录</button>

@@ -20,7 +20,7 @@ class WorkspaceChanges(unittest.TestCase):
 
     def test_management_access_and_create_location(self):
         response=self.clients['member'].get('/manage')
-        self.assertEqual(response.status_code,302)
+        self.assertEqual(response.status_code,403)
         page=self.clients['member'].get('/tasks').get_data(as_text=True)
         self.assertNotIn('id="new-task-toggle"',page)
         self.assertNotIn('href="/manage"',page)

@@ -9,7 +9,7 @@ on:
       - 'templates/*.html'
       - 'static/**'
   pull_request:
-    branches: [main]
+    branches: [main, 'codex/review-20261025-*']
     paths:
       - 'clients/**'
       - '!clients/**/*.md'

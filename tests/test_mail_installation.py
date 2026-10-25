@@ -29,17 +29,17 @@ class MailInstallerTests(unittest.TestCase):
 
     def test_fresh_install_does_not_enable_delivery_and_both_services_share_secret(self):
         self.install()
-        self.assertIn("MAIL_MODE=off", self.config.read_text())
+        self.assertIn("MAIL_MODE=off", self.config.read_text(encoding="utf-8"))
         self.assertIn("EnvironmentFile=" + str(self.config),
-                      (self.units / "rm-mail.service").read_text())
+                      (self.units / "rm-mail.service").read_text(encoding="utf-8"))
         self.assertIn("EnvironmentFile=" + str(self.config),
-                      (self.units / "rm-progress.service.d/zz-xtyf-mail.conf").read_text())
-        self.assertIn("User=rmuser", (self.units / "rm-mail.service").read_text())
+                      (self.units / "rm-progress.service.d/zz-xtyf-mail.conf").read_text(encoding="utf-8"))
+        self.assertIn("User=rmuser", (self.units / "rm-mail.service").read_text(encoding="utf-8"))
         self.assertIn("WorkingDirectory=" + str(self.app),
-                      (self.units / "rm-mail.service").read_text())
+                      (self.units / "rm-mail.service").read_text(encoding="utf-8"))
         self.assertIn("OnUnitInactiveSec=15s",
-                      (self.units / "rm-mail.timer").read_text())
-        self.assertIn("AccuracySec=1s", (self.units / "rm-mail.timer").read_text())
+                      (self.units / "rm-mail.timer").read_text(encoding="utf-8"))
+        self.assertIn("AccuracySec=1s", (self.units / "rm-mail.timer").read_text(encoding="utf-8"))
         self.assertFalse((self.units / "timers.target.wants").exists())
         if os.name == "posix":
             self.assertEqual(stat.S_IMODE(self.config.stat().st_mode), 0o600)
@@ -47,23 +47,23 @@ class MailInstallerTests(unittest.TestCase):
 
     def test_repeat_install_does_not_replace_credentials(self):
         self.install()
-        self.config.write_text("MAIL_MODE=smtp\nSMTP_PASSWORD=private-authorized-code\n")
+        self.config.write_text("MAIL_MODE=smtp\nSMTP_PASSWORD=private-authorized-code\n", encoding="utf-8")
         self.install()
-        self.assertEqual(self.config.read_text(),
+        self.assertEqual(self.config.read_text(encoding="utf-8"),
                          "MAIL_MODE=smtp\nSMTP_PASSWORD=private-authorized-code\n")
 
     def test_legacy_config_migrated_without_deleting_source(self):
         legacy = self.app / "mail.env"
-        legacy.write_text("MAIL_MODE=preview\nSMTP_PASSWORD=kept-secret\n")
+        legacy.write_text("MAIL_MODE=preview\nSMTP_PASSWORD=kept-secret\n", encoding="utf-8")
         self.install()
         self.assertEqual(self.config.read_bytes(), legacy.read_bytes())
         self.assertTrue(legacy.exists())
-        self.assertNotIn("kept-secret", (self.units / "rm-mail.service").read_text())
+        self.assertNotIn("kept-secret", (self.units / "rm-mail.service").read_text(encoding="utf-8"))
 
     def test_install_rejects_symlinked_configuration(self):
         self.config.parent.mkdir(parents=True)
         target = self.config.parent / "target"
-        target.write_text("MAIL_MODE=off\n")
+        target.write_text("MAIL_MODE=off\n", encoding="utf-8")
         try:
             self.config.symlink_to(target)
         except (OSError, NotImplementedError):

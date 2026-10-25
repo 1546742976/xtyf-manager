@@ -21,11 +21,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const inactive = !m.is_active || m.deleted_at;
       const checkbox = (permission) => {
         if (!Object.hasOwn(permissionNames, permission)) return "服务器暂不支持";
-        const checked = m.permissions.includes(permission);
-        const disabled = !checked && (inactive || (permission === "funds.review" && m.role === "member"));
+        const checked = (m.explicit_permissions || m.permissions).includes(permission) || m.permissions.includes(permission);
+        const disabled = m.role === "admin" || !checked && (inactive || (permission === "funds.review" && m.role === "member"));
         return `<input type="checkbox" data-permission="${permission}" aria-label="${escape(m.name)} ${escape(permissionNames[permission])}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}>`;
       };
-      return `<tr data-member-id="${Number(m.id)}"><td>${escape(m.name)}<br><small>ID ${Number(m.id)} · ${escape(m.username)}</small></td><td>${escape({admin: "管理员", manager: "项管", member: "成员"}[m.role])} / ${inactive ? "停用或删除" : "启用"}</td><td>${checkbox("funds.review")}</td><td>${checkbox("invoices.manage")}</td><td>${checkbox("assets.manage")}${["admin","manager"].includes(m.role)?"<small>该角色默认拥有</small>":""}</td><td><button type="button" class="btn sm" data-save-permissions>保存权限</button></td></tr>`;
+      return `<tr data-member-id="${Number(m.id)}"><td>${escape(m.name)}<br><small>ID ${Number(m.id)} · ${escape(m.username)}</small></td><td>${escape({admin: "超级管理员", manager: "项管", member: "成员"}[m.role])} / ${inactive ? "停用或删除" : "启用"}</td><td>${checkbox("funds.review")}</td><td>${checkbox("invoices.manage")}</td><td>${checkbox("assets.manage")}${["admin","manager"].includes(m.role)?"<small>该角色默认拥有</small>":""}</td><td>${m.role === "admin" ? "<span>角色自带、不可单独撤销</span>" : '<button type="button" class="btn sm" data-save-permissions>保存权限</button>'}</td></tr>`;
     }).join("") || '<tr><td colspan="6">没有匹配成员</td></tr>';
   }
   async function loadMembers() {
@@ -62,7 +62,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const more = document.getElementById("audit-more");
     more.disabled = true;
     try {
-      const data = await api(`/api/admin/audit${!reset && nextBefore ? `?before=${nextBefore}` : ""}`);
+      const level = document.getElementById("audit-level")?.value || "critical";
+      const data = await api(`/api/admin/audit?level=${encodeURIComponent(level)}${!reset && nextBefore ? `&before=${nextBefore}` : ""}`);
       const rows = data.events.map((event) => `<tr><td>${escape(event.created_at)}</td><td>${escape(event.actor_name || "未登录")} ${event.actor_id ? `#${Number(event.actor_id)}` : ""}</td><td>${escape(event.action)}<br><small>${escape(event.method)} ${escape(event.target)}</small></td><td>${escape({success: "成功", failure: "失败", partial: "部分成功", pending: "未完成"}[event.outcome] || event.outcome)} ${event.http_status || ""}</td><td><details><summary>查看摘要</summary><pre class="audit-details">${escape(event.details)}</pre></details></td></tr>`).join("");
       const host = document.getElementById("audit-events");
       if (reset) host.innerHTML = rows || '<tr><td colspan="5">暂无操作记录</td></tr>';
@@ -79,6 +80,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   let auditLoading=false;
   document.getElementById("audit-refresh").addEventListener("click", () => loadAudit(true));
+  document.getElementById("audit-level")?.addEventListener("change", () => loadAudit(true));
   document.getElementById("audit-more").addEventListener("click", () => loadAudit(false));
   loadMembers().catch((error) => { result.textContent = error.message; });
   loadAudit(true);

@@ -25,13 +25,16 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from flask import (Flask, Response, g, jsonify, redirect, render_template,
-                   request, session, url_for)
+                   request, session, url_for, abort, send_from_directory)
 from werkzeug.security import check_password_hash, generate_password_hash
 
 # ---- 本项目的公共模块与子模块（子模块的蓝图注册见下方 app.register_blueprint）----
 from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
-                    manager_required, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
+                    manager_required, error_response, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
 from modules.funds import funds_bp, can_review
+from modules.input_validation import valid_password
+from modules.client_address import client_address, parse_trusted_proxies
+from modules.task_validation import InvalidIdError, parse_id
 from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
 from modules.invoice_jobs import migrate as migrate_invoice_jobs
 from modules.discussions import discussions_bp
@@ -50,7 +53,7 @@ from modules.task_alerts import bp as task_alerts_bp
 from modules.item_topics import bp as item_topics_bp, migrate as migrate_item_topics
 from modules.email_api import bp as email_bp
 from modules.mail_service import configure as configure_mail
-from modules.security import init_security, migrate_security, write_initial_credentials
+from modules.security import cleanup_audit_rows, init_security, migrate_security, write_initial_credentials
 from modules.workspace_settings import bp as workspace_settings_bp, migrate as migrate_workspace, theme_context
 from modules.client_api import create_client_blueprint
 from modules.client_updates import bp as client_updates_bp
@@ -115,14 +118,73 @@ def _load_secret():
 
 # ---- 应用初始化 ----
 app = Flask(__name__)
+app.config['TRUSTED_PROXY_NETWORKS'] = parse_trusted_proxies(os.environ.get('TRUSTED_PROXY_CIDRS', ''))
 app.secret_key = _load_secret()
 app.json.ensure_ascii = False
 app.permanent_session_lifetime = timedelta(days=30)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.config.setdefault("TASK_ATTACHMENTS_DIR", os.environ.get("TASK_ATTACHMENTS_DIR", os.path.join(BASE_DIR, "data", "task_attachments")))
 configure_mail(app)
+
+@app.before_request
+def request_body_limit():
+    if 'member_id' in (request.view_args or {}):
+        try:
+            parse_id(request.view_args['member_id'], '成员 ID', False)
+        except InvalidIdError as exc:
+            return jsonify(ok=False, error=str(exc)), 400
+    # Run before CSRF/audit hooks: both may parse form or JSON bodies.
+    if request.method in {'GET', 'HEAD', 'OPTIONS'}:
+        return None
+    limits = {
+        'invoices.api_upload': 200, 'invoices.api_upload_batch': 200,
+        'discussions.create_topic': 70, 'discussions.create_message': 70,
+        'task_attachments.upload_attachments': 55,
+        'task_progress.update_progress': 55, 'daily_projects.progress': 55,
+        'member_avatars.account_avatar': 12,
+    }
+    limit = limits.get(request.endpoint, 16) * 1024 * 1024
+    if request.path.startswith('/api/assets/'):
+        limit = 16 * 1024
+    request.max_content_length = limit
+    if request.content_length is not None and request.content_length > limit:
+        return error_response(413, '请求内容过大，请减少文件或内容后重试')
+    return None
+
+
+@app.errorhandler(403)
+@app.errorhandler(404)
+@app.errorhandler(405)
+@app.errorhandler(413)
+@app.errorhandler(500)
+def friendly_error(error):
+    messages = {403: '无权限访问此页面', 404: '页面或资源不存在', 405: '不支持此请求方式',
+                413: '请求内容过大，请减少文件或内容后重试', 500: '服务暂时不可用，请稍后重试'}
+    if error.code == 500:
+        app.logger.error('请求处理失败: %s', request.path, exc_info=error.original_exception)
+    return error_response(error.code, messages[error.code])
+
+
+_WEB_VENDOR_FILES = {
+    'bootstrap/LICENSE', 'bootstrap/bootstrap.min.css', 'bootstrap/bootstrap.bundle.min.js',
+    'bootstrap-icons/LICENSE', 'bootstrap-icons/bootstrap-icons.min.css',
+    'bootstrap-icons/fonts/bootstrap-icons.woff', 'bootstrap-icons/fonts/bootstrap-icons.woff2',
+}
+
+
+@app.get('/vendor/<path:rel>')
+def web_vendor(rel):
+    if rel not in _WEB_VENDOR_FILES:
+        abort(404)
+    return send_from_directory(os.path.join(BASE_DIR, 'static', 'vendor'), rel, max_age=604800)
+
+
+@app.get('/favicon.ico')
+def favicon():
+    return redirect(url_for('static', filename='brand/app-icon-256.png'))
+
 
 # ---- 注册子模块蓝图（三个系统共用同一登录会话与页面风格）----
 from modules.assets import bp as assets_bp, migrate_assets
@@ -254,6 +316,7 @@ def init_db():
         migrate_assets(db)
         migrate_invoice_owners(db)
         migrate_invoice_jobs(db)
+        cleanup_audit_rows(db)
         # Hot read paths (dashboard tree, status filters, attachment lookups)
         # would otherwise scan the whole table on every 5s poll.
         db.executescript("""
@@ -279,32 +342,76 @@ def add_no_cache(resp):
 # ==================== 登录 / 登出 ====================
 _LOGIN_WINDOW = 15 * 60
 _LOGIN_FAILURE_LIMIT = 6
+_LOGIN_IP_LIMIT = int(os.environ.get("LOGIN_IP_FAILURE_LIMIT", "0"))
+_LOGIN_GLOBAL_LIMIT = int(os.environ.get("LOGIN_GLOBAL_FAILURE_LIMIT", "0"))
 
 
 def _login_attempt_key(username):
-    """IP 与用户名共同计数，不信任未经验证的代理转发地址头。"""
-    raw = (request.remote_addr or '') + '\x00' + username.casefold()
+    """账号独立计数，不依赖共享代理地址或可伪造的转发头。"""
+    raw = username.casefold()
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
 
-def _failed_login(db, attempt_key, row, now):
-    if row and now - row['first_failed_at'] < _LOGIN_WINDOW:
-        failures = row['failures'] + 1
-        first = row['first_failed_at']
-    else:
-        failures, first = 1, now
-    locked_until = now + _LOGIN_WINDOW if failures >= _LOGIN_FAILURE_LIMIT else 0
-    db.execute(
-        "INSERT INTO login_attempts (attempt_key, failures, first_failed_at, locked_until) "
-        "VALUES (?, ?, ?, ?) ON CONFLICT(attempt_key) DO UPDATE SET "
-        "failures=excluded.failures, first_failed_at=excluded.first_failed_at, "
-        "locked_until=excluded.locked_until",
-        (attempt_key, failures, first, locked_until),
-    )
-    # 防止有人不停枚举不存在的用户名导致计数表无限增长。
-    db.execute("DELETE FROM login_attempts WHERE first_failed_at < ?", (now - 2 * _LOGIN_WINDOW,))
-    db.commit()
-    return locked_until > now
+def _login_counter_keys(username):
+    ip_hash = hashlib.sha256(client_address().encode('utf-8')).hexdigest()
+    return (_login_attempt_key(username), 'ip:' + ip_hash, 'global:')
+
+
+def _retry_login(seconds):
+    response = jsonify(ok=False, error='尝试次数过多，请稍后重试')
+    response.status_code = 429
+    response.headers['Retry-After'] = str(max(1, int(seconds)))
+    return response
+
+
+def _login_gate(db, keys, now):
+    # The probe reservation lives in SQLite, so threads/workers share the budget.
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        rows = {row['attempt_key']: row for row in db.execute(
+            'SELECT * FROM login_attempts WHERE attempt_key IN (?,?,?)', keys)}
+        wait = max([0] + [rows[key]['locked_until'] - now for key in (keys[:2] if _LOGIN_IP_LIMIT > 0 else keys[:1]) if key in rows])
+        if wait > 0:
+            db.commit()
+            return wait
+        global_row = rows.get('global:')
+        if _LOGIN_GLOBAL_LIMIT > 0 and global_row and global_row['locked_until'] > now:
+            probe = db.execute("SELECT locked_until FROM login_attempts WHERE attempt_key='global:probe'").fetchone()
+            if probe and probe['locked_until'] > now:
+                db.commit()
+                return 1
+            db.execute("INSERT INTO login_attempts VALUES('global:probe',0,?,?) ON CONFLICT(attempt_key) DO UPDATE SET first_failed_at=excluded.first_failed_at,locked_until=excluded.locked_until", (now, now + 1))
+        db.commit()
+        return 0
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _failed_login(db, keys, now):
+    # Read and increment all three counters in one short write transaction.
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        waits = []
+        for key, limit in zip(keys, (_LOGIN_FAILURE_LIMIT, _LOGIN_IP_LIMIT, _LOGIN_GLOBAL_LIMIT)):
+            if limit <= 0:
+                continue
+            row = db.execute('SELECT * FROM login_attempts WHERE attempt_key=?', (key,)).fetchone()
+            if row and (now - row['first_failed_at'] < _LOGIN_WINDOW or row['locked_until'] > now):
+                failures, first = row['failures'] + 1, row['first_failed_at']
+            else:
+                failures, first = 1, now
+            locked_until = (row['locked_until'] if row and row['locked_until'] > now else now + _LOGIN_WINDOW) if failures >= limit else 0
+            db.execute('INSERT INTO login_attempts VALUES(?,?,?,?) ON CONFLICT(attempt_key) DO UPDATE SET failures=excluded.failures,first_failed_at=excluded.first_failed_at,locked_until=excluded.locked_until',
+                       (key, failures, first, locked_until))
+            if locked_until > now:
+                waits.append(1 if key == 'global:' else locked_until - now)
+        db.execute('DELETE FROM login_attempts WHERE first_failed_at<? AND locked_until<=?', (now - 2 * _LOGIN_WINDOW, now))
+        db.commit()
+        return max(waits, default=0)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def task_login_destination(candidate):
@@ -336,30 +443,27 @@ def login():
 def authenticate_login(data):
     """One credential/rate-limit/session path for the website and native apps."""
     username = data.get("username") or ""
-    password = data.get("password") or ""
+    password = data.get("password", "")
     if (not isinstance(username, str) or not isinstance(password, str)
             or len(username) > 64 or len(password) > 1024):
         return jsonify(ok=False, error="用户名或密码格式不正确", reason="invalid_payload"), 400
     username = username.strip()
     destination = task_login_destination(data.get("next", ""))
     db = get_db()
-    attempt_key = _login_attempt_key(username)
+    keys = _login_counter_keys(username)
     now = int(time.time())
-    attempt = db.execute(
-        "SELECT failures, first_failed_at, locked_until FROM login_attempts WHERE attempt_key=?",
-        (attempt_key,),
-    ).fetchone()
-    if attempt and attempt["locked_until"] > now:
-        return jsonify(ok=False, error="尝试次数过多，请 15 分钟后重试"), 429
+    wait = _login_gate(db, keys, now)
+    if wait:
+        return _retry_login(wait)
     row = db.execute(
         "SELECT * FROM members WHERE username = ? AND is_active = 1 AND deleted_at IS NULL", (username,)
     ).fetchone()
-    if row is None or not check_password_hash(row["password_hash"], password):
-        locked = _failed_login(db, attempt_key, attempt, now)
+    if not valid_password(password) or row is None or not check_password_hash(row["password_hash"], password):
+        locked = _failed_login(db, keys, now)
         if locked:
-            return jsonify(ok=False, error="尝试次数过多，请 15 分钟后重试"), 429
+            return _retry_login(locked)
         return jsonify(ok=False, error="用户名或密码错误"), 400
-    db.execute("DELETE FROM login_attempts WHERE attempt_key=?", (attempt_key,))
+    db.execute("DELETE FROM login_attempts WHERE attempt_key=?", (keys[0],))
     db.commit()
     session.clear()
     session.permanent = True
@@ -450,7 +554,7 @@ def export_members_csv():
 def api_member_reset(member_id):
     user = current_user()
     db = get_db()
-    row = db.execute("SELECT id, role, deleted_at FROM members WHERE id = ?", (member_id,)).fetchone()
+    row = db.execute("SELECT id, role, deleted_at, is_active, session_version FROM members WHERE id = ?", (member_id,)).fetchone()
     if row is None:
         return jsonify(ok=False, error="成员不存在"), 404
     if row["deleted_at"] is not None:
@@ -460,13 +564,32 @@ def api_member_reset(member_id):
     if user["role"] != "admin" and row["role"] != "member":
         return jsonify(ok=False, error="无权限"), 403
     data = request.get_json(silent=True) or {}
-    generated_password = not bool(data.get("password"))
-    password = data.get("password") or secrets.token_urlsafe(10)
-    if not isinstance(password, str) or not 8 <= len(password) <= 1024:
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error="请求必须为 JSON 对象"), 400
+    generated_password = data.get("password") in (None, "")
+    password = secrets.token_urlsafe(10) if generated_password else data['password']
+    if not valid_password(password):
         return jsonify(ok=False, error="密码必须为 8 至 1024 位"), 400
-    db.execute("UPDATE members SET password_hash = ?, must_change_password=1, session_version = session_version + 1 WHERE id = ?",
-               (generate_password_hash(password), member_id))
-    db.commit()
+    password_hash = generate_password_hash(password)
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        actor = current_user()
+        if actor is None or actor['must_change_password']:
+            db.rollback()
+            return jsonify(ok=False, error="登录状态已变化，请重新登录"), 401
+        target = db.execute('SELECT role,deleted_at,is_active,session_version FROM members WHERE id=?', (member_id,)).fetchone()
+        if actor['role'] not in ('admin', 'manager') or (actor['role'] != 'admin' and target and target['role'] != 'member'):
+            db.rollback()
+            return jsonify(ok=False, error="权限已变化，不能重置此账号"), 403
+        if target is None or any(target[key] != row[key] for key in ('role', 'deleted_at', 'is_active', 'session_version')):
+            db.rollback()
+            return jsonify(ok=False, error="账号状态已变化，请重新核对后操作"), 409
+        db.execute("UPDATE members SET password_hash = ?, must_change_password=1, session_version = session_version + 1 WHERE id = ?",
+                   (password_hash, member_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return jsonify(ok=True, initial_password=password if generated_password else None)
 
 
@@ -475,12 +598,12 @@ def api_member_reset(member_id):
 def api_member_role(member_id):
     user = current_user()
     if user["role"] != "admin":
-        return jsonify(ok=False, error="仅管理员可调整角色"), 403
+        return jsonify(ok=False, error="仅超级管理员可调整角色"), 403
     if member_id == user["id"]:
         return jsonify(ok=False, error="不能修改自己的角色"), 400
     data = request.get_json(silent=True) or {}
-    role = data.get("role")
-    if role not in ROLE_NAMES:
+    role = data.get("role") if isinstance(data, dict) else None
+    if not isinstance(role, str) or role not in ROLE_NAMES:
         return jsonify(ok=False, error="角色不合法"), 400
     db = get_db()
     row = db.execute("SELECT id, deleted_at FROM members WHERE id = ?", (member_id,)).fetchone()
@@ -521,7 +644,7 @@ def api_password():
     data = request.get_json(silent=True) or {}
     old_password = data.get("old") or ""
     new_password = data.get("new") or ""
-    if not isinstance(old_password, str) or not isinstance(new_password, str) or not 8 <= len(new_password) <= 1024:
+    if not isinstance(old_password, str) or len(old_password) > 1024 or not valid_password(new_password):
         return jsonify(ok=False, error="新密码必须为 8 至 1024 位"), 400
     db = get_db()
     row = db.execute("SELECT password_hash FROM members WHERE id = ?", (user["id"],)).fetchone()

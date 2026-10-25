@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'codex/review-20261025-*']
 
 permissions:
   contents: read
@@ -93,7 +93,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install coverage
-        run: python -m pip install 'coverage>=7.6,<8'
+        run: python -m pip install coverage==7.16.2
       - name: Download module coverage data
         uses: actions/download-artifact@v4
         with:
@@ -132,6 +132,17 @@ jobs:
           for file in static/*.js; do node --check "$file"; done
       - name: Run browser logic unit tests
         run: node --test tests/js/*.test.cjs
+
+  browser-image-smoke:
+    name: Build and smoke browser image (no registry writes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f .github/ci/browser.Dockerfile -t xtyf-browser-smoke .
+      - name: Launch both browser engines in the built image
+        run: |
+          docker run --rm --ipc=host xtyf-browser-smoke node -e '(async()=>{const p=require("playwright");for(const name of ["chromium","webkit"]){const b=await p[name].launch({headless:true});const page=await b.newPage();await page.setContent("<title>smoke</title>");if(await page.title()!=="smoke")throw Error(name);await b.close();}})().catch(e=>{console.error(e);process.exit(1)})'
 
   browser-image:
     name: Prepare reusable browser container (GHCR)
@@ -209,6 +220,8 @@ jobs:
             suites: 'assets'
           - group: assets-serialized
             suites: 'assets_serialized'
+          - group: assets-intake
+            suites: 'assets_intake assets_catalog_paging'
     needs: browser-image
     # A missing image for a fork should not prevent the read-only fallback path.
     if: ${{ always() && (needs.browser-image.result == 'success' || needs.browser-image.result == 'skipped') }}
@@ -218,7 +231,7 @@ jobs:
       contents: read
       packages: read
     container:
-      image: ${{ needs.browser-image.outputs.image || 'mcr.microsoft.com/playwright:v1.56.1-noble' }}
+      image: ${{ needs.browser-image.outputs.image || 'mcr.microsoft.com/playwright:v1.57.0-noble' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -237,16 +250,23 @@ jobs:
         if: needs.browser-image.result == 'skipped'
         with:
           python-version: '3.13'
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
+          # The vendor Playwright image lacks lsb_release, which setup-python's
+          # Linux pip-cache key requires. Install normally on the fork fallback;
+          # native Python jobs retain caching and the GHCR path is preinstalled.
+      - uses: actions/setup-node@v4
+        if: needs.browser-image.result == 'skipped'
+        with:
+          node-version: '22'
       - name: Fallback project dependencies for external PRs
         if: needs.browser-image.result == 'skipped'
         shell: bash
         run: |
           python -m pip install -r requirements-dev.txt
-          npm install --no-save --package-lock=false playwright@1.56.1 bootstrap@5.3.3 bootstrap-icons@1.11.3
+          npm install --no-save --package-lock=false playwright@1.57.0 bootstrap@5.3.3 bootstrap-icons@1.11.3
+      - name: Prepare verified public browser resources
+        # Every matrix group starts from a fresh checkout. PDF previews must not
+        # depend on an earlier suite incidentally building the client frontend.
+        run: python -c "from clients.frontend.vendor_dependencies import ensure_vendor_assets; ensure_vendor_assets()"
       - name: Run browser integration and mobile checks
         shell: bash
         env:
@@ -276,5 +296,7 @@ jobs:
             .build-tools/*-check/*.json
             .build-tools/seven-repairs-20261018/browser/*.png
             .build-tools/seven-repairs-20261018/browser/*.json
+            .build-tools/assets-review-fixes/*.png
+            .build-tools/assets-review-fixes/*.json
           include-hidden-files: true
           if-no-files-found: ignore

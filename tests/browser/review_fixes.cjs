@@ -104,7 +104,7 @@ async function checkPasswordVisibility(page, base) {
     await login(admin,base,'admin','browser-test-initial','browser-test-changed',true);
     const member=(await api(admin,'/api/member',{name:'Browser Member',username:'browser-member',
       password:'browser-member-initial',role:'manager'})).body;
-    assert.equal((await api(admin,'/api/admin/permissions/1',{permissions:['funds.review','invoices.manage']})).status,200);
+    assert.equal((await api(admin,'/api/admin/permissions/1',{permissions:['funds.review','invoices.manage']})).status,409);
 
     // Use the actual chooser + confirmation table, including a dangerous vendor.
     await admin.goto(base+'/invoices/');
