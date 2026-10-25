@@ -9,7 +9,7 @@
 python -m pip install -r requirements-dev.txt
 python -m compileall -q app.py common.py modules tests deploy
 coverage run --branch --source=app,common,modules,deploy -m unittest discover -s tests -v
-coverage report -m
+coverage report -m --fail-under=65
 coverage html
 for file in static/*.js; do node --check "$file"; done
 node --test tests/js/*.test.cjs
@@ -22,7 +22,7 @@ Python 回归测试按文件所属模块拆成 6 个互斥 shard：`tasks`、`me
 
 `python-coverage` 汇总 Job 在每个平台下载对应所有 shard 的数据，经 `coverage combine` 合并后统一运行分支覆盖率报告和 **65%** 门槛检查；生成按系统区分的 `python-coverage-<os>` XML Artifact 和 Actions Summary，**不是按单一 shard 的覆盖率设置门槛**。Python 语法、Ruff 和精确 main 基线的 SQLite 升级检查保留为独立的 Ubuntu/Windows 双平台 Job。
 
-JavaScript 单元测试仍单独执行；原来的 **17 个浏览器测试脚本**按基础功能、任务、UI/客户端、资产拆成 4 组并行 Job，保留 Chromium、WebKit、测试失败判定及每组独立的诊断 Artifact。所有测试分组均须成功才能合并。
+JavaScript 单元测试仍单独执行；当前 **20 个浏览器测试脚本**按基础功能、任务、UI/客户端、资产拆成 10 组并行 Job，包含 `ui_regressions`、`assets_intake` 和 `assets_catalog_paging`，保留 Chromium、WebKit、测试失败判定及每组独立的诊断 Artifact。`diagnostics.cjs` 和 `asset_*_checks.cjs` 为套件调用的辅助模块，不计作独立套件。所有测试分组均须成功才能合并。
 
 本地可执行任意 Python 分组，例如 `python tests/ci_shards.py tasks`（不需要 GitHub Actions 环境）；完整本地覆盖率仍使用上文 `unittest discover` 命令。
 
@@ -47,7 +47,7 @@ node tests/browser/review_fixes.cjs
 node tests/browser/pr22_merge.cjs
 ```
 
-可用 `REVIEW_PYTHON` 指定 Python，`NODE_PATH` 指向已有 Playwright 包目录。若 CDN 无法访问，可将同版本 Bootstrap 5.3.3 的真实 `bootstrap.bundle.min.js` 路径设置为 `REVIEW_BOOTSTRAP_PATH`；此选项仅替换浏览器测试中的 CDN 响应，不改变项目依赖。测试覆盖真实登录改密、文件选择上传、确认值、XSS、预览、过期审核和草稿选择保留/失效拦截，不代表生产负载或完整浏览器 E2E。
+可用 `REVIEW_PYTHON` 指定 Python，`NODE_PATH` 指向固定 Playwright **1.57.0** 的包目录。Bootstrap 5.3.3、图标字体和许可由服务端 `/vendor/` 白名单本地提供，与客户端 vendor-lock 校验同源；不再使用 CDN mock 或外部 CDN 回退。客户端继续使用自己的 `dist/vendor`。`ui_regressions.cjs` 在阻断外部网络的情况下覆盖资金操作、发票原生 dialog、中文错误页、输入限制、成员导入、主题和移动触控。
 
 测试数据库、密钥、资金目录、发票目录和任务附件目录均设为隔离的测试临时路径；
 不使用生产数据、生产服务或 GitHub Secrets。
@@ -72,6 +72,10 @@ tests/test_domain_units.py 直接对领域规则开展单元测试；
 tests/test_feature_contracts.py 验证跨模块 HTTP 合约；
 tests/js/*.test.cjs 在模拟环境中运行前端纯逻辑。
 
-**边界：** 这些测试不能替代真实浏览器 E2E（文件选择器、Bootstrap 弹窗、CSS 布局）
+**边界：** 这些测试不能替代真实浏览器 E2E（文件选择器、原生 dialog、CSS 布局）
 或生产环境并发/多进程负载测试。覆盖率不是功能正确性的证明，后续应根据
 coverage report -m 的未覆盖行和分支继续补测。
+
+## 2026-10-22 验收范围
+
+现有 17 组场景加 `ui_regressions` 共 18 组；`diagnostics.cjs` 是辅助模块，不计作套件。完整命令、当前统计及平台边界见 [本轮修复记录](全项目审查修复-2026-10-22.md)。CI 保持 Node 22；本地验证须记录实际 Node 版本。Python 与客户端 Python Playwright 均固定 1.57.0。

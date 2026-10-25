@@ -51,6 +51,7 @@ clients/windows/node_modules/
 
 # Local verification output and exact-base upgrade checkout.
 .ci-main-baseline/
-.coverage
+.coverage*
+htmlcov/
 coverage.xml
 coverage.json

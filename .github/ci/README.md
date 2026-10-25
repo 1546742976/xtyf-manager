@@ -7,7 +7,7 @@ stores the actual image. **Do not commit image tarballs or browser binaries.**
 The `browser-image` job in `ci.yml` computes a tag from this Dockerfile and
 `requirements.txt`/`requirements-dev.txt`, checks GHCR, and only builds and
 pushes a missing image. All browser matrix jobs wait for that single preparation
-job and then run in parallel with Python 3.13, Node.js 22, Playwright 1.56.1,
+job and then run in parallel with Python 3.13, Node.js 22, Playwright 1.57.0,
 Chromium and WebKit preinstalled. The image's Python/Node dependency versions
 must change alongside their inputs; changing those files rotates the tag.
 

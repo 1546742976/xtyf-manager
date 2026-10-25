@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Update the existing default systemd installation from an extracted release."""
+import argparse
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import time
 import threading
+import urllib.parse
 import urllib.request
 from contextlib import closing, contextmanager
 from datetime import datetime
@@ -62,7 +64,7 @@ def install_dependencies(python, requirements, log_path):
     args = [str(python), '-m', 'pip', 'install', '--disable-pip-version-check',
             '--progress-bar', 'off', '--timeout', '30', '--retries', '2',
             '--index-url', index_url,
-            '-r', str(requirements), 'gunicorn']
+            '-r', str(requirements)]
     print('Preparing dependencies while the current service remains online.', flush=True)
     print('Dependency log: ' + str(log_path), flush=True)
     with log_path.open('w') as log:
@@ -167,10 +169,10 @@ def replace_web_unit(path, content):
             os.unlink(temporary)
 
 
-def healthy():
+def healthy(url='http://127.0.0.1/login'):
     for attempt in range(30):
         try:
-            with urllib.request.urlopen('http://127.0.0.1/login', timeout=2) as response:
+            with urllib.request.urlopen(url, timeout=2) as response:
                 if response.status == 200 and setting('ActiveState') == 'active':
                     return
         except OSError:
@@ -204,6 +206,12 @@ def resume_mail(was_active):
         run(['systemctl', 'start', 'rm-mail.timer'])
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--health-url', default='http://127.0.0.1/login', help='更新后及回滚后的 HTTP 200 健康检查地址')
+    args = parser.parse_args()
+    parsed = urllib.parse.urlsplit(args.health_url)
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+        parser.error('--health-url 必须是不含账号密码的 HTTP/HTTPS 地址')
     if sys.platform != 'linux' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         raise RuntimeError('Run on the target Linux server: sudo python3 deploy/update_release.py')
     import fcntl
@@ -363,7 +371,7 @@ def main():
         install_mail(APP, account.pw_name)
         run(['systemctl', 'daemon-reload'])
         run(['systemctl', 'start', SERVICE])
-        healthy()
+        healthy(args.health_url)
         (backup / 'result.json').write_text(json.dumps({'status': 'success', 'commit': manifest['commit'], 'counts': counts, 'login_http': 200}, indent=2))
         own(backup)
         resume_mail(timer_was_active)
@@ -386,7 +394,7 @@ def main():
                         replace_web_unit(WEB_UNIT, unit_plan[0])
                         run(['systemctl', 'daemon-reload'])
                     run(['systemctl', 'start', SERVICE])
-                    healthy()
+                    healthy(args.health_url)
                     print('Old service restored; failed release and recovery files retained.', flush=True)
             finally:
                 if mail_paused:
