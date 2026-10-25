@@ -215,7 +215,7 @@ jobs:
           - group: ui-core
             suites: 'palette_workspace local_collaboration account_avatar ui_regressions funds_recovery'
           - group: ui-clients
-            suites: 'account_invoice_ui client_updates_avatar client_connection invoice_polling'
+            suites: 'account_invoice_ui client_updates_avatar client_connection invoice_polling camera_origin_probe'
           - group: assets-ledger
             suites: 'assets'
           - group: assets-serialized
