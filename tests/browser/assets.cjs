@@ -52,6 +52,9 @@ async function main(){
     await permissionRow.locator('[data-permission="assets.manage"]').check();
     await permissionRow.getByRole('button',{name:'保存权限',exact:true}).click();
     await page.locator('#permission-result').filter({hasText:'权限已保存'}).waitFor();
+    // The success receipt precedes the permission/audit refresh. Finish this
+    // setup action before navigating to the inventory scenario under test.
+    await page.waitForFunction(id=>!document.querySelector(`[data-member-id="${id}"] [data-save-permissions]`)?.disabled,member);
     const permissionState=(await (await api.get('/api/admin/permissions')).json()).members.find(m=>m.id===member);
     const granted=permissionState.explicit_permissions;
     assert(granted.includes('assets.manage'));assert(granted.includes('invoices.manage'));
