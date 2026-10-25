@@ -125,7 +125,15 @@ async function main(){
     await eastCard.getByText('总量 · 在库 7 / 借出 3',{exact:true}).waitFor();
     assert.equal((await (await api.get(`/api/assets/events?item_id=${id}`)).json()).events.filter(e=>e.action==='borrow').length,borrowEventsBefore);
     await page.unroute('**/api/assets/operations');
-    await page.getByRole('link',{name:'我的借用',exact:true}).click();await page.locator('[data-asset-mine-view=quantity]').click();
+    // A deliberately slow enhancement script must not race the initial mine
+    // render: the quantity/units tab needs to exist even with a fast API.
+    await page.route('**/static/asset-units.js',async route=>{
+      await new Promise(resolve=>setTimeout(resolve,450));
+      await route.continue();
+    });
+    await page.getByRole('link',{name:'我的借用',exact:true}).click();
+    await page.locator('[data-asset-mine-view=quantity]').click();
+    await page.unroute('**/static/asset-units.js');
     await page.locator('#asset-content [data-action=return]').first().click();
     await page.locator('#asset-form [name=quantity]').fill('1');await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成归还验证');await page.locator('#asset-save').click();await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.locator('#asset-content .asset-card').filter({has:page.getByRole('link',{name:'测试电机 '+label,exact:true})}).getByText('未还 2 个',{exact:true}).waitFor();

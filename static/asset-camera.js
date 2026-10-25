@@ -2,7 +2,12 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id),host=$('asset-scan-camera'),scanner=window.AssetScan;
-  let reader=null,stream=null,generation=0,last='',busy=null,failed='',sound=true,audio=null,flashTimer=null,decodeTimer=null;
+  let reader=null,stream=null,generation=0,last='',failed='',sound=true,audio=null,flashTimer=null,decodeTimer=null;
+  let scanSerial=0,hadLiveCamera=false;
+  const recentLabels=new Map();
+  // The camera only decodes; AssetScan owns asynchronous lookups and queue deduplication.
+  // Bound memory and latch a stationary code until another label or an explicit rescan.
+  const RECENT_LABEL_MS=2500,MAX_RECENT_LABELS=64;
   // Decode a capped-size frame at bounded intervals, rather than asking ZXing
   // to decode the full-resolution stream indefinitely on every video tick.
   const SCAN_INTERVAL_MS=260,MAX_DECODE_WIDTH=1024;
@@ -58,7 +63,7 @@
     $('asset-camera-feedback-message').textContent=detail.message;
     const frame=$('asset-camera-frame');clearTimeout(flashTimer);frame.dataset.feedback=detail.kind;
     flashTimer=setTimeout(()=>delete frame.dataset.feedback,750);
-    if(detail.audible){beep(detail.kind);try{if(['accepted','success'].includes(detail.kind)&&navigator.vibrate)navigator.vibrate(40);}catch(_){/* Haptics are optional. */}}
+    if(detail.audible&&(!hadLiveCamera||stream)){beep(detail.kind);try{if(['accepted','success'].includes(detail.kind)&&navigator.vibrate)navigator.vibrate(40);}catch(_){/* Haptics are optional. */}}
   });
   $('asset-camera-sound').onclick=()=>{sound=!sound;$('asset-camera-sound').textContent='提示音：'+(sound?'开':'关');$('asset-camera-sound').setAttribute('aria-pressed',String(sound));if(sound){prepareAudio();beep('success');}};
   function cameraUnavailable(){
@@ -81,7 +86,10 @@
     return messages[error.name]||'无法打开摄像头：'+(error.message||error.name||'未知错误')+'。可以使用下方图片识别。';
   }
   function stop(){
-    generation++;scanner.cancel();busy=null;failed='';$('asset-camera-retry').hidden=true;
+    generation++;scanSerial++;last='';recentLabels.clear();failed='';
+    // Stopping video must not cancel background receipt lookups. The scan
+    // dialog's own close handler cancels those jobs when the session ends.
+    $('asset-camera-retry').hidden=true;$('asset-camera-retry').disabled=false;
     if(decodeTimer!==null){clearTimeout(decodeTimer);decodeTimer=null;}
     reader?.reset();reader=null;
     const video=$('asset-camera-video');video.pause();video.srcObject=null;
@@ -91,19 +99,47 @@
     video.hidden=true;$('asset-camera-overlay').hidden=true;$('asset-camera-placeholder').hidden=false;
     $('asset-camera-stop').disabled=true;$('asset-camera-stop').hidden=true;$('asset-camera-start').hidden=false;
   }
-  async function found(text,explicit=false,own=generation){
-    if(own!==generation||busy||(!explicit&&last===text))return;
-    last=text;$('asset-scan-raw').value=text;const token={};busy=token;$('asset-camera-retry').disabled=true;
+  function found(text,explicit=false,own=generation){
+    if(own!==generation||typeof text!=='string')return false;
+    text=text.trim();
+    if(!text)return false;
+    const now=Date.now();
+    for(const [code,expires] of recentLabels)if(expires<=now)recentLabels.delete(code);
+    if(!explicit&&(text===last||recentLabels.has(text)))return false;
+    if(recentLabels.size>=MAX_RECENT_LABELS)recentLabels.delete(recentLabels.keys().next().value);
+    last=text;recentLabels.set(text,now+RECENT_LABEL_MS);
+    $('asset-scan-raw').value=text;
+    failed='';$('asset-camera-retry').hidden=true;
+    const serial=++scanSerial;
+    // Dispatch immediately: decoding must not wait on the 15-second lookup limit.
     try{
-      const result=await (explicit?window.AssetScan.retry(text):window.AssetScan.resolve(text));
-      if(own!==generation||result?.status==='stale')return;
-      if(result?.status==='duplicate'){status('同一标签已在清单中，未重复增加。');return;}
-      if(result?.status!=='success'){failed=text;$('asset-camera-retry').hidden=false;status((result?.message||'识别失败')+'；可重试此标签。');return;}
-      failed='';$('asset-camera-retry').hidden=true;status(window.AssetScan.task==='receive'?'标签识别完成，可连续扫描下一张。':'已识别，请查看结果。');
-    }catch(error){if(own===generation){failed=text;$('asset-camera-retry').hidden=false;status(error.message+'；可重试此标签。');}}
-    finally{if(busy===token){busy=null;$('asset-camera-retry').disabled=false;}}
+      const pending=explicit?scanner.retry(text):scanner.resolve(text);
+      status('标签已读取，可继续扫描下一张；查询结果会更新到清单。');
+      Promise.resolve(pending).then(result=>{
+        if(own!==generation||serial!==scanSerial||result?.status==='stale')return;
+        if(result?.status==='duplicate'){
+          status('同一标签已在清单中，未重复增加。');return;
+        }
+        if(result?.status!=='success'){
+          failed=text;$('asset-camera-retry').hidden=false;
+          status((result?.message||'识别失败')+'；可重试此标签。');
+          return;
+        }
+        failed='';$('asset-camera-retry').hidden=true;
+        status(scanner.task==='receive'?'标签识别完成，可连续扫描下一张。':'已识别，请查看结果。');
+      }).catch(error=>{
+        if(own!==generation||serial!==scanSerial)return;
+        failed=text;$('asset-camera-retry').hidden=false;
+        status((error?.message||'识别失败')+'；可重试此标签。');
+      });
+    }catch(error){
+      if(own!==generation||serial!==scanSerial)return false;
+      failed=text;$('asset-camera-retry').hidden=false;
+      status((error?.message||'识别失败')+'；可重试此标签。');
+    }
+    return true;
   }
-  $('asset-camera-retry').onclick=()=>failed&&found(failed,true);
+  $('asset-camera-retry').onclick=()=>{if(failed)found(failed,true);};
   function scheduleDecode(own){
     if(own!==generation||!stream||!reader)return;
     decodeTimer=setTimeout(()=>decodeFrame(own),SCAN_INTERVAL_MS);
@@ -111,8 +147,8 @@
   function decodeFrame(own){
     if(own!==generation||!reader||!stream)return;
     const video=$('asset-camera-video');
-    // Skip frames while an accepted label is being resolved against the server.
-    if(!busy&&video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA&&frameContext&&video.videoWidth&&video.videoHeight){
+    // A slow lookup never pauses camera decoding of the next frame.
+    if(video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA&&frameContext&&video.videoWidth&&video.videoHeight){
       try{
         const width=Math.min(MAX_DECODE_WIDTH,video.videoWidth);
         const height=Math.max(1,Math.round(video.videoHeight*width/video.videoWidth));
@@ -140,7 +176,7 @@
       const videoConstraints={...cameraChoice,width:{ideal:1280},height:{ideal:720},frameRate:{ideal:15,max:24}};
       const openedStream=await navigator.mediaDevices.getUserMedia({audio:false,video:videoConstraints});
       if(own!==generation){openedStream.getTracks().forEach(t=>t.stop());return;}
-      stream=openedStream;
+      stream=openedStream;hadLiveCamera=true;
       const video=$('asset-camera-video');video.hidden=false;$('asset-camera-overlay').hidden=false;$('asset-camera-placeholder').hidden=true;$('asset-camera-stop').disabled=false;$('asset-camera-stop').hidden=false;$('asset-camera-start').hidden=true;
       $('asset-scan-dialog').classList.add('asset-scan-camera-active');
       video.srcObject=stream;
@@ -161,9 +197,9 @@
   };
   $('asset-camera-stop').onclick=()=>{stop();status('相机已停止');};
   $('asset-camera-device').onchange=()=>$('asset-camera-start').click();
-  $('asset-camera-rescan').onclick=()=>{last='';status('已允许重新识别，请对准当前标签。');};
+  $('asset-camera-rescan').onclick=()=>{last='';recentLabels.clear();scanSerial++;status('已允许重新识别，请对准当前标签。');};
   function selectInput(mode){
-    stop();last='';
+    stop();if(mode==='gun')hadLiveCamera=false;
     for(const button of document.querySelectorAll('[data-scan-input]'))button.setAttribute('aria-pressed',String(button.dataset.scanInput===mode));
     host.hidden=mode==='gun';$('asset-scan-gun-settings').hidden=mode!=='gun';
     $('asset-camera-device-field').hidden=$('asset-camera-device').options.length<3;

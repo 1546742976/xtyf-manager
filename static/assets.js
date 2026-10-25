@@ -726,5 +726,10 @@
   });
   window.AssetLedger={api,load,open,showDialog,input,reason,options,esc,campusFields,scanQuantity,renderPager:pager,registerPager,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
   window.addEventListener('load',updateCategorySelection,{once:true});
-  load();
+  // assets.js precedes asset-units.js and asset-scan.js in the template.
+  // A fast API response can finish load() before those modules register on
+  // window (notably in WebKit), omitting their controls on the first render.
+  // Wait until the parser has executed all dependent classic scripts.
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>load(),{once:true});
+  else load();
 })();

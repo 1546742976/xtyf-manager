@@ -100,14 +100,20 @@ async function main(){
     units=(await(await api.get('/api/assets/units?item_id='+id)).json()).units;
     assert.equal(units.filter(u=>u.keeper_id).length,3);
     await page.locator('#asset-scan-close').click();
-    // A fast cached catalog can finish before the lifecycle script is downloaded.
+    // Delay the final extension while the base ledger script is registered.
+    // Initial data loading must wait for all classic scripts to finish, so
+    // lifecycle controls cannot disappear when catalog responses are fast.
     const lifecycleRoute='**/static/asset-lifecycle.js';
+    let catalogBeforeExtensions=null;
     await page.route(lifecycleRoute,async route=>{
-      await page.waitForFunction(()=>Boolean(window.AssetLedger?.catalog));
+      await page.waitForFunction(()=>Boolean(window.AssetLedger));
+      await new Promise(resolve=>setTimeout(resolve,250));
+      catalogBeforeExtensions=await page.evaluate(()=>Boolean(window.AssetLedger.catalog));
       await route.continue();
     });
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.unroute(lifecycleRoute);
+    assert.equal(catalogBeforeExtensions,false,'initial catalog load must not outrun the extension scripts');
     await page.locator('#asset-objects').click();
     await page.locator('[data-life=new]').click();
     await page.locator('#asset-form [name=name]').fill('合成机器人 '+label);

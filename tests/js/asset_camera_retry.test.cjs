@@ -34,7 +34,7 @@ test('failed camera label remains retryable without success or frame request sto
   assert.equal(f.vibrations,0);assert.doesNotMatch(f.get('asset-camera-status').textContent,/已识别/);
   f.frame();f.frame();await f.tick();assert.equal(f.calls,1);assert.equal(f.get('asset-camera-retry').hidden,false);
   f.respond=async()=>({parsed:{type:'unit'},item:{name:'合成电机'},unit:{id:1}});
-  await f.get('asset-camera-retry').onclick();assert.equal(f.calls,2);assert.equal(f.vibrations,1);
+  f.get('asset-camera-retry').onclick();await f.tick();await f.tick();assert.equal(f.calls,2);assert.equal(f.vibrations,1);
   assert.equal(f.get('asset-camera-retry').hidden,true);
 });
 test('closing scanner invalidates pending resolution and camera feedback',async()=>{
@@ -44,11 +44,13 @@ test('closing scanner invalidates pending resolution and camera feedback',async(
   assert.equal(f.vibrations,0);assert.doesNotMatch(f.get('asset-scan-preview').innerHTML,/late/);
   assert.equal(f.context.window.AssetScan.resolved,null);
 });
-test('stopping camera also invalidates its outstanding lookup while dialog stays open',async()=>{
+test('stopping video lets its background lookup finish while keeping camera feedback stopped',async()=>{
   const f=fixture();let finish;f.respond=()=>new Promise(r=>finish=r);
   await f.get('asset-camera-start').onclick();f.frame();await f.tick();
   f.get('asset-camera-stop').onclick();finish({parsed:{type:'unit'},item:{name:'late'},unit:{id:9}});await f.tick();
-  assert.equal(f.vibrations,0);assert.doesNotMatch(f.get('asset-scan-preview').innerHTML,/late/);
+  assert.equal(f.vibrations,0,'stopped video should not beep or vibrate for late results');
+  assert.match(f.get('asset-scan-preview').innerHTML,/late/,'lookup still updates the workbench');
+  assert.equal(f.context.window.AssetScan.resolved?.item?.name,'late');
   assert.equal(f.get('asset-camera-status').textContent,'相机已停止');
 });
 
@@ -60,7 +62,7 @@ test('receipt recognition failure preserves one queued label and retries without
   assert.match(f.get('asset-scan-queue').innerHTML,/1 \/ 20/);
   f.frame();await f.tick();assert.equal(f.calls,1);
   f.respond=async()=>({parsed:{type:'package',raw:'{on:SYNTHETIC,pc:C123,pm:TEST,qty:2}',label_quantity:2},item:{id:1,name:'合成物料',active:true,tracking:'quantity'}});
-  await f.get('asset-camera-retry').onclick();
+  f.get('asset-camera-retry').onclick();await f.tick();await f.tick();
   assert.equal(f.calls,2);assert.equal(f.vibrations,1);
   assert.match(f.get('asset-scan-queue').innerHTML,/1 \/ 20/);
   assert.equal(f.get('asset-camera-retry').hidden,true);
@@ -81,7 +83,7 @@ test('timeout releases never settling camera query and permits same-label retry'
   const f=fixture();f.respond=()=>new Promise(()=>{});await f.get('asset-camera-start').onclick();f.frame();await f.tick();
   f.expire();await f.tick();assert.equal(f.get('asset-camera-retry').hidden,false);assert.equal(f.vibrations,0);
   f.respond=async()=>({parsed:{type:'unit'},item:{name:'part'},unit:{id:1}});
-  await f.get('asset-camera-retry').onclick();assert.equal(f.calls,2);assert.equal(f.vibrations,1);
+  f.get('asset-camera-retry').onclick();await f.tick();await f.tick();assert.equal(f.calls,2);assert.equal(f.vibrations,1);
 });
 test('many stalled labels use four slots and timeout without retaining an invalid queue',async()=>{
   const f=fixture();f.context.window.AssetScan.open('receive');f.respond=()=>new Promise(()=>{});
