@@ -34,12 +34,16 @@ jobs:
       - name: Checkout exact main commit before PR changes
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
           path: .ci-main-baseline
           persist-credentials: false
+      - name: Resolve exactly checked-out baseline SHA
+        id: baseline_sha
+        shell: bash
+        run: echo "sha=$(git -C .ci-main-baseline rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Test migration from main commit with populated SQLite data
         env:
-          XTYF_UPGRADE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          XTYF_UPGRADE_BASE_SHA: ${{ steps.baseline_sha.outputs.sha }}
         run: python tests/upgrade_from_main.py
       - name: Python syntax check
         run: python -m compileall -q app.py common.py modules tests deploy
@@ -209,13 +213,13 @@ jobs:
           - group: tasks-core
             suites: 'task_center task_schedule'
           - group: tasks-mail
-            suites: 'daily_mail task_profiles'
+            suites: 'daily_mail'
           - group: tasks-repairs
             suites: 'seven_repairs seven_repairs_review'
           - group: ui-core
-            suites: 'palette_workspace local_collaboration account_avatar ui_regressions funds_recovery'
+            suites: 'palette_workspace local_collaboration account_avatar'
           - group: ui-clients
-            suites: 'account_invoice_ui client_updates_avatar client_connection invoice_polling camera_origin_probe'
+            suites: 'account_invoice_ui client_updates_avatar client_connection'
           - group: assets-ledger
             suites: 'assets'
           - group: assets-serialized

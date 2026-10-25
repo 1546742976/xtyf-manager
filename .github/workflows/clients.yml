@@ -1,13 +1,6 @@
 name: Client validation
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'clients/**'
-      - '!clients/**/*.md'
-      - 'templates/*.html'
-      - 'static/**'
   pull_request:
     branches: [main, 'codex/review-20261025-*']
     paths:
@@ -15,19 +8,30 @@ on:
       - '!clients/**/*.md'
       - 'templates/*.html'
       - 'static/**'
+  workflow_dispatch:
   workflow_call:
     inputs:
       source_ref:
         description: Git ref to package for stable release
         type: string
         required: false
+      release_version:
+        type: string
+        required: false
+      android_version_code:
+        type: string
+        required: false
+      signed_android:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: clients-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   frontend:
@@ -37,6 +41,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -50,7 +60,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_collect_release_assets.py' -v
       - name: Install packaged-UI browser validation dependencies
         run: |
-          python -m pip install playwright==1.57.0
+          python -m pip install playwright==1.56.0
           python -m playwright install --with-deps chromium
       - run: python clients/build_frontend.py
       - name: Exercise packaged pages and PDF preview with isolated native IPC
@@ -77,6 +87,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -102,6 +118,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -141,6 +163,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -187,6 +215,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -204,7 +238,7 @@ jobs:
           python clients/build_frontend.py
           npm ci --prefix clients/desktop --no-audit --no-fund
       - name: Restore fixed Android release keystore
-        if: inputs.source_ref != ''
+        if: inputs.signed_android == true
         shell: bash
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -224,11 +258,13 @@ jobs:
 
       - name: Build and verify APK (temporary test or fixed stable key)
         env:
-          STABLE_SOURCE_REF: ${{ inputs.source_ref }}
+          SIGNED_ANDROID: ${{ inputs.signed_android }}
         run: |
-          signing_args=()
-          if [[ -z "$STABLE_SOURCE_REF" ]]; then signing_args+=(--test-signing); fi
-          python clients/build_android.py --jdk "$JAVA_HOME" --sdk "$ANDROID_HOME" --skip-frontend-build --output-dir dist/clients/android "${signing_args[@]}"
+          args=()
+          if [[ "$SIGNED_ANDROID" != "true" ]]; then
+            args+=(--test-signing)
+          fi
+          python clients/build_android.py --jdk "$JAVA_HOME" --sdk "$ANDROID_HOME" --skip-frontend-build --output-dir dist/clients/android "${args[@]}"
           cd dist/clients/android
           test "$(find . -maxdepth 1 -type f -name 'XTYF-Manager-*.apk' | wc -l)" -eq 1
           sha256sum XTYF-Manager-*.apk > SHA256SUMS.txt
@@ -238,7 +274,6 @@ jobs:
           name: xtyf-client-android-apk
           path: |
             dist/clients/android/XTYF-Manager-*.apk
-            dist/clients/android/android-build.json
             dist/clients/android/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
@@ -260,6 +295,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -290,54 +331,3 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  publish-prerelease:
-    name: Publish main test pre-release
-    # Only client changes pushed/merged to main publish; PRs only upload artifacts.
-    # Stable releases reuse the build jobs with source_ref and publish separately.
-    if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      inputs.source_ref == ''
-    needs: [frontend, desktop, android, package-windows, package-android, package-linux]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: xtyf-client-*
-          path: dist/github-artifacts
-          merge-multiple: false
-      - name: Determine UTC daily beta tag
-        id: meta
-        shell: bash
-        run: echo "tag=$(date -u +%Y%m%d)-beta${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-      - name: Verify all platform binaries and checksums
-        env:
-          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
-        run: python clients/collect_release_assets.py --artifacts-dir dist/github-artifacts --output-dir dist/release-assets --tag "$RELEASE_TAG" --channel prerelease
-      - name: Publish immutable main test snapshot as pre-release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          name: ${{ steps.meta.outputs.tag }} (main)
-          prerelease: true
-          make_latest: false
-          fail_on_unmatched_files: true
-          generate_release_notes: false
-          body: |
-            Automated test build for client changes pushed or merged to main.
-            Source commit: ${{ github.sha }}.
-            These are CI test installers, not a production release.
-            Android is signed with a temporary key for each run; it cannot upgrade an installed production APK and may not upgrade previous CI APKs.
-            Windows is not Authenticode-signed. Test on your target OS before distribution.
-            App package version is read from clients/config.json; the date-beta tag identifies this unique CI snapshot.
-          files: dist/release-assets/*

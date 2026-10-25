@@ -1,86 +1,17 @@
-# GitHub Actions 安装包与 Release
+# Client 发布流程
 
-## 发布方式
+- PR：\`CI\` 运行后端测试；客户端相关变化由 \`Client validation\` 执行测试和临时签名安装包打包，成果只在 Artifacts。
+- 合并普通客户端改动到 main：\`Client release\` 串行分配 \`v1.2.0-beta.N\` 等版本，临时注入一致的版本元数据并打包、验证七个安装包；只有全部成功才发布 Pre-release。
+- 准备正式版：Actions → \`Prepare stable release PR\` → Run workflow。工作流生成 \`release/X.Y.Z\` Draft PR、同步版本和 Android code、写入发布意图、自动安排 PR 检查。你审核并手动合并后，\`Client release\` 自动发布稳定版。
+- 版本目标来自 \`clients/release-plan.json\`。本轮目标 \`1.2.0\`；准备正式版时默认将后续 Beta 指向下一 patch，可在准备 PR 中改为 minor 目标。
+- 版本注入只在 Runner 中发生；不为每个 Beta 写代码版本提交。永久版本文件只在正式版准备 PR 中更新。
+- Android Beta 和 stable 使用相同的原正式 JKS 签名，使用递增 versionCode。**旧随机签名 Beta 无法直接覆盖升级**。PR 仍用临时签名，不传递生产 Secret。
+- 正式/预发布均保留七个安装包，附带 SHA256SUMS.txt、build-report.json。已发布的非空 Release 不会被覆盖，Release 和 Tag 必须指向同一源提交。
+- GitHub 默认 GITHUB_TOKEN 创建 PR 不会自动产生 pull_request 工作流，因此准备工作流显式分派 CI 和 Client validation 的 workflow_dispatch 运行。
+- Linux DEB 测试版本号使用 \`1.2.0~beta.1\`；RPM 使用 \`1.2.0-0.beta.1\`，均低于 \`1.2.0\` 正式包。
+- 安装包上传 GitHub 不等于独立服务器页面的签名热更新，请单独配置发布源。
 
-- 仅客户端构建输入变化时自动执行 `Client validation`：`clients/**`（排除 Markdown 文档）、`templates/*.html` 和 `static/**`。后两项会打入客户端本地 UI，因此也属于客户端变更；仅修改服务器代码或文档不会触发客户端自动构建／Pre-release。
-- 指向 `main` 的 PR 在创建、更新或重新打开时，若包含上述变更，会执行测试和安装包构建，产物只上传到 Actions **Artifacts**，保留 14 天；同仓库和 Fork PR 均不创建 Pre-release。
-- 上述客户端变更通过 PR 合并或直接推送到 `main` 后，若所有测试和安装包构建成功，自动创建一个 **Pre-release**，名称与标签为 `YYYYMMDD-betaN`（UTC 日期 + 当前工作流的 `run_number`，名称另附 `main`）。发布指向该次 push 的精确提交；重新运行同一个工作流使用相同标签。
-- 这些测试包包含 Windows x64/ARM64、Android 通用 APK、Linux x64/ARM64 的 DEB/RPM。**PR 和 main 测试构建的 APK 均使用每次新建的临时签名，不能直接覆盖正式版或其他 CI APK**。请先在独立测试设备使用；这些 Pre-release 不是正式升级渠道。
-- 正式发布：先在 `main` 修改 `clients/config.json` 中的版本与 Android `versionCode`，并同步 Tauri/Cargo/Android Manifest 等元数据（参考 `clients/release.py` 的 `sync_versions`）。完成审查后在 `main` 对应提交打 `vX.Y.Z` 标签并推送，触发 `Client release`。也可在 Actions → Client release → Run workflow 输入**已存在**的标签重新构建。已存在且尚无附件的正式 Release（例如通过 GitHub 网页手动创建的空版本）允许由 Actions 补齐安装包；**已经带有任何附件的正式 Release 禁止覆盖**，需要发布新版本或先人工核对后处理。
-- 标签必须与版本文件一致，且正式标签对应提交必须属于 `main` 的历史。正式构建使用固定 Android Keystore。7 个安装包全部成功、校验和一致后才发布稳定 Release；失败时不会开始发布。Release 自动附带 `SHA256SUMS.txt` 和 `build-report.json`。
-- 日期 beta 标签只是 **GitHub 测试发布标识**，安装包内部保持对应源码提交的 `clients/config.json` 版本；不要把不同 beta APK 当成可直接升级的 Android 版本。正式版继续使用 `v1.1.0` 这种三段式语义化版本号。
+## 需要的 Actions Secrets
+\`ANDROID_KEYSTORE_B64\`（原 JKS 的单行 base64）与 \`ANDROID_KEYSTORE_PASSWORD\`（原 JKS 密码）。应始终备份原签名密钥；失去原密钥无法覆盖升级以前的正式 APK。GitHub Actions 设置必须允许 \`GITHUB_TOKEN\` 写入内容并创建 PR，具体为仓库 Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests。
 
-## Android 固定签名（必须配置）
-
-Android APK **不能完全不签名**；Windows EXE 与 Linux DEB/RPM 不需要购买任何证书。项目正式 APK 使用固定自签名 JKS 即可。**如果已经向成员发过正式 APK，必须找回当时的原始 `xtyf-manager.jks` 和密码；换新密钥会使覆盖安装失败。**
-
-从未对外发布正式 Android APK 时，可在本机安装 JDK 17+，在仓库根目录执行（不要 commit 以下文件）：
-
-```bash
-mkdir -p clients/signing
-keytool -genkeypair -v -keystore clients/signing/xtyf-manager.jks -storetype JKS -alias xtyf-manager -keyalg RSA -keysize 3072 -validity 10000 -dname "CN=XTYF Manager, OU=Team, O=XTYF, C=CN"
-```
-
-按提示输入并记录 Keystore 密码；key password 提示直接回车使用相同密码。将文件安全地离线备份。确认密钥：
-
-```bash
-keytool -list -v -keystore clients/signing/xtyf-manager.jks -alias xtyf-manager
-```
-
-在 GitHub 仓库 Settings → Secrets and variables → Actions → **New repository secret** 添加：
-
-| Secret | 内容 |
-|---|---|
-| `ANDROID_KEYSTORE_B64` | JKS 的完整 Base64（单行） |
-| `ANDROID_KEYSTORE_PASSWORD` | 上述 Keystore 密码（也用作 key password） |
-
-Linux / WSL 生成 Base64（**不要粘贴到聊天、PR、日志或仓库文件**）：
-
-```bash
-base64 -w 0 clients/signing/xtyf-manager.jks
-```
-
-Windows PowerShell（将输出复制到 Secrets 表单，而非提交 Git）：
-
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes((Resolve-Path 'clients/signing/xtyf-manager.jks')))
-```
-
-正式版 Actions 在隔离 Runner 上恢复 Keystore，先检查别名与密码，再由原有 `clients/build_android.py` 完成 APK 签名和验证。缺少任一 Secret 将**直接阻止正式 Release**；PR 和 main 测试构建不读取这两个 Secret。
-
-## 发布命令示例
-
-确保版本元数据已经提交且一致，再运行：
-
-```bash
-git switch main
-git pull --ff-only
-git tag v1.1.0
-git push origin v1.1.0
-```
-
-仅当当前稳定版本确实是 1.1.0 且尚未创建对应标签时才使用此示例。**如果标签已经存在，不要重复推送或移动标签。** 新版本请改用适当的更高版本与递增的 Android versionCode。
-
-安装包发布**不自动部署服务器**，也不改变独立的、需要 RSA 签名的客户端页面热更新协议。生产下载 URL 如要用于应用内更新，还需额外接入服务器签名更新清单。
-
-## 已存在空 Release 时如何补齐安装包
-
-如果 GitHub Releases 页面已经手动创建了 `v1.1.0`，但该 Release 还没有安装包，旧版工作流可能在最终发布阶段报错 `Release v1.1.0 already exists`，即使所有平台的构建都通过。这不是 APK 签名或标签检查失败。
-
-到 **Actions → Client release → Run workflow**，选择 `main`，`tag` 输入 `v1.1.0`，然后运行。发布任务同时检出**标签提交**（用于版本元数据）和 **main 分支**（用于最新版发布校验脚本）；安装包始终从标签提交构建，因此即使旧标签缺少后来添加的 `clients/release_target.py` 也不会失败。新工作流会重新从**原 `v1.1.0` 标签对应的提交**构建全部平台并校验，只给没有附件的正式 Release 补齐安装包，且保留它已有的更新日志。无需删除原 Release、移动标签、更换密钥或重新递增版本。
-
-如果已有任何附件，工作流仍会拒绝改写，以免同一版本被悄然替换；先核实原有发布内容，再决定是否创建新版本。手动操作与自动化发布不要同时执行。
-
-## 验收与排错
-
-查看 Actions → Client validation 或 Client release → 运行详情。历史报错 `can't open file 'clients/release_target.py'` 的原因是发布任务错误地从旧标签查找新脚本；修复后使用 main 的发布工具。请使用 **Run workflow** 并选择 main，不要对旧失败运行直接点击 **Re-run jobs**。上传的 Artifacts 在工作流中保留 14 天；Pre-release / Release 附件长期存储于 Releases 页面。PR 的测试包和正式发布包不能混用。跨平台代码编译与包检查通过不等于各真实操作系统上的安装、运行、升级功能已经验收。
-
-如正式 Android 构建在恢复 KeyStore 步骤失败，优先检查仓库 Secrets 是否完整、Base64 是否单行、密钥别名是否为 `xtyf-manager`、原密钥的 key password 是否与 Keystore password 相同。不要通过删掉签名检查或生成新密钥绕过问题。
-
-## v1.1.0 发布恢复记录（2026-10-20）
-
-本次版本首次自动发布出现的问题已修复并完成验收。最初使用的 `softprops/action-gh-release` 试图修改已经存在的 Release 元数据，因目标提交包含不同版本的工作流文件而被 GitHub Token 拒绝（403）。正式发布流程现已改为：若 Release 尚不存在，使用 `gh release create --verify-tag` 创建；若存在但没有附件，直接用 `gh release upload` 上传，而不更新 Release 元数据。
-
-历史标签恢复还暴露出 GitHub 内置 Token 无法创建指向含有不同工作流文件的旧提交的标签。最后将尚未发布的 `v1.1.0` 标签设置为与实际打包相一致的 main 源代码，在所有平台重新构建并校验，再复用该次 Actions Artifacts 完成发布。2026-10-20 的 [正式 v1.1.0](https://github.com/SHM-white/xtyf-manager/releases/tag/v1.1.0) 已发布，含 7 个安装包、`SHA256SUMS.txt` 和 `build-report.json` 共 9 个附件。
-
-临时恢复工作流已退役；下一版请先提交一致的客户端版本元数据，再推送相同版本号的 `vX.Y.Z` 标签。无需手动在网页端创建 Release，也不要重复使用或移动已发布标签。
+正式发布 PR 不读取生产 Secrets。正式签名只在受信任的 main 构建中使用；合并涉及 workflow、构建脚本等文件的 PR 前必须审查。发布失败请查看构建日志，不要移动历史标签或强制覆盖 Release 产物。

@@ -8,7 +8,6 @@ It must run after ALL platform build jobs succeed.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -33,15 +32,16 @@ def expected_artifacts(version: str) -> dict[str, list[str]]:
 
 
 def validate_tag(tag: str, channel: str, version: str) -> None:
+    if tag != f"v{version}":
+        raise ValueError(f"Release tag {tag!r} must match embedded version {version}")
     if channel == "stable":
-        if tag != f"v{version}":
-            raise ValueError(f"Stable tag {tag!r} must equal v{version}")
+        if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+            raise ValueError(f"Invalid stable version {version!r}")
     elif channel == "prerelease":
-        if not re.fullmatch(r"[0-9]{8}-beta[1-9][0-9]*", tag):
-            raise ValueError(f"Invalid PR beta tag: {tag!r}")
-        datetime.strptime(tag[:8], "%Y%m%d")
+        if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*", version):
+            raise ValueError(f"Invalid beta version {version!r}")
     else:
-        raise ValueError(f"Unknown channel: {channel}")
+        raise ValueError(f"Unknown channel {channel}")
 
 
 def read_checksums(path: Path) -> dict[str, str]:
@@ -113,7 +113,7 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("clients/config.json"))
     args = parser.parse_args()
     version = json.loads(args.config.read_text(encoding="utf-8"))["version"]
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[1-9][0-9]*)?", version):
         parser.error(f"Invalid application version: {version}")
     records = collect(args.artifacts_dir, args.output_dir, version=version, tag=args.tag, channel=args.channel)
     print(f"Validated {len(records)} installers for {args.tag} (app version {version})")

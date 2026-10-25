@@ -1,0 +1,92 @@
+name: Prepare stable release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stable version to prepare (leave empty to use clients/release-plan.json)'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: xtyf-prepare-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Prepare and validate a version bump on a dedicated branch
+        id: prepare
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{inputs.version}}
+        run: |
+          set -euo pipefail
+          previous=$(python -c "import json;print(json.load(open('clients/config.json'))['version'])")
+          version="$REQUESTED_VERSION"
+          if [[ -z "$version" ]]; then
+            version=$(python -c "import json;print(json.load(open('clients/release-plan.json'))['nextVersion'])")
+          fi
+          branch="release/$version"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "::error::Release branch already exists; review its PR"; exit 1
+          fi
+          git switch -c "$branch"
+          python clients/versioning_ci.py prepare --version "$version"
+          code=$(python -c "from clients.versioning_ci import version_code;print(version_code('$version'))")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          git add clients/config.json clients/release-plan.json \
+            clients/desktop/tauri.conf.json clients/desktop/package.json \
+            clients/desktop/package-lock.json clients/desktop/Cargo.toml \
+            clients/desktop/Cargo.lock clients/android/AndroidManifest.xml \
+            .github/release-intent.json
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -m "chore(release): prepare v$version"
+          git push origin "$branch"
+      - name: Render template and open draft release PR
+        env:
+          GH_TOKEN: ${{github.token}}
+          VERSION: ${{steps.prepare.outputs.version}}
+          PREVIOUS: ${{steps.prepare.outputs.previous}}
+          CODE: ${{steps.prepare.outputs.code}}
+          BRANCH: ${{steps.prepare.outputs.branch}}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          path=Path('.github/PULL_REQUEST_TEMPLATE/release.md')
+          body=path.read_text(encoding='utf-8')
+          for name,value in (("VERSION",os.environ["VERSION"]),("PREVIOUS",os.environ["PREVIOUS"]),("ANDROID_CODE",os.environ["CODE"])):
+              body=body.replace("{{"+name+"}}",value)
+          Path("/tmp/release-pr-body.md").write_text(body,encoding='utf-8')
+          PY
+          gh pr create --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main \
+            --draft --title "chore(release): prepare v$VERSION" --body-file /tmp/release-pr-body.md
+      - name: Explicitly dispatch CI for token-created PR branch
+        env:
+          GH_TOKEN: ${{github.token}}
+          BRANCH: ${{steps.prepare.outputs.branch}}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          gh workflow run clients.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"

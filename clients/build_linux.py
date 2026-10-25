@@ -120,7 +120,19 @@ def verify_package(package, target, config, source, executable_source, env, cach
         metadata = capture(['rpm', '-qp', '--queryformat', '%{NAME}\n%{VERSION}\n%{ARCH}', package], env=env).splitlines()
         dependencies = capture(['rpm', '-qp', '--requires', package], env=env).splitlines()
         capture(['rpm', '--checksig', package], env=env)
-    if metadata != ['xtyf-manager', config['version'], package_arch]:
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)-beta\.(\d+)", config["version"])
+    metadata_version = config["version"]
+    if match:
+        metadata_version = match[1] + "~beta." + match[2] if target == "deb" else match[1]
+        if target == "rpm":
+            release = capture(['rpm', '-qp', '--queryformat', '%{RELEASE}', package], env=env)
+            if release != "0.beta." + match[2]:
+                raise RuntimeError(f"Incorrect pre-release RPM ordering: {release}")
+    elif target == "rpm":
+        release = capture(['rpm', '-qp', '--queryformat', '%{RELEASE}', package], env=env)
+        if release != "1":
+            raise RuntimeError(f"Incorrect stable RPM release: {release}")
+    if metadata != ['xtyf-manager', metadata_version, package_arch]:
         raise RuntimeError(f'Incorrect {target} package metadata: {metadata}')
     settings = json.loads((source / 'tauri.conf.json').read_text(encoding='utf-8'))
     expected_dependencies = settings['bundle']['linux'][target]['depends']

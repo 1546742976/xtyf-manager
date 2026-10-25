@@ -2,155 +2,141 @@ name: Client release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    paths:
+      - 'clients/**'
+      - '!clients/**/*.md'
+      - 'templates/*.html'
+      - 'static/**'
+      - '.github/release-intent.json'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing stable tag (for example v1.1.0)
-        type: string
-        required: true
 
 permissions:
   contents: read
+  pull-requests: read
 
+# Publishing is serial across new commits, so the next Beta tag is never claimed twice.
 concurrency:
-  group: stable-release-${{ github.event.inputs.tag || github.ref_name }}
+  group: xtyf-client-publish-main
   cancel-in-progress: false
 
 jobs:
-  validate:
-    name: Verify stable tag and version
+  resolve:
+    name: Select immutable release identity
+    # Manual dispatch must never execute signed release code from an unreviewed branch.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.verify.outputs.tag }}
-      sha: ${{ steps.verify.outputs.sha }}
+      version: ${{steps.version.outputs.version}}
+      tag: ${{steps.version.outputs.tag}}
+      channel: ${{steps.version.outputs.channel}}
+      code: ${{steps.version.outputs.code}}
+      already_published: ${{steps.version.outputs.already_published}}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{github.sha}}
           fetch-depth: 0
-          persist-credentials: false
-      - name: Check tag, metadata, and main ancestry
-        id: verify
-        shell: bash
-        env:
-          REQUESTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json, os, re
-          from pathlib import Path
-          tag = os.environ['REQUESTED_TAG']
-          if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag):
-              raise SystemExit(f'Expected stable tag vMAJOR.MINOR.PATCH, got {tag!r}')
-          config = json.loads(Path('clients/config.json').read_text(encoding='utf-8'))
-          if tag != 'v' + config['version']:
-              raise SystemExit(f'Tag {tag} does not match committed app version {config["version"]}')
-          if int(config['versionCode']) < 1:
-              raise SystemExit('Android versionCode must be positive')
-          PY
-          tag_sha="$(git rev-parse "refs/tags/$REQUESTED_TAG^{commit}")"
-          test "$tag_sha" = "$(git rev-parse HEAD)" || { echo "::error::Tag does not match checkout"; exit 1; }
-          git fetch --no-tags origin main
-          git merge-base --is-ancestor HEAD refs/remotes/origin/main || {
-            echo "::error::Stable release tag must point to a commit on main"
-            exit 1
-          }
-          echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
-          echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
-
-  build:
-    name: Test and package all platforms
-    needs: validate
-    uses: ./.github/workflows/clients.yml
-    with:
-      source_ref: ${{ needs.validate.outputs.sha }}
-    secrets: inherit
-    permissions:
-      # Reusable Client validation also defines a main pre-release publisher with write
-      # permissions. Grant the caller the maximum; ordinary build jobs retain
-      # contents:read in the called workflow, and its pre-release publisher is skipped.
-      contents: write
-
-  publish:
-    name: Publish verified stable release
-    needs: [validate, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      # Keep the tagged source checkout for the version metadata and audit trail.
-      # Historical tags do not contain publication helpers added to main later.
-      - name: Checkout release source at immutable tag commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate.outputs.sha }}
-          persist-credentials: false
-      - name: Checkout current publication tooling
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          path: .release-tooling
-          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Allocate Beta or approve release-PR stable version
+        id: version
+        env:
+          GH_TOKEN: ${{github.token}}
+        run: python clients/versioning_ci.py select --output "$GITHUB_OUTPUT"
+
+  build:
+    name: Test and build signed client packages
+    needs: resolve
+    if: needs.resolve.outputs.already_published != 'true'
+    uses: ./.github/workflows/clients.yml
+    with:
+      source_ref: ${{github.sha}}
+      release_version: ${{needs.resolve.outputs.version}}
+      android_version_code: ${{needs.resolve.outputs.code}}
+      signed_android: true
+    secrets: inherit
+    permissions:
+      contents: read
+
+  publish:
+    name: Verify and upload Release
+    needs: [resolve, build]
+    if: needs.resolve.outputs.already_published != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{github.token}}
+      RELEASE_VERSION: ${{needs.resolve.outputs.version}}
+      RELEASE_CODE: ${{needs.resolve.outputs.code}}
+      RELEASE_TAG: ${{needs.resolve.outputs.tag}}
+      RELEASE_CHANNEL: ${{needs.resolve.outputs.channel}}
+      SOURCE_SHA: ${{github.sha}}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{github.sha}}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Reproduce version metadata for checksum collector
+        env:
+          XTYF_VERSION: ${{needs.resolve.outputs.version}}
+          XTYF_CODE: ${{needs.resolve.outputs.code}}
+        run: python clients/versioning_ci.py apply
       - uses: actions/download-artifact@v4
         with:
           pattern: xtyf-client-*
           path: dist/github-artifacts
           merge-multiple: false
-      - name: Verify every binary, version and SHA-256
-        env:
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-        run: python .release-tooling/clients/collect_release_assets.py --artifacts-dir dist/github-artifacts --output-dir dist/release-assets --tag "$RELEASE_TAG" --channel stable --config clients/config.json
-      - name: Inspect existing stable Release before uploading
-        id: release_state
+      - name: Validate all seven packages, manifest and digests
+        run: python clients/collect_release_assets.py --artifacts-dir dist/github-artifacts --output-dir dist/release-assets --tag "$RELEASE_TAG" --channel "$RELEASE_CHANNEL"
+      - name: Refuse tag retargeting or replacing existing Release assets
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          release_json="$RUNNER_TEMP/stable-release.json"
-          release_error="$RUNNER_TEMP/stable-release-error.txt"
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease,isImmutable,assets >"$release_json" 2>"$release_error"; then
-            # Complete an existing empty GitHub Release (e.g. one created
-            # manually with its tag). Never overwrite previously published assets.
-            python .release-tooling/clients/release_target.py --tag "$RELEASE_TAG" --metadata "$release_json"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          elif grep -qiE 'release not found|HTTP 404' "$release_error"; then
-            echo "No Release exists for $RELEASE_TAG; create one after verification."
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          else
-            # Do not silently interpret authentication/network failures as 404.
-            cat "$release_error" >&2
-            exit 1
+          existing=$(git ls-remote --tags --refs origin "refs/tags/$RELEASE_TAG" | awk '{print $1}')
+          if [[ -n "$existing" ]]; then
+            git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            resolved=$(git rev-parse "$RELEASE_TAG^{commit}")
+            if [[ "$resolved" != "$SOURCE_SHA" ]]; then
+              echo "::error::Tag $RELEASE_TAG belongs to another commit"; exit 1
+            fi
           fi
-      - name: Upload verified packages without editing Release metadata
+          if gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,isImmutable,assets > "$RUNNER_TEMP/old-release.json" 2>"$RUNNER_TEMP/release-error"; then
+            jq -e --arg tag "$RELEASE_TAG" --arg channel "$RELEASE_CHANNEL" \
+              '.tagName == $tag and .isDraft == false and .isImmutable == false and (.assets | length) == 0 and (.isPrerelease == ($channel == "prerelease"))' \
+              "$RUNNER_TEMP/old-release.json" >/dev/null || {
+                echo "::error::Existing release metadata or assets do not permit upload"; exit 1;
+              }
+            echo "existing=true" >> "$GITHUB_ENV"
+          elif grep -qiE 'release not found|HTTP 404' "$RUNNER_TEMP/release-error"; then
+            echo "existing=false" >> "$GITHUB_ENV"
+          else
+            cat "$RUNNER_TEMP/release-error" >&2; exit 1
+          fi
+      - name: Publish exactly verified artifacts
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
           files=(dist/release-assets/*)
           if (( ${#files[@]} != 9 )); then
-            echo "::error::Expected seven installers plus checksum and report; found ${#files[@]}"
-            exit 1
+            echo "::error::Expected seven installers plus two verification files"; exit 1
           fi
-          if [[ "${{ steps.release_state.outputs.exists }}" == "true" ]]; then
-            # Do not PATCH an already-published Release: GitHub may forbid changing
-            # target_commitish when the tagged revision touched workflow files.
+          if [[ "$existing" == "true" ]]; then
             gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" \
-              --verify-tag --title "XTYF Manager $RELEASE_TAG" --generate-notes --latest
+            args=(--repo "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --title "XTYF Manager $RELEASE_TAG" --generate-notes)
+            if [[ "$RELEASE_CHANNEL" == "prerelease" ]]; then
+              args+=(--prerelease --latest=false)
+            else
+              args+=(--latest)
+            fi
+            gh release create "$RELEASE_TAG" "${files[@]}" "${args[@]}"
           fi
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq '.assets | length' | grep -qx '9' || {
-              echo "::error::Release does not contain all nine expected attachments"
-              exit 1
-            }
+          count=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')
+          [[ "$count" == 9 ]] || { echo "::error::Release has $count files, expected 9"; exit 1; }
