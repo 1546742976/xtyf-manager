@@ -26,10 +26,10 @@ class BackendLimitsTests(unittest.TestCase):
                 data = {'progress':'1','version':'1','project_version':'1', field:'9'*4400}
                 self.assertEqual(self.client.post('/api/daily-projects/1/groups/mechanical/progress', data=data).status_code, 400)
 
-    def test_import_partial_success_rejects_duplicates_and_too_many_rows(self):
+    def test_import_is_atomic_on_duplicates_and_too_many_rows(self):
         username = 'import_'+uuid4().hex[:12]
         result = self.client.post('/api/members/import', json={'text': f'测试,,{username}\n重复,,{username}\n,组别,坏行'}).get_json()
-        self.assertEqual(len(result['created']), 1)
+        self.assertEqual(len(result['created']), 0)
         self.assertEqual([x['line'] for x in result['failures']], [2, 3])
         self.assertEqual(self.client.post('/api/members/import', json={'text': '\n'.join(['甲']*501)}).status_code, 400)
 
