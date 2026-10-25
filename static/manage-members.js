@@ -220,10 +220,10 @@ function bindMemberForms() {
     const form = event.currentTarget;
     if (!form.reportValidity()) return;
     const result = await api("/api/members/import", { text: new FormData(form).get("text"), project_ids: checkedValues(form, "project_ids") });
-    if (result?.ok) {
+    if (result?.ok || result?.failures) {
       let box = document.getElementById("member-import-result");
       if (!box) {box=document.createElement("section");box.id="member-import-result";box.setAttribute("aria-live","polite");form.after(box);}
-      box.innerHTML=`<h3>导入结果：成功 ${result.created.length} 人，失败 ${(result.failures||[]).length} 行</h3><p>请通过可信渠道逐人交付凭据，首次登录必须改密。</p><pre>${esc(result.created.join("\n"))}</pre>`+
+      box.innerHTML=`<h3>${result.ok ? `整批导入成功：${result.created.length} 人` : `整批拒绝，未创建账号：${(result.failures||[]).length} 行需修正`}</h3><p>请通过可信渠道逐人交付凭据，首次登录必须改密。</p><pre>${esc(result.created.join("\n"))}</pre>`+
         ((result.failures||[]).length?`<table><thead><tr><th>行号</th><th>失败原因</th></tr></thead><tbody>${result.failures.map(item=>`<tr><td>${Number(item.line)}</td><td>${esc(item.reason)}</td></tr>`).join("")}</tbody></table>`:"");
       if (!(result.failures||[]).length) form.reset();
       loadMembers();

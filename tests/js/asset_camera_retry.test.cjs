@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 function fixture(){
-  const listeners={},windowListeners={},nodes=new Map();
+  const listeners={},windowListeners={},nodes=new Map(),timers=new Map();let timerID=0;
   const get=id=>{
     if(!nodes.has(id))nodes.set(id,{value:'general',hidden:false,open:true,innerHTML:'',textContent:'',dataset:{},options:[],listeners:{},classList:{add(){},remove(){},toggle(){}},replaceChildren(){this.innerHTML='';},append(){},parentNode:{insertBefore(){}},setAttribute(){},addEventListener(k,f){(this.listeners[k]??=[]).push(f);},focus(){},close(){this.open=false;for(const f of this.listeners.close||[])f();},showModal(){this.open=true;},files:[]});
     return nodes.get(id);
@@ -12,12 +12,12 @@ function fixture(){
     window:{AssetLedger:{catalog:{can_manage:true,campuses:[]},showDialog(){},esc:String,input(){},reason(){},options(){},api:async(...args)=>{calls++;return respond(...args);}},AssetUnits:{selection:[]},isSecureContext:true,addEventListener(k,f){(windowListeners[k]??=[]).push(f);}},
     navigator:{vibrate(){vibrations++;},mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){stopped++;}}]})}},
     ZXing:{BrowserMultiFormatReader:class{reset(){} async decodeFromStream(s,v,cb){decode=cb;}}},
-    CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}},setTimeout(){},clearTimeout(){},
+    CustomEvent:class{constructor(type,options){this.type=type;this.detail=options.detail;}},AbortController,setTimeout(fn,ms){timers.set(++timerID,{fn,ms});return timerID;},clearTimeout(id){timers.delete(id);},
     matchMedia:()=>({matches:false}),Map,console
   };
   vm.createContext(context);
   for(const f of ['static/asset-scan.js','static/asset-camera.js'])vm.runInContext(fs.readFileSync(f,'utf8'),context,{filename:f});
-  return {get,context,set respond(f){respond=f;},get calls(){return calls;},get vibrations(){return vibrations;},get stopped(){return stopped;},emit:name=>{for(const f of windowListeners[name]||[])f();},frame:()=>decode({getText:()=>'{on:SYNTHETIC,pc:C123,pm:TEST,qty:2}'}),tick:()=>new Promise(r=>setImmediate(r))};
+  return {get,context,expire(){for(const [id,t] of [...timers])if(t.ms>=1000){timers.delete(id);t.fn();}},set respond(f){respond=f;},get calls(){return calls;},get vibrations(){return vibrations;},get stopped(){return stopped;},emit:name=>{for(const f of windowListeners[name]||[])f();},frame:()=>decode({getText:()=>'{on:SYNTHETIC,pc:C123,pm:TEST,qty:2}'}),tick:()=>new Promise(r=>setImmediate(r))};
 }
 
 test('camera releases tracks when a departing frame no longer exposes scanner globals',async()=>{
@@ -61,6 +61,34 @@ test('receipt recognition failure preserves one queued label and retries without
   assert.equal(f.calls,2);assert.equal(f.vibrations,1);
   assert.match(f.get('asset-scan-queue').innerHTML,/1 \/ 20/);
   assert.equal(f.get('asset-camera-retry').hidden,true);
+});
+
+test('never settling receipt is cancelled and explicit retry makes progress',async()=>{
+  const f=fixture();f.context.window.AssetScan.open('receive');let signal;
+  f.respond=(path,body,options)=>{signal=options?.signal;return new Promise(()=>{});};
+  f.context.window.AssetScan.resolve('SYNTHETIC-A');await f.tick();
+  f.context.window.AssetScan.cancel();
+  f.respond=async()=>({parsed:{type:'package',raw:'SYNTHETIC-A',label_quantity:2},item:{name:'part',active:true}});
+  const retry=f.context.window.AssetScan.retry('SYNTHETIC-A');await f.tick();
+  assert.equal(f.calls,2);assert.equal(signal.aborted,true);
+  assert.equal((await retry).status,'success');
+  assert.equal((await f.context.window.AssetScan.resolve('SYNTHETIC-A')).status,'duplicate');
+});
+test('timeout releases never settling camera query and permits same-label retry',async()=>{
+  const f=fixture();f.respond=()=>new Promise(()=>{});await f.get('asset-camera-start').onclick();f.frame();await f.tick();
+  f.expire();await f.tick();assert.equal(f.get('asset-camera-retry').hidden,false);assert.equal(f.vibrations,0);
+  f.respond=async()=>({parsed:{type:'unit'},item:{name:'part'},unit:{id:1}});
+  await f.get('asset-camera-retry').onclick();assert.equal(f.calls,2);assert.equal(f.vibrations,1);
+});
+test('many stalled labels use four slots and timeout without retaining an invalid queue',async()=>{
+  const f=fixture();f.context.window.AssetScan.open('receive');f.respond=()=>new Promise(()=>{});
+  const pending=Array.from({length:20},(_,i)=>f.context.window.AssetScan.resolve('SYNTHETIC-'+i));await f.tick();
+  assert.equal(f.calls,4);
+  assert.equal((await f.context.window.AssetScan.resolve('SYNTHETIC-0')).status,'duplicate');
+  f.expire();await f.tick();assert.ok((await Promise.all(pending)).every(result=>result.status==='failure'));
+  f.respond=async()=>({parsed:{type:'package',raw:'SYNTHETIC-0'},item:{name:'part',active:true}});
+  assert.equal((await f.context.window.AssetScan.retry('SYNTHETIC-0')).status,'success');
+  assert.equal(f.calls,5);assert.match(f.get('asset-scan-queue').innerHTML,/20 \/ 20/);
 });
 
 test('receipt response after scanner closes does not change the retained queue or signal success',async()=>{

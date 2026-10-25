@@ -331,16 +331,18 @@ def members_import():
         lines.pop()
     if len(lines) > 500:
         return jsonify(ok=False, error='每次最多导入 500 行'), 400
-    created, failures = [], []
+    created, failures, prepared = [], [], []
+    # Reserve before validation: no inserts until every row passes.
     db.execute('BEGIN IMMEDIATE')
     try:
         existing = {row[0] for row in db.execute('SELECT username FROM members')}
+        groups = {row['name']: row['id'] for row in db.execute('SELECT id,name FROM groups WHERE deleted_at IS NULL')}
+        if not active_ids(db, 'projects', project_ids) or ('group_ids' in data and not active_ids(db, 'groups', requested_groups or [])):
+            raise ValueError('组别已变化，请重新核对')
         for line, raw in enumerate(lines, 1):
             if raw.strip().startswith('#'):
                 continue
-            db.execute('SAVEPOINT import_member')
             try:
-                # Tabs and commas are supported delimiters; other controls remain invalid.
                 if any(ord(char) < 32 and char != '\t' or ord(char) == 127 for char in raw):
                     raise ValueError('行内容不能包含控制字符')
                 parts = [part.strip() for part in raw.replace('，', ',').replace('\t', ',').split(',')]
@@ -350,26 +352,35 @@ def members_import():
                 username = clean_text(parts[2] if len(parts) > 2 and parts[2] else name, '用户名', 64, allow_newlines=False)
                 group_name = clean_text(parts[1] if len(parts) > 1 else '', '组别', 200, required=False, allow_newlines=False)
                 if username in existing:
-                    raise ValueError(f'用户名 {username} 已存在')
-                legacy_groups = _legacy_groups(db, group_name, True)
-                if 'group_ids' in data and legacy_groups and legacy_groups != requested_groups:
-                    raise ValueError('导入组别与 group_ids 冲突')
-                password = secrets.token_urlsafe(9)
-                member_id = int(db.execute(
-                    'INSERT INTO members(name,username,password_hash,group_name,role,created_at,must_change_password) VALUES(?,?,?,?,?,?,1)',
-                    (name, username, generate_password_hash(password), '', 'member', now_str()),
-                ).lastrowid)
-                _set_member_groups(db, member_id, requested_groups if 'group_ids' in data else legacy_groups)
-                _set_member_projects(db, member_id, project_ids)
-                db.execute('RELEASE import_member')
+                    raise ValueError(f'用户名 {username} 已存在或在本批重复')
                 existing.add(username)
-                created.append(f'{name}（{username} / {password}）')
-            except (ValueError, sqlite3.IntegrityError) as exc:
-                db.execute('ROLLBACK TO import_member')
-                db.execute('RELEASE import_member')
-                failures.append({'line': line, 'reason': str(exc) if isinstance(exc, ValueError) else '用户名已存在或成员数据冲突'})
+                names = [v.strip() for v in group_name.split(';') if v.strip()]
+                if any(v not in groups for v in names):
+                    raise ValueError('专业组不存在或已停用，请先创建专业组')
+                ids = sorted({groups[v] for v in names})
+                if 'group_ids' in data and ids and ids != sorted(requested_groups or []):
+                    raise ValueError('导入组别与 group_ids 冲突')
+                prepared.append((line, name, username, requested_groups if 'group_ids' in data else ids))
+            except ValueError as exc:
+                failures.append({'line': line, 'reason': str(exc)})
+        if failures:
+            db.rollback()
+            return jsonify(ok=False, error='整批校验失败，未创建任何成员', created=[], failures=failures), 400
+        for line, name, username, ids in prepared:
+            password = secrets.token_urlsafe(9)
+            member_id = int(db.execute(
+                'INSERT INTO members(name,username,password_hash,group_name,role,created_at,must_change_password) VALUES(?,?,?,?,?,?,1)',
+                (name, username, generate_password_hash(password), '', 'member', now_str()),
+            ).lastrowid)
+            _set_member_groups(db, member_id, ids)
+            _set_member_projects(db, member_id, project_ids)
+            created.append(f'{name}（{username} / {password}）')
         db.commit()
+    except (ValueError, sqlite3.IntegrityError) as exc:
+        db.rollback()
+        return jsonify(ok=False, error='整批导入已回滚，请重新核对', created=[],
+                       failures=[{'line': locals().get('line', 0), 'reason': str(exc) if isinstance(exc, ValueError) else '用户名或组别发生并发冲突'}]), 409
     except Exception:
         db.rollback()
         raise
-    return jsonify(ok=True, created=created, failures=failures)
+    return jsonify(ok=True, created=created, failures=[])

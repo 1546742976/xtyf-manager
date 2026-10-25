@@ -72,6 +72,47 @@ class DailyProjectsTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(checked, [True])
 
+    def test_unauthorized_image_upload_is_rejected_before_decode(self):
+        pid = self.create()
+        project = self.get(pid)
+        group = next(g for g in project['groups'] if g['stage'] == 'mechanical')
+        from modules import daily_projects
+        with patch.object(daily_projects, 'prepare_image', side_effect=AssertionError('must not decode')) as decode:
+            result = self.clients[1].post(f'/api/daily-projects/{pid}/groups/mechanical/progress', data={
+                'progress': '50', 'version': str(group['version']), 'project_version': str(project['version']),
+                'files': (io.BytesIO(b'untrusted'), 'image.png')})
+        self.assertEqual(result.status_code, 403)
+        decode.assert_not_called()
+
+    def test_upload_preflight_checks_versions_without_writing(self):
+        pid = self.create()
+        project = self.get(pid)
+        group = next(g for g in project['groups'] if g['stage'] == 'mechanical')
+        url = f'/api/daily-projects/{pid}/groups/mechanical/preflight?version={group["version"]}&project_version={project["version"]}'
+        self.assertEqual(self.clients[0].get(url).status_code, 200)
+        self.assertEqual(self.clients[1].get(url).status_code, 403)
+        self.assertEqual(self.update(pid).status_code, 200)
+        self.assertEqual(self.clients[0].get(url).status_code, 409)
+
+    def test_version_changes_during_decode_are_rechecked_before_write(self):
+        pid = self.create()
+        project = self.get(pid)
+        group = next(g for g in project['groups'] if g['stage'] == 'mechanical')
+        from modules import daily_projects
+        original = daily_projects.prepare_image
+        def racing_decode(file):
+            with closing(sqlite3.connect(app_module.DB_PATH)) as other:
+                other.execute('UPDATE daily_groups SET version=version+1 WHERE project_id=? AND stage=?', (pid, 'mechanical'))
+                other.commit()
+            return original(file)
+        image = io.BytesIO(); Image.new('RGBA', (8, 8)).save(image, 'PNG'); image.seek(0)
+        with patch.object(daily_projects, 'prepare_image', side_effect=racing_decode), patch.object(daily_projects, 'cleanup_staged', wraps=daily_projects.cleanup_staged) as cleanup:
+            result = self.clients[0].post(f'/api/daily-projects/{pid}/groups/mechanical/progress', data={
+                'progress': '50', 'version': str(group['version']), 'project_version': str(project['version']), 'files': (image, 'race.png')})
+        self.assertEqual(result.status_code, 409)
+        cleanup.assert_called()
+        self.assertEqual(self.get(pid)['progress'], 0)
+
     def test_multiple_owners_average_and_no_vehicle_rows(self):
         before=len(self.admin.get('/api/data').get_json()['tasks'])
         pid=self.create({'mechanical':self.ids[:2],'electrical':[self.ids[0]],'vision':[self.ids[1]]})

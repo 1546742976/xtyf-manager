@@ -12,6 +12,7 @@
 </section>
 <section class="panel">
   <div class="toolbar"><h2>业务操作记录</h2><button type="button" class="btn" id="audit-refresh">刷新记录</button></div>
+  <label>审计分类<select id="audit-level"><option value="critical">关键安全／业务审计</option><option value="routine">旧普通操作</option><option value="all">全部记录</option></select></label>
   <p class="ux-note">记录操作者、目标、请求内容摘要及处理结果，不记录密码或文件内容。“未完成”表示执行中或执行中断，不能据此判定业务已完成；批量操作可能部分成功。</p>
   <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>操作 / 目标</th><th>结果</th><th>摘要</th></tr></thead><tbody id="audit-events"></tbody></table></div>
   <button type="button" class="btn" id="audit-more" hidden>加载更早记录</button>
