@@ -202,9 +202,9 @@ jobs:
           - group: tasks-repairs
             suites: 'seven_repairs seven_repairs_review'
           - group: ui-core
-            suites: 'palette_workspace local_collaboration account_avatar'
+            suites: 'palette_workspace local_collaboration account_avatar ui_regressions funds_recovery'
           - group: ui-clients
-            suites: 'account_invoice_ui client_updates_avatar client_connection'
+            suites: 'account_invoice_ui client_updates_avatar client_connection invoice_polling'
           - group: assets-ledger
             suites: 'assets'
           - group: assets-serialized

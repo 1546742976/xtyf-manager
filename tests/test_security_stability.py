@@ -6,7 +6,6 @@ import sqlite3
 import threading
 import time
 import unittest
-from unittest.mock import patch
 from uuid import uuid4
 
 from flask.testing import FlaskClient
@@ -70,7 +69,7 @@ class TestSecurityAndStability(unittest.TestCase):
         cents_before = int(baseline["total_in_cents"])
         ids = []
         for raw, expected in [("0.10", "0.10"), ("0.20", "0.20"), ("1.005", "1.01")]:
-            response = self.admin.post("/funds/api/records", json={
+            response = self.admin.post("/funds/api/records", json={'request_id': uuid4().hex,
                 "record_type": "进", "amount": raw, "record_date": "2026-10-13",
                 "source_dest": "模拟金额一致性",
             })
@@ -94,7 +93,7 @@ class TestSecurityAndStability(unittest.TestCase):
         self.assertIn("模拟金额一致性", ledger)
 
     def test_invalid_payloads_return_400_and_do_not_change_funds(self):
-        created = self.admin.post("/funds/api/records", json={
+        created = self.admin.post("/funds/api/records", json={'request_id': uuid4().hex,
             "record_type": "进", "amount": "1.25", "record_date": "2026-10-13",
         }).get_json()
         rid = created["id"]
@@ -105,7 +104,7 @@ class TestSecurityAndStability(unittest.TestCase):
             {"record_type": "进", "amount": "1.00", "record_date": "2026-10-13", "invoice_count": True},
         ):
             with self.subTest(payload=data):
-                result = self.admin.post("/funds/api/records", json=data)
+                result = self.admin.post("/funds/api/records", json={**data, 'request_id': uuid4().hex})
                 self.assertEqual(result.status_code, 400, result.get_json())
         for patch_data in ({"notes": None}, {"source_dest": ["invalid"]},
                            {"invoice_count": 3.7}, {"invoice_count": -1}):
@@ -121,7 +120,7 @@ class TestSecurityAndStability(unittest.TestCase):
 
     def test_review_does_not_overwrite_concurrent_approval(self):
         # A competing writer commits while the HTTP request waits for its write lock.
-        created = self.admin.post("/funds/api/records", json={
+        created = self.admin.post("/funds/api/records", json={'request_id': uuid4().hex,
             "record_type": "进", "amount": "9.90", "record_date": "2026-10-13",
         }).get_json()
         rid = created["id"]
@@ -164,7 +163,7 @@ class TestSecurityAndStability(unittest.TestCase):
 
     def test_csv_exports_quote_formula_cells(self):
         injected = "=HYPERLINK(\"https://example.invalid\",\"click\")"
-        created = self.admin.post("/funds/api/records", json={
+        created = self.admin.post("/funds/api/records", json={'request_id': uuid4().hex,
             "record_type": "进", "amount": "2.50", "record_date": "2026-10-13",
             "applicant": injected, "notes": "\t+SUM(1,2)",
         }).get_json()
@@ -174,25 +173,34 @@ class TestSecurityAndStability(unittest.TestCase):
         self.assertEqual(row["申请人"], "'" + injected)
         self.assertEqual(row["备注"], "'\t+SUM(1,2)")
 
-        fake_invoice = {
-            "month": "2026.10", "folder": "未报销", "status": "未报销",
-            "submitter": injected, "seq": 1, "category": "模拟类",
-            "amount": "2.50", "source": "手动", "vendor": "\t@cmd",
-            "date": "", "reimbursed_date": "", "notes": "模拟备注",
-            "invoice_number": "", "filename": "模拟.pdf", "rel_path": "2026.10/未报销/模拟.pdf",
-        }
-        with patch("modules.invoices.scan_invoices", return_value=[fake_invoice]):
+        from modules import invoices
+        rel = '2026.10/未报销/csv-fixture-' + uuid4().hex + '.pdf'
+        path = os.path.join(invoices.BASE_DIR, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as stream:
+            stream.write(b'%PDF-1.4\n%%EOF')
+        previous = invoices.load_meta()
+        metadata = dict(previous)
+        metadata[rel] = {'submitter': injected, 'submitter_id': 0, 'confirmed_vendor': '\t@cmd',
+                         'confirmed_amount_cents': 250, 'rel_path': rel}
+        invoices.save_meta(metadata)
+        try:
+            self.assertEqual(self.admin.post('/invoices/api/refresh').status_code, 200)
             downloaded = self.admin.get("/invoices/api/export/download")
             self.assertEqual(downloaded.status_code, 200)
-            row = next(csv.DictReader(io.StringIO(downloaded.get_data(
-                as_text=True).lstrip("\ufeff"))))
+            row = next(row for row in csv.DictReader(io.StringIO(downloaded.get_data(
+                as_text=True).lstrip("\ufeff"))) if row['文件路径'] == rel)
             self.assertEqual(row["提交人"], "'" + injected)
             self.assertEqual(row["供应商"], "'\t@cmd")
             saved = self.admin.post("/invoices/api/export")
             self.assertEqual(saved.status_code, 200, saved.get_json())
             with open(saved.get_json()["path"], encoding="utf-8-sig", newline="") as stream:
-                persisted = next(csv.DictReader(stream))
+                persisted = next(row for row in csv.DictReader(stream) if row['文件路径'] == rel)
             self.assertEqual(persisted["提交人"], "'" + injected)
+        finally:
+            os.remove(path)
+            invoices.save_meta(previous)
+            self.admin.post('/invoices/api/refresh')
 
 
 class TestSessionSecretPermissions(unittest.TestCase):

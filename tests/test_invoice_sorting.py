@@ -1,7 +1,8 @@
 """发票字段排序：日期/金额采用数值，跨页排序，缺失置底且权限入口不变。"""
 import unittest
+import json
 from decimal import Decimal
-from unittest.mock import patch
+from pathlib import Path
 
 from test_tasks import app_module
 from modules import invoices
@@ -14,6 +15,11 @@ class TestInvoiceSorting(unittest.TestCase):
             'username': 'admin', 'password': 'ci-test-password-only'
         })
         self.assertTrue(login.get_json()['ok'])
+        snapshot = Path(invoices.SNAPSHOT_FILE)
+        previous = snapshot.read_bytes()
+        self.addCleanup(snapshot.write_bytes, previous)
+        snapshot.write_text(json.dumps({'records': self.rows(), 'generation': 'sorting-fixture',
+                                        'updated_at': '2026-10-22T00:00:00+08:00'}, default=str), encoding='utf-8')
 
     @staticmethod
     def rows():
@@ -55,21 +61,19 @@ class TestInvoiceSorting(unittest.TestCase):
                          ['a', 'd', 'c', 'b', 'e'])
 
     def test_sort_before_pagination_and_combine_with_filters(self):
-        with patch.object(invoices, 'scan_invoices', return_value=self.rows()), \
-             patch.object(invoices, '_is_finance', return_value=True):
-            response = self.client.get('/invoices/api/invoices', query_string={
-                'sort_by': 'date', 'sort_order': 'desc', 'page': '2', 'per_page': '2'
-            })
-            self.assertEqual(response.status_code, 200)
-            payload = response.get_json()
-            self.assertEqual(payload['total'], 5)
-            self.assertEqual([r['id'] for r in payload['data']], ['e', 'a'])
-            response = self.client.get('/invoices/api/invoices', query_string={
-                'date_from': '2026-10-01', 'date_to': '2026-10-31',
-                'sort_by': 'amount', 'sort_order': 'asc'
-            })
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual([r['id'] for r in response.get_json()['data']], ['e', 'b'])
+        response = self.client.get('/invoices/api/invoices', query_string={
+            'sort_by': 'date', 'sort_order': 'desc', 'page': '2', 'per_page': '2'
+        })
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['total'], 5)
+        self.assertEqual([r['id'] for r in payload['data']], ['e', 'a'])
+        response = self.client.get('/invoices/api/invoices', query_string={
+            'date_from': '2026-10-01', 'date_to': '2026-10-31',
+            'sort_by': 'amount', 'sort_order': 'asc'
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([r['id'] for r in response.get_json()['data']], ['e', 'b'])
 
     def test_sort_whitelist_and_bad_calendar_range(self):
         for query in (
@@ -78,8 +82,7 @@ class TestInvoiceSorting(unittest.TestCase):
             {'date_from': '2026-02-30'},
             {'date_to': 'invalid'},
         ):
-            with self.subTest(query=query), patch.object(invoices, 'scan_invoices',
-                                                        return_value=self.rows()):
+            with self.subTest(query=query):
                 self.assertEqual(self.client.get('/invoices/api/invoices',
                                                  query_string=query).status_code, 400)
 
