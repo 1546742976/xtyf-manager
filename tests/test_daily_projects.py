@@ -1,5 +1,7 @@
 """Daily goals remain independent from vehicle tasks and authorization."""
 import io
+import sqlite3
+from contextlib import closing
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -46,6 +48,30 @@ class DailyProjectsTest(unittest.TestCase):
         body.update(changes)
         return self.admin.post(f'/api/daily-projects/{pid}',json=body)
 
+    def test_image_decoding_does_not_hold_database_write_lock(self):
+        pid = self.create()
+        project = self.get(pid)
+        group = next(g for g in project['groups'] if g['stage'] == 'mechanical')
+        from modules import daily_projects
+        original = daily_projects.prepare_image
+        checked = []
+        def decode(upload):
+            with closing(sqlite3.connect(app_module.DB_PATH, timeout=0.1)) as other:
+                other.execute('BEGIN IMMEDIATE')
+                other.rollback()
+                checked.append(True)
+            return original(upload)
+        image = io.BytesIO()
+        Image.new('RGB', (2, 2), 'red').save(image, format='PNG')
+        image.seek(0)
+        with patch.object(daily_projects, 'prepare_image', side_effect=decode):
+            response = self.clients[0].post(f'/api/daily-projects/{pid}/groups/mechanical/progress', data={
+                'progress':'50', 'version':str(group['version']), 'project_version':str(project['version']),
+                'files':(image, 'small.png'),
+            })
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(checked, [True])
+
     def test_multiple_owners_average_and_no_vehicle_rows(self):
         before=len(self.admin.get('/api/data').get_json()['tasks'])
         pid=self.create({'mechanical':self.ids[:2],'electrical':[self.ids[0]],'vision':[self.ids[1]]})
@@ -59,7 +85,8 @@ class DailyProjectsTest(unittest.TestCase):
     def test_group_authorization_and_manager(self):
         pid=self.create()
         self.assertEqual(self.update(pid,'vision').status_code,403)
-        self.assertEqual(self.clients[0].post('/api/daily-projects',json={'title':'x','groups':{'vision':[self.ids[0]]}}).status_code,403)
+        self.assertEqual(self.clients[0].post('/api/daily-projects',json={'title':'x','groups':{'vision':[self.ids[0]]}}).status_code,200)
+        self.assertEqual(self.clients[0].post(f'/api/daily-projects/{pid}',json={}).status_code,403)
         self.assertEqual(self.update(pid,'vision',self.clients[2]).status_code,200)
 
     def test_cross_group_success_same_group_conflict(self):
@@ -91,7 +118,7 @@ class DailyProjectsTest(unittest.TestCase):
         self.assertEqual(self.update(pid,project_version=2).status_code,409)
         self.assertEqual(self.save(pid,title='不能直接编辑').status_code,409)
         self.assertEqual(self.save(pid,status='进行中').status_code,400)
-        self.assertEqual(self.save(pid,status='进行中',reopen_progress={'mechanical':25}).status_code,200)
+        self.assertEqual(self.save(pid,status='进行中',note='核对后重开',reopen_progress={'mechanical':25}).status_code,200)
         self.assertEqual(self.update(pid).status_code,200)
         self.assertEqual(self.admin.post(f'/api/daily-projects/{pid}/delete',json={'version':self.get(pid)['version']}).status_code,200)
         self.assertEqual(self.admin.get(f'/api/daily-projects/{pid}').status_code,404)
@@ -200,8 +227,8 @@ class DailyProjectsTest(unittest.TestCase):
         self.assertEqual((closed['status'],closed['progress']),('已完成',100))
         self.assertIsNotNone(closed['completed_at'])
         self.assertEqual(self.update(pid,progress=99).status_code,409)
-        self.assertEqual(self.save(pid,status='进行中',reopen_progress={'mechanical':100}).status_code,400)
-        self.assertEqual(self.save(pid,status='进行中',reopen_progress={'mechanical':40}).status_code,200)
+        self.assertEqual(self.save(pid,status='进行中',note='核对后重开',reopen_progress={'mechanical':100}).status_code,400)
+        self.assertEqual(self.save(pid,status='进行中',note='核对后重开',reopen_progress={'mechanical':40}).status_code,200)
         reopened=self.get(pid)
         self.assertEqual(reopened['status'],'进行中');self.assertIsNone(reopened['completed_at'])
         self.assertEqual({g['stage']:g['progress'] for g in reopened['groups']},{'mechanical':40,'vision':100})
@@ -243,7 +270,7 @@ class DailyProjectsTest(unittest.TestCase):
         old=self.get(pid)
         self.update(pid,progress=10)
         self.assertEqual(self.save(pid,group_versions={g['stage']:g['version'] for g in old['groups']}).status_code,409)
-        self.assertEqual(self.save(pid,status='已取消').status_code,200)
+        self.assertEqual(self.save(pid,status='已取消',note='确认取消').status_code,200)
         self.assertIn('取消',self.get(pid)['blocker_events'][0]['resolution'])
         self.assertIsNone(self.get(pid)['completed_at'])
 

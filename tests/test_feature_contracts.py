@@ -48,8 +48,10 @@ class TestFeatureContracts(unittest.TestCase):
                      "/api/admin/audit", "/invoices/api/owners"):
             with self.subTest(path=path):
                 self.assertEqual(member.get(path).status_code, 403)
+        created_task = member.post("/api/task", json={"title": "普通成员创建任务"})
+        self.assertEqual(created_task.status_code, 200)
+        self.assertTrue(created_task.get_json()["ok"])
         for path, payload in (
-            ("/api/task", {"title": "未经授权"}),
             ("/api/groups", {"name": "新专业组"}),
             ("/api/projects", {"name": "新造车组别"}),
         ):
@@ -62,7 +64,7 @@ class TestFeatureContracts(unittest.TestCase):
         versions = {}
         try:
             for amount in ("1.25", "2.75"):
-                response = self.client.post("/funds/api/records", json={
+                response = self.client.post("/funds/api/records", json={'request_id': uuid4().hex,
                     "record_type": "进", "amount": amount,
                     "record_date": "2026-10-13", "source_dest": marker,
                 })

@@ -45,6 +45,7 @@ from modules.task_attachments import bp as task_attachments_bp
 from modules.task_progress import bp as task_progress_bp
 from modules.task_catalogs import bp as task_catalogs_bp
 from modules.member_profiles import bp as member_profiles_bp
+from modules.member_introductions import bp as introductions_bp, migrate as migrate_introductions
 from modules.member_avatars import bp as member_avatars_bp, migrate as migrate_avatars
 from modules.task_migrations import migrate as migrate_tasks
 from modules.daily_schema import migrate as migrate_daily
@@ -203,6 +204,7 @@ app.register_blueprint(task_api_bp)
 app.register_blueprint(task_catalogs_bp)
 app.register_blueprint(member_profiles_bp)
 app.register_blueprint(member_avatars_bp)
+app.register_blueprint(introductions_bp)
 app.register_blueprint(task_attachments_bp)
 app.register_blueprint(task_progress_bp)
 app.register_blueprint(discussions_bp, url_prefix="/discussions")
@@ -309,6 +311,7 @@ def init_db():
         migrate_tasks(db)
         migrate_workspace(db)
         migrate_avatars(db)
+        migrate_introductions(db)
         migrate_daily(db)
         migrate_collaboration(db)
         migrate_item_topics(db)

@@ -14,7 +14,8 @@
       countdown_interval_days:Number(field('countdown_interval_days').value),
       morning_enabled:field('morning_enabled').checked,
       daily_enabled:field('daily_enabled').checked,
-      countdown_enabled:field('countdown_enabled').checked
+      countdown_enabled:field('countdown_enabled').checked,
+      ...(field('assignment_enabled')&&!field('assignment_enabled').disabled?{assignment_enabled:field('assignment_enabled').checked}:{})
     };
   }
   function fillPrefs(form,p){
@@ -23,6 +24,7 @@
     field('daily_interval_days').value=p.daily_interval_days;
     field('countdown_interval_days').value=p.countdown_interval_days;
     for(const key of ['morning_enabled','daily_enabled','countdown_enabled'])field(key).checked=!!p[key];
+    if(field('assignment_enabled')){field('assignment_enabled').checked=p.assignment_enabled===true;field('assignment_enabled').disabled=p.assignment_enabled===undefined;}
   }
   const form=document.getElementById('email-form'),result=document.getElementById('email-result');
   if(form){
@@ -49,7 +51,7 @@
     if(prefForm)prefForm.addEventListener('submit',event=>{event.preventDefault();BusinessUI.action(
       'email-preferences',prefForm.querySelectorAll('button'),async()=>{
         await api('/api/account/email/preferences',prefsFromForm(prefForm));
-        document.getElementById('email-preferences-result').textContent='偏好已保存，后续邮件按新周期发送';
+        document.getElementById('email-preferences-result').textContent='偏好已保存，指派邮件由后台尽快处理，汇总邮件按所设周期发送';
         prefsLoaded=false;await load();
       },text=>{document.getElementById('email-preferences-result').textContent=text;}
     );});
@@ -66,7 +68,7 @@
         return `<article class="daily-card">
           <strong>${esc(m.name)}</strong><p>${esc(m.address||'未绑定')} · ${m.verified?'已验证':'未验证'}${!m.is_active||m.deleted_at?' · 账户停用':''}</p>
           <button class="btn" type="button" data-mail-member="${m.id}" data-paused="${m.paused?'0':'1'}">${m.paused?'恢复提醒':'暂停提醒'}</button>
-          <form data-mail-prefs="${m.id}" class="ux-account-form">
+          <form data-mail-prefs="${m.id}" class="ux-account-form"><label><input name="assignment_enabled" type="checkbox" ${p.assignment_enabled?'checked':''} ${p.assignment_enabled===undefined?'disabled':''}> 即时任务指派邮件</label>
             <label><input name="morning_enabled" type="checkbox" ${p.morning_enabled?'checked':''}> 个人详细汇总</label>
             <label>间隔（0.5–7 天）<input name="morning_interval_days" type="number" min="0.5" max="7" step="0.5" value="${p.morning_interval_hours/24}" required></label>
             <label><input name="daily_enabled" type="checkbox" ${p.daily_enabled?'checked':''}> 团队详细汇总</label>
@@ -77,7 +79,7 @@
           </form>
         </article>`;
       }).join('');
-      document.getElementById('mail-jobs').innerHTML=data.jobs.map(j=>`<article class="daily-update"><strong>${esc(j.name)} · ${esc({verify:'邮箱验证',morning:'个人任务早报',morning_pm:'个人任务晚间汇总',daily:'团队项目晚报',countdown:'目标倒计时',test:'测试邮件'}[j.kind]||j.kind)}</strong><p>${esc(j.day)} · ${esc(states[j.state])} · 尝试 ${j.attempts} 次</p><p>${esc(j.error)}</p></article>`).join('')||'<p>暂无发送记录</p>';
+      document.getElementById('mail-jobs').innerHTML=data.jobs.map(j=>`<article class="daily-update"><strong>${esc(j.name)} · ${esc({verify:'邮箱验证',morning:'个人任务早报',morning_pm:'个人任务晚间汇总',daily:'团队项目晚报',countdown:'目标倒计时',test:'测试邮件',assignment:'任务指派'}[j.kind]||j.kind)}</strong><p>${esc(j.day)} · ${esc(states[j.state])} · 尝试 ${j.attempts} 次</p><p>${esc(j.error)}</p></article>`).join('')||'<p>暂无发送记录</p>';
       document.getElementById('mail-prev').disabled=page<=1;document.getElementById('mail-next').disabled=!data.has_more;document.getElementById('mail-page').textContent='第 '+page+' 页';
     };
     const reload=()=>BusinessUI.action('mail-admin-load',[document.getElementById('mail-refresh')],load,text=>{result.textContent=text;});

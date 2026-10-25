@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from flask import current_app
 from modules.daily_projects import TZ, describe_many
 from modules.mail_templates import render_digest_html, render_verification_html, render_test_html
+from modules.task_assignment_mail import assignment_content
 
 
 def settings():
@@ -336,7 +337,7 @@ def claim(db, at):
             db.execute("UPDATE mail_jobs SET state='skipped',error=?,finished_at=? WHERE kind=? AND state='pending' "
                        "AND (day<>? OR ? < ? OR ? >= ?)",
                        (f'已超出当日{label}窗口', epoch, kind, at.date().isoformat(), at.hour, start, at.hour, end))
-        row = db.execute("SELECT * FROM mail_jobs WHERE state='pending' AND next_at<=? ORDER BY CASE kind WHEN 'verify' THEN 0 WHEN 'test' THEN 1 ELSE 2 END,id LIMIT 1", (epoch,)).fetchone()
+        row = db.execute("SELECT * FROM mail_jobs WHERE state='pending' AND next_at<=? ORDER BY CASE kind WHEN 'verify' THEN 0 WHEN 'test' THEN 1 WHEN 'assignment' THEN 2 ELSE 3 END,id LIMIT 1", (epoch,)).fetchone()
         if row:
             db.execute("UPDATE mail_jobs SET state='sending',claimed_at=?,attempts=attempts+1 WHERE id=?", (epoch, row['id']))
         db.commit()
@@ -387,7 +388,13 @@ def process_job(db, job, at, transport=None):
                 if not cadence_due(db, job['member_id'], job['kind'], hours, at,
                                    countdown[0]['version'] if countdown else None):
                     raise DeliveryError('尚未达到成员设定的发送间隔', 'skipped')
-            if job['kind'] == 'countdown':
+            if job['kind'] == 'assignment':
+                content, skip_reason = assignment_content(db, job, member, epoch, settings()['base_url'])
+                if skip_reason:
+                    raise DeliveryError(skip_reason, 'skipped')
+                text, markup = content
+                message['Subject'] = '巡天御风｜任务指派'
+            elif job['kind'] == 'countdown':
                 target, days = countdown
                 title = html_escape(target['title'])
                 url = html_escape(settings()['base_url'] + '/', quote=True)

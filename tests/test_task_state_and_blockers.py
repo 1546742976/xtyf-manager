@@ -22,7 +22,10 @@ class TaskStateAndBlockerTests(unittest.TestCase):
         return response.get_json()['id']
 
     def task(self, tid):
-        return next(t for t in self.admin.get('/api/data').get_json()['tasks'] if t['id'] == tid)
+        response = self.admin.get('/api/data')
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertIn('tasks', response.get_json())
+        return next(t for t in response.get_json()['tasks'] if t['id'] == tid)
 
     def update(self, tid, **fields):
         return self.admin.post(f'/api/task/{tid}', json={'version': self.task(tid)['version'], **fields})
@@ -66,21 +69,22 @@ class TaskStateAndBlockerTests(unittest.TestCase):
         current = self.task(tid)
         self.assertEqual((current['status'], current['progress'], current['completed_at']), ('已完成', 100, '2026-10-18 00:01:00'))
         for body in ({'status': '进行中'}, {'status': '进行中', 'progress': 100}, {'status': '已完成', 'progress': 80}):
-            self.assertEqual(self.update(tid, **body).status_code, 400)
+            self.assertEqual(self.update(tid, **body).status_code, 409 if body.get('status') == '已完成' else 400)
             self.assertEqual(self.task(tid)['version'], current['version'])
-        reopened = self.progress(tid, 73)
+        self.assertEqual(self.progress(tid, 73).status_code, 409)
+        reopened = self.update(tid, status='进行中', progress=73, note='核对后重开')
         self.assertEqual(reopened.status_code, 200, reopened.get_json())
         self.assertEqual((self.task(tid)['status'], self.task(tid)['progress'], self.task(tid)['completed_at']), ('进行中', 73, None))
         self.assertEqual(self.update(tid, status='已完成').status_code, 200)
         self.assertEqual(self.task(tid)['progress'], 100)
-        self.assertEqual(self.update(tid, status='进行中', progress=30).status_code, 200)
+        self.assertEqual(self.update(tid, status='进行中', progress=30, note='核对后重开').status_code, 200)
 
     def test_cancelled_task_requires_explicit_reopen(self):
         tid = self.create(status='已取消')
         for percent in (0, 40, 100):
-            self.assertEqual(self.progress(tid, percent, note='不能自动恢复').status_code, 400)
+            self.assertEqual(self.progress(tid, percent, note='不能自动恢复').status_code, 409)
         self.assertEqual(self.update(tid, status='进行中').status_code, 400)
-        self.assertEqual(self.update(tid, status='进行中', progress=25).status_code, 200)
+        self.assertEqual(self.update(tid, status='进行中', progress=25, note='恢复执行').status_code, 200)
         self.assertEqual(self.task(tid)['progress'], 25)
 
     def test_transition_requires_version_and_stale_progress_does_not_write(self):
@@ -140,7 +144,7 @@ class TaskStateAndBlockerTests(unittest.TestCase):
         for status, action in (('已完成', 'resolve'), ('已取消', 'cancel')):
             with self.subTest(status=status):
                 tid = self.create(status='阻塞', blocker_reason='缺料', blocker_next_action='采购')
-                result = self.progress(tid, 100) if status == '已完成' else self.update(tid, status=status)
+                result = self.progress(tid, 100) if status == '已完成' else self.update(tid, status=status, note='确认取消')
                 self.assertEqual(result.status_code, 200, result.get_json())
                 self.assertEqual(self.task(tid)['status'], status)
                 self.assertEqual(self.events(tid)[0]['action'], action)
@@ -181,7 +185,10 @@ class TaskStateAndBlockerTests(unittest.TestCase):
         tid = self.create(status='阻塞', blocker_reason='缺料', blocker_next_action='采购')
         self.progress(tid, 30)
         self.progress(tid, 100)
-        revisions = self.admin.get(f'/api/task/{tid}/revisions').get_json()['revisions']
+        response = self.admin.get(f'/api/task/{tid}/revisions')
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertIn('revisions', response.get_json(), response.get_json())
+        revisions = response.get_json()['revisions']
         completion = revisions[0]
         result = self.admin.post(f'/api/task/{tid}/revisions/{completion["id"]}/revert', json={'version': self.task(tid)['version']})
         self.assertEqual(result.status_code, 200, result.get_json())
@@ -202,7 +209,7 @@ class TaskStateAndBlockerTests(unittest.TestCase):
                 (tid, 1, '历史', 'old', json.dumps({'status': '进行中'}), json.dumps({'status': '已完成'}), 1, 'update')).lastrowid
             db.commit()
             migrate(db)
-        self.assertEqual(self.update(tid, title='只改标题', status='已完成').status_code, 200)
+        self.assertEqual(self.update(tid, title='只改标题', status='已完成', correction=True, note='仅纠正标题').status_code, 200)
         task = self.task(tid)
         self.assertEqual((task['status'], task['progress'], task['completed_at']), ('已完成', 12, None))
         self.assertEqual(self.admin.post(f'/api/task/{tid}/revisions/{revision}/revert', json={'version': task['version']}).status_code, 409)

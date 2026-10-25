@@ -198,7 +198,7 @@ jobs:
           - group: tasks-core
             suites: 'task_center task_schedule'
           - group: tasks-mail
-            suites: 'daily_mail'
+            suites: 'daily_mail task_profiles'
           - group: tasks-repairs
             suites: 'seven_repairs seven_repairs_review'
           - group: ui-core

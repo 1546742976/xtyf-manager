@@ -7,14 +7,13 @@
   <div class="ux-page-actions">{% if task_type != 'daily' %}<span id="sync-status" class="sync-status" role="status" aria-live="polite">正在同步…</span>
     <button id="refresh-now" class="btn" type="button">刷新</button>
     {% endif %}
-    {% if me.role in ('admin', 'manager') %}<button class="btn primary" id="new-task-toggle" type="button" aria-haspopup="dialog" aria-controls="task-create-panel">新建任务</button>{% endif %}
+    <button class="btn primary" id="new-task-toggle" type="button" aria-haspopup="dialog" aria-controls="task-create-panel">新建任务</button>
     {% if task_type != 'daily' %}<a class="btn" data-download-name="tasks.csv" href="{{ url_for('export_csv') }}">导出任务 CSV</a>{% endif %}</div>
 </div>
 <nav class="task-type-tabs" aria-label="任务类型">
   <a class="btn{% if task_type != 'daily' %} active{% endif %}" href="{{ url_for('tasks', type='vehicle') }}"{% if task_type != 'daily' %} aria-current="page"{% endif %}>造车任务</a>
   <a class="btn{% if task_type == 'daily' %} active{% endif %}" href="{{ url_for('tasks', type='daily') }}"{% if task_type == 'daily' %} aria-current="page"{% endif %}>日常项目</a>
 </nav>
-{% if me.role in ('admin', 'manager') %}
 <dialog id="task-create-panel" class="task-create-dialog" data-default-type="{{ task_type }}" aria-labelledby="task-create-title">
   <div class="task-create-heading"><div><p class="ux-eyebrow">TEAM / TASK</p><h2 id="task-create-title">新建任务</h2></div><button class="btn" type="button" data-task-create-close aria-label="关闭任务窗口">关闭</button></div>
   <div class="task-create-type-row"><label>任务类型<select id="task-create-type"><option value="vehicle">造车任务</option><option value="daily">日常项目</option></select></label><p id="task-create-type-help" class="field-help">切换类型会保留尚未提交的内容。</p></div>
@@ -23,7 +22,6 @@
   <div class="task-create-pane" data-create-pane="daily" hidden><div id="daily-editor"></div></div>
 </dialog>
 <p id="task-create-feedback" class="form-message" role="status" aria-live="polite"></p>
-{% endif %}
 {% if task_type == 'daily' %}
 {% include '_daily_projects_content.html' %}
 {% else %}
@@ -60,10 +58,8 @@
 <script src="{{ url_for('static', filename='task-modal.js') }}"></script>
 <script src="{{ url_for('static', filename='task-mail-link.js') }}"></script>
 {% endif %}
-{% if me.role in ('admin', 'manager') %}
 {% if task_type == 'daily' %}<script src="{{ url_for('static', filename='task-date-defaults.js') }}"></script>{% endif %}
 <script src="{{ url_for('static', filename='task-create-form.js') }}"></script>
 <script src="{{ url_for('static', filename='daily-project-editor.js') }}"></script>
 <script src="{{ url_for('static', filename='task-center.js') }}"></script>
-{% endif %}
 {% endblock %}

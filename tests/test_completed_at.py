@@ -75,24 +75,24 @@ class CompletedAtTest(unittest.TestCase):
             completed = self.change_task(task_id, status='已完成')
         self.assertEqual(completed['completed_at'], '2026-10-16 21:15:00')
         with patch('modules.task_mutations.completion_stamp', return_value='2026-10-17 21:15:00') as clock:
-            edited = self.change_task(task_id, title='完成后更名', due_date='2026-12-01', status='已完成', completed_at='forged')
+            edited = self.change_task(task_id, correction=True, note='核实名称纠错', title='完成后更名', due_date='2026-12-01', status='已完成')
             self.assertEqual(edited['completed_at'], completed['completed_at'])
             clock.assert_not_called()
-        # A progress event changes updated_at and version but is not completion.
+        # Terminal progress remains read-only and retains the original completion time.
         response = self.admin.post(f'/api/task/{task_id}/progress', data={'version': edited['version'], 'progress': '100', 'note': '补充验收记录'})
-        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(response.status_code, 409, response.get_json())
         self.assertEqual(self.read_task(task_id)['completed_at'], completed['completed_at'])
-        self.assertIsNone(self.change_task(task_id, status='进行中', progress=60)['completed_at'])
+        self.assertIsNone(self.change_task(task_id, status='进行中', progress=60, note='需要继续执行')['completed_at'])
         with patch('modules.task_mutations.completion_stamp', return_value='2026-10-18 08:00:00'):
             again = self.change_task(task_id, status='已完成')
         self.assertEqual(again['completed_at'], '2026-10-18 08:00:00')
-        self.change_task(task_id, status='进行中', progress=60)
-        self.assertIsNone(self.change_task(task_id, status='已取消')['completed_at'])
+        self.change_task(task_id, status='进行中', progress=60, note='需要继续执行')
+        self.assertIsNone(self.change_task(task_id, status='已取消', note='计划取消')['completed_at'])
 
     def test_task_undo_restores_original_completion_timestamp(self):
         with patch('modules.task_mutations.completion_stamp', return_value='2026-10-16 20:00:00'):
             task_id = self.task(status='已完成')
-        opened = self.change_task(task_id, status='进行中', progress=60)
+        opened = self.change_task(task_id, status='进行中', progress=60, note='需要继续执行')
         endpoint = f'/api/task/{task_id}'
         revisions = self.admin.get(endpoint + '/revisions').get_json()['revisions']
         reopened_revision = revisions[0]
@@ -111,7 +111,7 @@ class CompletedAtTest(unittest.TestCase):
             self.change_task(task_id, status='已完成')
         endpoint = f'/api/task/{task_id}'
         revision = self.admin.get(endpoint + '/revisions').get_json()['revisions'][0]
-        current = self.change_task(task_id, title='完成后更名')
+        current = self.change_task(task_id, correction=True, note='核实名称纠错', title='完成后更名')
         stale = self.admin.post(endpoint + f"/revisions/{revision['id']}/revert", json={'version': current['version'] - 1})
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(self.read_task(task_id)['completed_at'], '2026-10-16 20:00:00')
@@ -146,13 +146,13 @@ class CompletedAtTest(unittest.TestCase):
         with patch('modules.daily_projects.stamp', return_value='2026-10-17 20:00:00'):
             self.assertEqual(self.change_project(pid, title='终态仍只读').status_code, 409)
         self.assertEqual(self.read_project(pid), current)
-        self.assertEqual(self.change_project(pid, status='进行中', reopen_progress={'mechanical': 60}).status_code, 200)
+        self.assertEqual(self.change_project(pid, status='进行中', reopen_progress={'mechanical': 60}, note='需要继续执行').status_code, 200)
         self.assertIsNone(self.read_project(pid)['completed_at'])
         with patch('modules.daily_projects.stamp', return_value='2026-10-18 20:00:00'):
             self.assertEqual(self.change_project(pid, status='已完成').status_code, 200)
         self.assertEqual(self.read_project(pid)['completed_at'], '2026-10-18 20:00:00')
-        self.assertEqual(self.change_project(pid, status='进行中', reopen_progress={'mechanical': 60}).status_code, 200)
-        self.assertEqual(self.change_project(pid, status='已取消').status_code, 200)
+        self.assertEqual(self.change_project(pid, status='进行中', reopen_progress={'mechanical': 60}, note='需要继续执行').status_code, 200)
+        self.assertEqual(self.change_project(pid, status='已取消', note='计划取消').status_code, 200)
         self.assertIsNone(self.read_project(pid)['completed_at'])
 
     def test_repeat_migrations_preserve_proven_dates_and_leave_legacy_completed_null(self):

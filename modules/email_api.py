@@ -5,7 +5,7 @@ from time import time as epoch_now
 from datetime import datetime
 
 from flask import Blueprint, jsonify, redirect, render_template, request
-from common import current_user, get_db, login_required, ROLE_NAMES
+from common import error_response, current_user, get_db, login_required, ROLE_NAMES
 from modules.daily_projects import failure, TZ
 from modules.mail_service import configured, settings, verification_code, verification_digest, queue
 
@@ -14,7 +14,7 @@ bp = Blueprint('email', __name__)
 PREF_DEFAULTS = {
     'morning_interval_hours': 72, 'daily_interval_days': 7,
     'countdown_interval_days': 7, 'morning_enabled': True,
-    'daily_enabled': True, 'countdown_enabled': False,
+    'daily_enabled': True, 'countdown_enabled': False, 'assignment_enabled': True,
 }
 PREF_FIELDS = tuple(PREF_DEFAULTS)
 
@@ -27,9 +27,11 @@ def email_preferences(row):
 
 
 def save_preferences(mid, body):
-    if not isinstance(body, dict) or set(body) != set(PREF_FIELDS):
+    if not isinstance(body, dict) or set(body) not in (set(PREF_FIELDS), set(PREF_FIELDS) - {'assignment_enabled'}):
         return failure('请完整提交三类邮件的间隔及启用状态')
-    for name in ('morning_enabled', 'daily_enabled', 'countdown_enabled'):
+    for name in ('morning_enabled', 'daily_enabled', 'countdown_enabled', 'assignment_enabled'):
+        if name not in body:
+            continue
         if type(body[name]) is not bool:
             return failure('启用状态必须为布尔值')
     hours, daily, countdown = (body[key] for key in (
@@ -46,6 +48,7 @@ def save_preferences(mid, body):
             return failure('成员不存在', 404)
         previous = email_preferences(
             db.execute('SELECT * FROM member_email WHERE member_id=?', (mid,)).fetchone())
+        body = {'assignment_enabled': previous['assignment_enabled'], **body}
         db.execute("INSERT OR IGNORE INTO member_email(member_id,address,generation,requested_at) "
                    "VALUES(?,'','',0)", (mid,))
         db.execute(
@@ -53,6 +56,8 @@ def save_preferences(mid, body):
             (*[int(body[key]) if key.endswith('_enabled') else body[key] for key in PREF_FIELDS], mid))
         # Only invalidate the categories actually changed, never verification codes.
         changed = []
+        if not body['assignment_enabled']:
+            changed.append('assignment')
         if any(previous[key] != body[key] for key in ('morning_interval_hours','morning_enabled')):
             changed.extend(('morning','morning_pm'))
         if any(previous[key] != body[key] for key in ('daily_interval_days','daily_enabled')):
@@ -83,7 +88,7 @@ def save_own_preferences():
 @login_required
 def save_member_preferences(mid):
     if not admin():
-        return failure('仅管理员可操作', 403)
+        return failure('仅超级管理员可操作', 403)
     if mid > 2**63 - 1:
         return failure('成员不存在', 404)
     return save_preferences(mid, request.get_json(silent=True))
@@ -173,7 +178,7 @@ def verify():
 @login_required
 def admin_page():
     if not admin():
-        return failure('仅管理员可查看', 403)
+        return error_response(403, '无权限，仅超级管理员可查看')
     return render_template('mail_admin.html', me=current_user(), role_names=ROLE_NAMES, page='mail')
 
 
@@ -181,7 +186,7 @@ def admin_page():
 @login_required
 def admin_status():
     if not admin():
-        return failure('仅管理员可查看', 403)
+        return error_response(403, '无权限，仅超级管理员可查看')
     db = get_db()
     try:
         page = max(1, min(int(request.args.get('page', '1')), 100000))
@@ -189,7 +194,7 @@ def admin_status():
         return failure('页码不合法')
     members = [dict(r) for r in db.execute('SELECT m.id,m.name,m.is_active,m.deleted_at,e.address,e.verified,e.paused,'
                                             'e.morning_interval_hours,e.daily_interval_days,e.countdown_interval_days,'
-                                            'e.morning_enabled,e.daily_enabled,e.countdown_enabled '
+                                            'e.morning_enabled,e.daily_enabled,e.countdown_enabled,e.assignment_enabled '
                                             'FROM members m LEFT JOIN member_email e ON e.member_id=m.id ORDER BY m.id')]
     for member in members:
         member['preferences'] = email_preferences(member if member['address'] is not None else None)
@@ -203,7 +208,7 @@ def admin_status():
 @login_required
 def pause(mid):
     if not admin():
-        return failure('仅管理员可操作', 403)
+        return failure('仅超级管理员可操作', 403)
     body = request.get_json(silent=True) or {}
     if type(body.get('paused')) is not bool or mid > 2**63-1:
         return failure('暂停状态不合法')
@@ -219,7 +224,7 @@ def pause(mid):
 @login_required
 def test_mail():
     if not admin():
-        return failure('仅管理员可操作', 403)
+        return failure('仅超级管理员可操作', 403)
     if not configured():
         return failure('邮件服务尚未配置', 503)
     db, mid, epoch = get_db(), current_user()['id'], epoch_now()

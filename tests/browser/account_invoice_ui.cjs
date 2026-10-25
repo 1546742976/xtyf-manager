@@ -34,9 +34,9 @@ async function checkAccount(page, width, required = false) {
   for (const card of layout.cards) assert.equal(card.overflow, false, `${card.name} overflow at ${width}`);
   const named = Object.fromEntries(layout.cards.map(card => [card.name, card]));
   assert.deepEqual(layout.cards.map(c => c.name), required
-    ? ['profile', 'appearance', 'password'] : ['profile', 'email', 'appearance', 'editor', 'password']);
+    ? ['profile', 'editor', 'appearance'] : ['profile', 'editor', 'email', 'appearance']);
   if (width > 760) {
-    for (const [left, right] of required ? [['profile', 'password']] : [['profile', 'email'], ['appearance', 'editor']]) {
+    for (const [left, right] of required ? [['profile', 'editor']] : [['profile', 'editor'], ['appearance', 'email']]) {
       assert.ok(Math.abs(named[left].y - named[right].y) < 1, `${left}/${right} top at ${width}`);
       assert.ok(Math.abs(named[left].bottom - named[right].bottom) < 1, `${left}/${right} bottom at ${width}`);
       assert.ok(named[left].width < named[right].width, `left column narrower at ${width}`);
@@ -50,6 +50,8 @@ async function checkAccount(page, width, required = false) {
       if (index) assert.ok(Math.abs(card.y - layout.cards[index - 1].bottom - 24) < 1, 'mobile natural order/gap');
     }
   }
+  assert.equal(await page.locator('.ux-account-editor #account-password-form').count(), 1);
+  assert.equal(await page.locator('.ux-account-profile #member-introductions').count(), required ? 0 : 1);
   return layout;
 }
 
@@ -97,7 +99,7 @@ async function checkButton(page, selector, state) {
     await page.locator('[name=username]').fill('admin'); await page.locator('[name=password]').fill('browser-test-initial');
     await page.locator('#login-form [type=submit]').click(); await page.waitForURL('**/account');
     for (const width of widths) accountLayouts.push({required:true, width, ...await checkAccount(page, width, true)});
-    checks.push('forced password layout: desktop paired row; no hidden email/editor or empty mobile rows');
+    checks.push('forced password layout: paired profile/password row; no profile form or empty mobile rows');
     await page.locator('#account-password-form [name=old]').fill('browser-test-initial');
     for (const name of ['new', 'confirm']) await page.locator(`#account-password-form [name=${name}]`).fill('account-ui-test-password');
     await page.locator('#account-password-form button').click(); await page.waitForURL(base + '/');
@@ -110,7 +112,7 @@ async function checkButton(page, selector, state) {
         await page.screenshot({path:path.join(output, `account-normal-${width}.png`), fullPage:true});
       }
     }
-    checks.push('normal account rows align and all five panels stay ordered at 390/760/761/1280/1864 px');
+    checks.push('normal account rows align and all four panels stay ordered at 390/760/761/1280/1864 px');
     await page.route('**/api/account/email', route => route.fulfill({json:{ok:true, available:true, mode:'preview',
       email:{address:'layout@example.com', verified:false, pending:true, paused:false}}}));
     const longChoices = Array.from({length:18}, (_, i) => ({id:i + 1, is_active:1, name:`长选项${i + 1}：机械电控视觉联合研发组`}));
@@ -119,7 +121,7 @@ async function checkButton(page, selector, state) {
     await page.reload(); await page.locator('#email-code-form').waitFor({state:'visible'});
     await page.waitForFunction(() => !document.querySelector('#account-profile-form [type=submit]').disabled);
     for (const width of widths) accountLayouts.push({expanded:true, width, ...await checkAccount(page, width)});
-    assert.ok(accountLayouts.at(-1).cards.find(c => c.name === 'email').height > 512, 'OTP form grows first row');
+    assert.ok(accountLayouts.at(-1).cards.find(c => c.name === 'email').height > 512, 'OTP form grows email row');
     checks.push('pending email code form and long group/project choices grow both rows without clipping');
     await page.route('**/invoices/api/jobs', route => route.fulfill({json:{jobs:[
       {id:'ui-done', type:'refresh', status:'done', progress:100, message:'完成', actor_name:'UI fixture', created_at:1},

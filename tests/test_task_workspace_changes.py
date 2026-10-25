@@ -22,9 +22,9 @@ class WorkspaceChanges(unittest.TestCase):
         response=self.clients['member'].get('/manage')
         self.assertEqual(response.status_code,403)
         page=self.clients['member'].get('/tasks').get_data(as_text=True)
-        self.assertNotIn('id="new-task-toggle"',page)
+        self.assertIn('id="new-task-toggle"',page)
         self.assertNotIn('href="/manage"',page)
-        self.assertEqual(self.clients['member'].post('/api/task',json={'title':'forged'}).status_code,403)
+        self.assertEqual(self.clients['member'].post('/api/task',json={'title':'member-created'}).status_code,200)
         for client in (self.admin,self.clients['manager']):
             self.assertIn('id="create-form"',client.get('/tasks').get_data(as_text=True))
             self.assertEqual(client.get('/manage').status_code,200)

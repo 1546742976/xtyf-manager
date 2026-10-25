@@ -45,7 +45,7 @@ function renderTaskTable() {
   if (!body) return;
   const tasks = filteredManageTasks();
   const scheduleButton = document.getElementById("schedule-project");
-  if (scheduleButton) scheduleButton.disabled = !taskFilters.project || !isManagement() || projectById(taskFilters.project)?.is_active === 0;
+  if (scheduleButton) scheduleButton.disabled = !isManagement();
   document.getElementById("task-count").textContent = `共 ${tasks.length} / ${state.tasks.length} 条`;
   body.innerHTML =
     tasks

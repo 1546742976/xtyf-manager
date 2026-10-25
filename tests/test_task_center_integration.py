@@ -38,14 +38,14 @@ class TaskCenterIntegrationTest(unittest.TestCase):
         self.assertIn('日常项目', vehicle)
         self.assertIn('造车任务', daily)
 
-    def test_create_controls_follow_existing_roles(self):
+    def test_create_controls_are_available_to_members_for_both_workflows(self):
         vehicle = self.member.get('/tasks').get_data(as_text=True)
         daily = self.member.get('/tasks?type=daily').get_data(as_text=True)
-        self.assertNotIn('id="new-task-toggle"', vehicle)
-        self.assertNotIn('id="task-create-panel"', vehicle)
+        self.assertIn('id="new-task-toggle"', vehicle)
+        self.assertIn('id="task-create-panel"', vehicle)
         self.assertNotIn('id="daily-new"', daily)
-        self.assertNotIn('id="new-task-toggle"', daily)
-        self.assertNotIn('id="task-create-panel"', daily)
+        self.assertIn('id="new-task-toggle"', daily)
+        self.assertIn('id="task-create-panel"', daily)
         self.assertIn('id="new-task-toggle"', self.admin.get('/tasks?type=daily').get_data(as_text=True))
 
     def test_old_daily_routes_redirect_to_task_center(self):
