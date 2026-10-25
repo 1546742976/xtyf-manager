@@ -9,9 +9,19 @@ if ($env:XTYF_USE_SYSTEM_RUST -ne '1') {
     $env:RUSTUP_HOME = Join-Path $projectRoot '.build-tools\rustup'
     $env:PATH = "$env:CARGO_HOME\bin;$env:PATH"
 }
-$env:CARGO_TARGET_DIR = Join-Path $projectRoot '.build-tools\tauri-target-windows'
+if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $projectRoot '.build-tools\tauri-target-windows' }
 $env:npm_config_cache = Join-Path $projectRoot '.build-tools\npm-cache'
 $env:CARGO_HTTP_MULTIPLEXING = 'true'
+if ($Architecture -eq 'arm64' -and -not (Get-Command clang.exe -ErrorAction SilentlyContinue)) {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (Test-Path $vswhere) {
+        $clang = & $vswhere -latest -products '*' -find 'VC/Tools/Llvm/x64/bin/clang.exe' | Select-Object -First 1
+        if ($clang) { $env:PATH = "$(Split-Path $clang -Parent);$env:PATH" }
+    }
+    if (-not (Get-Command clang.exe -ErrorAction SilentlyContinue)) {
+        throw 'Windows ARM64 requires Visual Studio C++ Clang tools for ring; install Microsoft.VisualStudio.Component.VC.Llvm.Clang.'
+    }
+}
 if (-not (Get-Command cargo.exe -ErrorAction SilentlyContinue)) { throw 'Rust is missing. Install the pinned Rust 1.99.1 toolchain.' }
 & cargo.exe --version
 if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain is not ready' }

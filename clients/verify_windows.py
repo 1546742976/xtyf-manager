@@ -152,14 +152,20 @@ def verify(installer,application,manifest,version,report=None,architecture='x64'
         expected_machine = {'x64':0x8664,'arm64':0xaa64}[architecture]
         if pe_machine(bundled_app)!=expected_machine:raise ValueError('NSIS application has incorrect PE architecture')
         build_info=target/'extracted-build-info.json'
-        run([bundled_app,'--build-info',build_info],timeout=30)
-        embedded=json.loads(build_info.read_text(encoding='utf-8-sig'))
-        expected=json.loads(manifest.read_text(encoding='utf-8-sig'))
-        if embedded.get('version')!=version or embedded.get('framework')!='tauri' or embedded.get('architecture')!=('aarch64' if architecture=='arm64' else 'x86_64'):raise ValueError('Extracted application version/framework/architecture mismatch')
-        if embedded.get('frontend')!=expected or expected.get('version')!=version:raise ValueError('Extracted executable embedded frontend manifest mismatch')
+        if json.loads(manifest.read_bytes()).get('version') != version:
+            raise ValueError('Frontend version does not match requested release')
+        executed = architecture == 'x64' or os.environ.get('PROCESSOR_ARCHITECTURE', '').upper() == 'ARM64'
+        if executed:
+            run([bundled_app,'--build-info',build_info],timeout=30)
+            embedded=json.loads(build_info.read_text(encoding='utf-8-sig'))
+            expected=json.loads(manifest.read_text(encoding='utf-8-sig'))
+            if embedded.get('version')!=version or embedded.get('framework')!='tauri' or embedded.get('architecture')!=('aarch64' if architecture=='arm64' else 'x86_64'):raise ValueError('Extracted application version/framework/architecture mismatch')
+            if embedded.get('frontend')!=expected or expected.get('version')!=version:raise ValueError('Extracted executable embedded frontend manifest mismatch')
+        elif manifest.read_bytes() not in packaged_bytes:
+            raise ValueError('Cross-compiled ARM64 executable lacks exact embedded frontend manifest')
         result={'version':version,'installer':'NSIS','framework':'tauri','architecture':architecture,
                 'clientPayloadVerified':True,'installerPayloadExtracted':True,'nativeExecutableVerified':True,
-                'embeddedFrontendVerified':True,'runtimeUiVerified':False,
+                'nativeBuildInfoExecuted':executed,'embeddedFrontendVerified':True,'runtimeUiVerified':False,
                 'installerSha256':sha256(installer),'applicationSha256':executable_hash,
                 'packagedApplicationSha256':sha256(bundled_app),'bundleTypeMarker':'NSS',
                 'frontendManifestSha256':manifest_hash,'extractedApplication':bundled_app.relative_to(target).as_posix(),

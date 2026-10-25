@@ -11,7 +11,7 @@
     '/admin/mail':['mail_admin.html','mail','manage_mail'],
     '/admin/security':['security.html','security','manage_security']
   };
-  const anonymousBootstrap=()=>({authenticated:false,me:null,user:null,permissions:{},role_names:{admin:'管理员',manager:'管理人员',member:'成员'},statuses:[],priorities:[]});
+  const anonymousBootstrap=()=>({authenticated:false,me:null,user:null,permissions:{},role_names:{admin:'超级管理员',manager:'管理人员',member:'成员'},statuses:[],priorities:[]});
   let config={serverUrl:'',version:''},bootstrap=anonymousBootstrap();
   let route='/',frame=null,sequence=0,generation=0,historyIndex=0,serverGeneration=0,bootSequence=0,bootstrapSequence=0,booting=false,compatible=false,preview=null,noticeTimer;
   let compatibilityRejected=false,nativeInitialized=false,locallyReady=false,healthySent=false,nativeForeground=true,updatesServer=null,updateState={status:'unavailable'};

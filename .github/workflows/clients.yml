@@ -50,7 +50,7 @@ jobs:
       - run: python -m unittest discover -s tests -p 'test_collect_release_assets.py' -v
       - name: Install packaged-UI browser validation dependencies
         run: |
-          python -m pip install playwright==1.56.0
+          python -m pip install playwright==1.57.0
           python -m playwright install --with-deps chromium
       - run: python clients/build_frontend.py
       - name: Exercise packaged pages and PDF preview with isolated native IPC
@@ -223,8 +223,12 @@ jobs:
           keytool -list -keystore clients/signing/xtyf-manager.jks -storepass:env XTYF_KEY_PASSWORD -alias xtyf-manager
 
       - name: Build and verify APK (temporary test or fixed stable key)
+        env:
+          STABLE_SOURCE_REF: ${{ inputs.source_ref }}
         run: |
-          python clients/build_android.py --jdk "$JAVA_HOME" --sdk "$ANDROID_HOME" --skip-frontend-build --output-dir dist/clients/android
+          signing_args=()
+          if [[ -z "$STABLE_SOURCE_REF" ]]; then signing_args+=(--test-signing); fi
+          python clients/build_android.py --jdk "$JAVA_HOME" --sdk "$ANDROID_HOME" --skip-frontend-build --output-dir dist/clients/android "${signing_args[@]}"
           cd dist/clients/android
           test "$(find . -maxdepth 1 -type f -name 'XTYF-Manager-*.apk' | wc -l)" -eq 1
           sha256sum XTYF-Manager-*.apk > SHA256SUMS.txt
@@ -234,6 +238,7 @@ jobs:
           name: xtyf-client-android-apk
           path: |
             dist/clients/android/XTYF-Manager-*.apk
+            dist/clients/android/android-build.json
             dist/clients/android/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14

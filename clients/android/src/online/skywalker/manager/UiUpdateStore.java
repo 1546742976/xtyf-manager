@@ -15,7 +15,7 @@ import java.util.zip.*;
 final class UiUpdateStore {
     static final int META_LIMIT = 256 * 1024, ZIP_LIMIT = 128 * 1024 * 1024;
     static final long UNPACKED_LIMIT = 256L * 1024 * 1024;
-    private static final Set<String> CAPABILITIES = new HashSet<>(Arrays.asList("ui_updates", "image_preview", "website_fallback"));
+    private static final Set<String> CAPABILITIES = new HashSet<>(Arrays.asList("ui_updates", "image_preview", "website_fallback", "pdf_save"));
     private static final List<String> REQUIRED = Arrays.asList("index.html", "shell.js", "bridge.js", "page-runtime.js", "templates.js");
     private final File root, bundles, stateFile;
     private final PublicKey key;

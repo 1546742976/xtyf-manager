@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "巡天御风管理系统",
   "mainBinaryName": "xtyf-manager",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "identifier": "online.skywalker.manager",
   "build": {
     "frontendDist": "../frontend/dist"
@@ -53,14 +53,16 @@
       "deb": {
         "depends": [
           "libwebkit2gtk-4.1-0",
-          "libgtk-3-0"
+          "libgtk-3-0",
+          "gstreamer1.0-plugins-good"
         ],
         "section": "utils"
       },
       "rpm": {
         "depends": [
           "webkit2gtk4.1",
-          "gtk3"
+          "gtk3",
+          "gstreamer1-plugins-good"
         ],
         "release": "1"
       }

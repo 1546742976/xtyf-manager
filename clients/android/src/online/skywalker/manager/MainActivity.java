@@ -211,7 +211,7 @@ public class MainActivity extends Activity {
     }
     private JSONObject configuration() throws JSONException {
         return new JSONObject().put("serverUrl", server).put("effectiveServerUrl", client.effectiveServer()).put("version", BuildConfig.VERSION).put("bridgeVersion", 2)
-            .put("capabilities", new JSONArray(Arrays.asList("ui_updates", "image_preview", "website_fallback"))).put("platform", "android");
+            .put("capabilities", new JSONArray(Arrays.asList("ui_updates", "image_preview", "website_fallback", "pdf_save"))).put("platform", "android");
     }
     private JSONObject selectedImage(Pending request) throws Exception {
         Uri uri = files.get(request.args.getString("handle"));
@@ -268,7 +268,10 @@ public class MainActivity extends Activity {
         if (!types.isEmpty()) intent.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[0])); return intent;
     }
     private void saveFile(Pending request) throws Exception {
-        if (download != null) throw new IOException("请先完成当前保存选择"); request.client.resolve(request.args.getString("path")); download = request;
+        if (download != null) throw new IOException("请先完成当前保存选择");
+        if (request.args.has("pdfBody")) PdfSave.decode(request.args.getString("pdfBody"));
+        else request.client.resolve(request.args.getString("path"));
+        download = request;
         if (request.args.has("expectedSha256")) {
             try { request.updates.validateInstaller(request.args.getString("path"), request.args.getString("expectedSha256")); }
             catch (Exception error) { download = null; throw error; }
@@ -304,6 +307,15 @@ public class MainActivity extends Activity {
             if (resultCode != RESULT_OK || data == null || data.getData() == null) { try { reply(request, new JSONObject().put("cancelled", true), null); } catch (JSONException ignored) {} return; }
             Uri destination = data.getData(); workers.execute(() -> {
                 try {
+                    if (request.args.has("pdfBody")) {
+                        byte[] bytes = PdfSave.decode(request.args.getString("pdfBody"));
+                        if (request.client != client || request.channel != port) throw new IOException("页面或服务器已切换，保存已取消");
+                        try (OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                            if (output == null) throw new IOException("无法写入所选位置");
+                            output.write(bytes);
+                        }
+                        reply(request, new JSONObject().put("cancelled", false), null); return;
+                    }
                     request.client.request(request.args.getString("path"), "GET", Collections.emptyMap(), null, request.args.optString("requestId", request.id.toString()), (status, headers, input) -> {
                         String type = headers.getOrDefault("content-type", "");
                         if (status < 200 || status >= 300 || type.contains("text/html") || type.contains("application/json")) throw new IOException("服务器拒绝下载，请检查登录状态（" + status + "）");
