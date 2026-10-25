@@ -2,7 +2,12 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id),host=$('asset-scan-camera');
-  let reader=null,stream=null,generation=0,last='',busy=false,sound=true,audio=null,flashTimer=null;
+  let reader=null,stream=null,generation=0,last='',busy=false,sound=true,audio=null,flashTimer=null,decodeTimer=null;
+  // Decode a capped-size frame at bounded intervals, rather than asking ZXing
+  // to decode the full-resolution stream indefinitely on every video tick.
+  const SCAN_INTERVAL_MS=260,MAX_DECODE_WIDTH=1024;
+  const frameCanvas=document.createElement('canvas');
+  const frameContext=frameCanvas.getContext('2d',{willReadFrequently:true});
   host.innerHTML=`<div class="asset-camera-frame" id="asset-camera-frame">
     <video id="asset-camera-video" playsinline muted hidden></video>
     <p id="asset-camera-placeholder">将标签放在镜头中央<br>识别后会显示商品资料与本地记录</p>
@@ -75,11 +80,47 @@
     };
     return messages[error.name]||'无法打开摄像头：'+(error.message||error.name||'未知错误')+'。可以使用下方图片识别。';
   }
-  function stop(){generation++;reader?.reset();reader=null;stream?.getTracks().forEach(t=>t.stop());stream=null;$('asset-scan-dialog').classList.remove('asset-scan-camera-active');$('asset-camera-video').hidden=true;$('asset-camera-overlay').hidden=true;$('asset-camera-placeholder').hidden=false;$('asset-camera-stop').disabled=true;$('asset-camera-stop').hidden=true;$('asset-camera-start').hidden=false;}
-  async function found(text){
-    if(busy||last===text)return;last=text;busy=true;
-    try{const ok=await window.AssetScan.resolve(text);if(ok!==false)status(window.AssetScan.task==='receive'?'标签已收集，可连续扫描下一张。':'已识别，请查看结果。');else status('请查看取景器或下方的识别提示。');}
-    finally{busy=false;}
+  function stop(){
+    generation++;
+    if(decodeTimer!==null){clearTimeout(decodeTimer);decodeTimer=null;}
+    reader?.reset();reader=null;
+    const video=$('asset-camera-video');video.pause();video.srcObject=null;
+    stream?.getTracks().forEach(t=>t.stop());stream=null;
+    frameCanvas.width=frameCanvas.height=0;
+    $('asset-scan-dialog').classList.remove('asset-scan-camera-active');
+    video.hidden=true;$('asset-camera-overlay').hidden=true;$('asset-camera-placeholder').hidden=false;
+    $('asset-camera-stop').disabled=true;$('asset-camera-stop').hidden=true;$('asset-camera-start').hidden=false;
+  }
+  async function found(text,own=generation){
+    if(own!==generation||busy||last===text)return;last=text;busy=true;
+    try{
+      const ok=await window.AssetScan.resolve(text);
+      if(own===generation)status(ok!==false?(window.AssetScan.task==='receive'?'标签已收集，可连续扫描下一张。':'已识别，请查看结果。'):'请查看取景器或下方的识别提示。');
+    }finally{busy=false;}
+  }
+  function scheduleDecode(own){
+    if(own!==generation||!stream||!reader)return;
+    decodeTimer=setTimeout(()=>decodeFrame(own),SCAN_INTERVAL_MS);
+  }
+  function decodeFrame(own){
+    if(own!==generation||!reader||!stream)return;
+    const video=$('asset-camera-video');
+    // Skip frames while an accepted label is being resolved against the server.
+    if(!busy&&video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA&&frameContext&&video.videoWidth&&video.videoHeight){
+      try{
+        const width=Math.min(MAX_DECODE_WIDTH,video.videoWidth);
+        const height=Math.max(1,Math.round(video.videoHeight*width/video.videoWidth));
+        if(frameCanvas.width!==width||frameCanvas.height!==height){frameCanvas.width=width;frameCanvas.height=height;}
+        frameContext.drawImage(video,0,0,width,height);
+        const pixels=frameContext.getImageData(0,0,width,height);
+        const luminance=new ZXing.RGBLuminanceSource(new Int32Array(pixels.data.buffer,pixels.data.byteOffset,width*height),width,height);
+        const bitmap=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminance));
+        const match=reader.decode(bitmap);
+        if(match&&own===generation)void found(match.getText(),own);
+      }catch(_){/* Most frames contain no readable code; keep scanning. */}
+      finally{reader?.reset();}
+    }
+    scheduleDecode(own);
   }
   $('asset-camera-start').onclick=async()=>{
     prepareAudio();
@@ -89,15 +130,18 @@
     status('正在请求摄像头，请在授权提示中选择允许…');
     try{
       const device=$('asset-camera-device').value;
-      const videoConstraints=device?{deviceId:{exact:device}}:{facingMode:{ideal:'environment'}};
+      const cameraChoice=device?{deviceId:{exact:device}}:{facingMode:{ideal:'environment'}};
+      const videoConstraints={...cameraChoice,width:{ideal:1280},height:{ideal:720},frameRate:{ideal:15,max:24}};
       const openedStream=await navigator.mediaDevices.getUserMedia({audio:false,video:videoConstraints});
       if(own!==generation){openedStream.getTracks().forEach(t=>t.stop());return;}
       stream=openedStream;
       const video=$('asset-camera-video');video.hidden=false;$('asset-camera-overlay').hidden=false;$('asset-camera-placeholder').hidden=true;$('asset-camera-stop').disabled=false;$('asset-camera-stop').hidden=false;$('asset-camera-start').hidden=true;
       $('asset-scan-dialog').classList.add('asset-scan-camera-active');
-      reader=new ZXing.BrowserMultiFormatReader();
-      await reader.decodeFromStream(stream,video,result=>{if(result&&own===generation)found(result.getText());});
+      video.srcObject=stream;
+      await video.play();
       if(own!==generation)return;
+      reader=new ZXing.MultiFormatReader();
+      scheduleDecode(own);
       try{
         const devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
         if(own!==generation)return;
