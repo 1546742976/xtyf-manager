@@ -52,8 +52,10 @@ async function main(){
     await permissionRow.locator('[data-permission="assets.manage"]').check();
     await permissionRow.getByRole('button',{name:'保存权限',exact:true}).click();
     await page.locator('#permission-result').filter({hasText:'权限已保存'}).waitFor();
-    const granted=(await (await api.get('/api/admin/permissions')).json()).members.find(m=>m.id===member).permissions;
+    const permissionState=(await (await api.get('/api/admin/permissions')).json()).members.find(m=>m.id===member);
+    const granted=permissionState.explicit_permissions;
     assert(granted.includes('assets.manage'));assert(granted.includes('invoices.manage'));
+    assert.deepEqual(permissionState.permissions,[],'Unchanged initial password still blocks effective permissions');
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     await page.locator('#asset-create').click();await page.locator('#asset-add-manual').click();
     await page.locator('#asset-form [name=name]').fill('测试电机 '+label);
