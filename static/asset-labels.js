@@ -2,6 +2,33 @@
 (() => {
   'use strict';
   const $=id=>document.getElementById(id),form=$('asset-label-form'),link=$('asset-label-download');
+  const Layout=window.AssetLabelLayout;
+  const SETTINGS_KEY='xtyf.asset.labels.v2',defaults={paper:'thermal',width:50,height:30,layout:'auto',font:11,font_width:88};
+  function settings(){
+    const f=$('asset-label-form');
+    const o={paper:f.elements.paper.value,width:Number(f.elements.width.value),height:Number(f.elements.height.value),
+      layout:f.elements.layout.value,font:Number(f.elements.font.value),font_width:Number(f.elements.font_width.value)};
+    Layout.compute(o.width,o.height,o.layout);
+    if(!['thermal','a4'].includes(o.paper))throw Error('纸张类型无效');
+    if(!Number.isFinite(o.font)||o.font<6||o.font>18||!Number.isFinite(o.font_width)||o.font_width<70||o.font_width>110)throw Error('字体参数无效');
+    return o;
+  }
+  function remember(){
+    try{localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings()));}catch(_){/* Private mode or in-progress input. */}
+  }
+  function restore(){
+    let saved;
+    try{saved=JSON.parse(localStorage.getItem(SETTINGS_KEY)||'null');}catch(_){return;}
+    if(!saved||typeof saved!=='object')return;
+    const f=$('asset-label-form');
+    for(const [key,value] of Object.entries(defaults)){
+      const v=saved[key];
+      if(v===undefined)continue;
+      if(key==='paper'||key==='layout'){if([...f.elements[key].options].some(o=>o.value===v))f.elements[key].value=v;}
+      else if(Number.isFinite(Number(v)))f.elements[key].value=String(v);
+    }
+    try{settings();}catch(_){for(const [key,value] of Object.entries(defaults))f.elements[key].value=String(value);}
+  }
   let records=[],generation=0,controller=null,task=null,documentPdf=null,renderTask=null,url=null,bytes=null,page=1,pdfjs=null;
   const status=text=>$('asset-label-status').textContent=text;
   function clear(){
@@ -27,9 +54,10 @@
   async function render(){
     clear();const own=generation;status('正在生成并读取 PDF…');
     try{
-      const w=Number(form.elements.width.value),h=Number(form.elements.height.value);
-      if(!Number.isFinite(w)||!Number.isFinite(h)||w<40||w>190||h<25||h>270)throw Error('标签宽度 40–190 mm，高度 25–270 mm');
-      const path='/api/assets/labels.pdf?'+new URLSearchParams({ids:records.map(u=>u.id).join(','),kind:records[0].item_id?'unit':'item',width:w,height:h,paper:form.elements.paper.value});
+      const opts=settings();remember();
+      const geometry=Layout.compute(opts.width,opts.height,opts.layout);
+      $('asset-label-layout-info').textContent=(geometry.mode==='wide'?'左右分栏':'上文下条码')+' · '+opts.font+' pt · 字宽 '+opts.font_width+'% '+Layout.warnings(geometry).join('；');
+      const path='/api/assets/labels.pdf?'+new URLSearchParams({ids:records.map(u=>u.id).join(','),kind:records[0].item_id?'unit':'item',...opts});
       let content;
       if(window.XTYF){
         const response=await window.XTYF.readResource(path);
@@ -56,6 +84,7 @@
     }catch(e){if(own!==generation)return;clear();status('PDF 预览失败：'+e.message);}
   }
   form.onsubmit=e=>{e.preventDefault();render();};
+  form.oninput=()=>{clear();remember();status('配置已更新，请点击“更新打印预览”。');};
   form.onchange=()=>render();
   for(const [id,delta] of [['asset-label-prev',-1],['asset-label-next',1]])$(id).onclick=()=>{
     if(!documentPdf)return;page=Math.max(1,Math.min(documentPdf.numPages,page+delta));
@@ -69,5 +98,6 @@
   };
   $('asset-label-close').onclick=()=>$('asset-label-dialog').close();
   $('asset-label-dialog').addEventListener('close',()=>{if(!$('asset-label-dialog').open)clear();});window.addEventListener('pagehide',clear);
+  restore();
   window.AssetLabels={open(values){records=values;$('asset-label-summary').textContent=`本次打印 ${values.length} 张标签。补打沿用原编号。`;window.AssetLedger.showDialog($('asset-label-dialog'));return render();}};
 })();
