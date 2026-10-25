@@ -1,8 +1,10 @@
 /* Camera/photo recognition stays on the device. No image is sent to a supplier. */
 (() => {
   'use strict';
-  const $=id=>document.getElementById(id),host=$('asset-scan-camera');
-  let reader=null,stream=null,generation=0,last='',busy=false,sound=true,audio=null,flashTimer=null;
+  // Keep the controller alive through frame teardown so tracks are still freed
+  // when the departing window no longer exposes its scanner global.
+  const $=id=>document.getElementById(id),host=$('asset-scan-camera'),scanner=window.AssetScan;
+  let reader=null,stream=null,generation=0,last='',busy=null,failed='',sound=true,audio=null,flashTimer=null;
   host.innerHTML=`<div class="asset-camera-frame" id="asset-camera-frame">
     <video id="asset-camera-video" playsinline muted hidden></video>
     <p id="asset-camera-placeholder">将标签放在镜头中央<br>识别后会显示商品资料与本地记录</p>
@@ -18,10 +20,10 @@
     <button type="button" class="btn" id="asset-camera-sound" aria-pressed="true">提示音：开</button>
     <button type="button" class="btn" id="asset-camera-list" data-scan-action="open-list" hidden>清单 0</button>
   </div>
-  <p id="asset-camera-status" role="status" aria-live="polite"></p>
+  <p id="asset-camera-status" role="status" aria-live="polite"></p><button type="button" class="btn" id="asset-camera-retry" hidden>重试此标签</button>
   <details class="asset-form-section"><summary>切换镜头 / 识别设置 / 图片</summary>
     <label id="asset-camera-device-field" hidden>切换摄像头<select id="asset-camera-device"><option value="">系统默认摄像头</option></select></label>
-    <div class="asset-actions"><button type="button" class="btn" id="asset-camera-retry">重新识别当前标签</button><label class="btn">使用已有标签图片<input id="asset-camera-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden></label></div>
+    <div class="asset-actions"><button type="button" class="btn" id="asset-camera-rescan">重新识别当前标签</button><label class="btn">使用已有标签图片<input id="asset-camera-photo" type="file" accept="image/jpeg,image/png,image/webp" hidden></label></div>
   </details>`;
   const status=t=>$('asset-camera-status').textContent=t;
   function prepareAudio(){
@@ -75,12 +77,20 @@
     };
     return messages[error.name]||'无法打开摄像头：'+(error.message||error.name||'未知错误')+'。可以使用下方图片识别。';
   }
-  function stop(){generation++;reader?.reset();reader=null;stream?.getTracks().forEach(t=>t.stop());stream=null;$('asset-scan-dialog').classList.remove('asset-scan-camera-active');$('asset-camera-video').hidden=true;$('asset-camera-overlay').hidden=true;$('asset-camera-placeholder').hidden=false;$('asset-camera-stop').disabled=true;$('asset-camera-stop').hidden=true;$('asset-camera-start').hidden=false;}
-  async function found(text){
-    if(busy||last===text)return;last=text;busy=true;
-    try{const ok=await window.AssetScan.resolve(text);if(ok!==false)status(window.AssetScan.task==='receive'?'标签已收集，可连续扫描下一张。':'已识别，请查看结果。');else status('请查看取景器或下方的识别提示。');}
-    finally{busy=false;}
+  function stop(){generation++;scanner.cancel();busy=null;failed='';$('asset-camera-retry').hidden=true;reader?.reset();reader=null;stream?.getTracks().forEach(t=>t.stop());stream=null;$('asset-scan-dialog').classList.remove('asset-scan-camera-active');$('asset-camera-video').hidden=true;$('asset-camera-overlay').hidden=true;$('asset-camera-placeholder').hidden=false;$('asset-camera-stop').disabled=true;$('asset-camera-stop').hidden=true;$('asset-camera-start').hidden=false;}
+  async function found(text,explicit=false){
+    if(busy||(!explicit&&last===text))return;
+    last=text;$('asset-scan-raw').value=text;const own=generation,token={};busy=token;$('asset-camera-retry').disabled=true;
+    try{
+      const result=await (explicit?window.AssetScan.retry(text):window.AssetScan.resolve(text));
+      if(own!==generation||result?.status==='stale')return;
+      if(result?.status==='duplicate'){status('同一标签已在清单中，未重复增加。');return;}
+      if(result?.status!=='success'){failed=text;$('asset-camera-retry').hidden=false;status((result?.message||'识别失败')+'；可重试此标签。');return;}
+      failed='';$('asset-camera-retry').hidden=true;status(window.AssetScan.task==='receive'?'标签识别完成，可连续扫描下一张。':'已识别，请查看结果。');
+    }catch(error){if(own===generation){failed=text;$('asset-camera-retry').hidden=false;status(error.message+'；可重试此标签。');}}
+    finally{if(busy===token){busy=null;$('asset-camera-retry').disabled=false;}}
   }
+  $('asset-camera-retry').onclick=()=>failed&&found(failed,true);
   $('asset-camera-start').onclick=async()=>{
     prepareAudio();
     stop();last='';const own=generation;
@@ -111,7 +121,7 @@
   };
   $('asset-camera-stop').onclick=()=>{stop();status('相机已停止');};
   $('asset-camera-device').onchange=()=>$('asset-camera-start').click();
-  $('asset-camera-retry').onclick=()=>{last='';status('已允许重新识别，请对准当前标签。');};
+  $('asset-camera-rescan').onclick=()=>{last='';status('已允许重新识别，请对准当前标签。');};
   function selectInput(mode){
     stop();last='';
     for(const button of document.querySelectorAll('[data-scan-input]'))button.setAttribute('aria-pressed',String(button.dataset.scanInput===mode));
@@ -125,18 +135,19 @@
   document.addEventListener('click',event=>{if(event.target.closest('#asset-scan-form'))prepareAudio();});
   $('asset-scan-raw').addEventListener('keydown',prepareAudio);
   $('asset-camera-photo').onchange=async e=>{
-    const file=e.target.files[0];if(!file)return;stop();last='';
+    const file=e.target.files[0];if(!file)return;stop();last='';const own=generation;
     if(file.size>10*1024*1024){status('请选择不超过 10 MiB 的图片');return;}
     let source=file;
     if(window.XTYF&&file.handle){
       try{const data=await window.XTYF.invoke('read_selected_image',{handle:file.handle});
         if(data.size>10*1024*1024||typeof data.body!=='string'||data.body.length>14*1024*1024)throw Error('图片过大');
         source=new Blob([Uint8Array.from(atob(data.body),c=>c.charCodeAt(0))],{type:data.mime});
-      }catch(e){status('客户端图片读取失败：'+e.message);return;}
+      }catch(e){if(own===generation)status('客户端图片读取失败：'+e.message);return;}
     }
+    if(own!==generation)return;
     const url=URL.createObjectURL(source);const decoder=new ZXing.BrowserMultiFormatReader();
-    try{await found((await decoder.decodeFromImageUrl(url)).getText());}
-    catch(_){status('没有识别到有效条码，请重拍标签或手动输入原文。');}
+    try{const result=await decoder.decodeFromImageUrl(url);if(own===generation)await found(result.getText());}
+    catch(_){if(own===generation)status('没有识别到有效条码，请重拍标签或手动输入原文。');}
     finally{decoder.reset();URL.revokeObjectURL(url);e.target.value='';}
   };
   $('asset-scan-dialog').addEventListener('close',stop);

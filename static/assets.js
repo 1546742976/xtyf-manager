@@ -11,6 +11,17 @@
   let operation=null, pending=false, opener=null, serverReceivedAt=0;
   const pageSizes={items:20,loans:20,events:20}, pagerHandlers=new Map(),categorySelection=new Map();
   let organizing=false;
+  // Navigation may finish before a catalog response. Stop read chains in the
+  // old document; keep writes and their durable recovery receipts untouched.
+  let pageInactive=false,readController=new AbortController();
+  window.addEventListener('pagehide',()=>{
+    pageInactive=true;generation++;readController.abort();
+  });
+  window.addEventListener('pageshow',event=>{
+    if(event.persisted&&pageInactive){
+      pageInactive=false;readController=new AbortController();load();
+    }
+  });
   // In-flight writes survive dialog closure, page reloads and packaged-view navigation.
   // Namespace by server, then verify the user before ever replaying a saved write.
   const serverScope=window.XTYF?.config?.serverUrl||location.origin;
@@ -61,6 +72,12 @@
   for(const modal of document.querySelectorAll('dialog.asset-dialog')){
     const scroll=document.createElement('div');scroll.className='asset-dialog-scroll';
     scroll.append(...modal.childNodes);modal.append(scroll);
+    // WebKit does not focus buttons on pointer activation. Remember the actual
+    // nested-dialog trigger through the existing focus-return mechanism.
+    modal.addEventListener('click',event=>{
+      const trigger=event.target.closest('button');
+      if(trigger&&!trigger.disabled)trigger.focus({preventScroll:true});
+    },true);
     modal.addEventListener('close',()=>{
       if(suspendedDialogs.delete(modal))return;
       const origin=dialogOrigins.get(modal);dialogOrigins.delete(modal);
@@ -85,9 +102,15 @@
   async function api(path, body){
     const response=await fetch('/api/assets/'+path, body?{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
-    }:{});
-    const data=await response.json().catch(()=>({error:'服务器返回了无法识别的内容'}));
-    if(!response.ok||!data.ok){const error=new Error(data.error||'请求失败');error.status=response.status;error.data=data;throw error;}
+    }:{signal:readController.signal});
+    let data;
+    try{data=await response.json();}catch(_){throw new Error('服务器返回了无法识别的内容');}
+    if(!response.ok||data?.ok!==true){
+      const error=new Error(typeof data?.error==='string'?data.error:'服务器返回了无法识别的内容');
+      // Only a structured business rejection proves the write did not succeed.
+      error.businessRejected=response.status>=400&&response.status<500&&data?.ok===false&&typeof data.error==='string';
+      error.status=response.status;error.data=data;throw error;
+    }
     return data;
   }
   const button=(action,label,id,extra='')=>`<button type="button" class="btn" data-action="${action}" data-id="${id}" ${extra}>${label}</button>`;
@@ -165,11 +188,11 @@
   }
   function renderLoans(data){
     loans=data.loans;loanPage=data.page;
-    return `<h2>${mine?'我的未还借用':'当前借用'}</h2>`+(loans.length?`<div class="asset-grid">${loans.map(l=>`<article class="asset-card">
+    return `<h2>${mine?'按数量借用':'当前借用'}</h2>`+(loans.length?`<div class="asset-grid">${loans.map(l=>`<article class="asset-card">
       <h3><a href="/assets/detail?id=${l.item_id}">${esc(l.name)}</a></h3><p>${esc(l.specification)} · ${esc(l.campus_name)}</p>
       <p>${esc(l.member_name)} · ${esc(l.created_at)}</p><strong>未还 ${l.outstanding} ${esc(l.unit)}</strong>
       <div class="asset-actions">${l.member_id===data.member_id?button('return','归还',l.id):''}</div></article>`).join('')}</div>`:
-      '<p class="asset-empty">没有未归还的借用。</p>')+pager('loans',data.page,data.total,data.per_page||pageSizes.loans);
+      `<p class="asset-empty">${mine?'暂无按数量登记的未还借单。':'没有未归还的借用。'}</p>`)+pager('loans',data.page,data.total,data.per_page||pageSizes.loans);
   }
   function renderEvents(data){
     events=data.events;eventPage=data.page;
@@ -213,6 +236,7 @@
       <section class="asset-detail-history" data-asset-detail-panel="history" ${detailView==='history'?'':'hidden'}>${renderEvents(e)}</section>`;
   }
   async function load(){
+    if(pageInactive)return false;
     const own=++generation;
     $('asset-content').setAttribute('aria-busy','true');status('正在加载…');
     try{
@@ -246,7 +270,7 @@
       }else if(mine){
         const l=await api('loans?mine=1&page='+loanPage+pageQuery('loans'));if(own!==generation)return;
         $('asset-title').textContent='我的借用';
-        $('asset-content').innerHTML=(window.AssetScan?'<div class="asset-mine-scan-actions asset-actions"><button type="button" class="btn" data-asset-scan-task="borrow">扫码借用</button><button type="button" class="btn" data-asset-scan-task="return">扫码归还</button></div>':'')+(window.AssetUnits?`<nav class="asset-detail-tabs" aria-label="借用记录类型"><button type="button" data-asset-mine-view="units" aria-pressed="${mineView==='units'}">单件设备与待接收</button><button type="button" data-asset-mine-view="quantity" aria-pressed="${mineView==='quantity'}">按数量借用 · ${l.total} 笔</button></nav>`:'')+`<section id="asset-quantity-loans" ${window.AssetUnits&&mineView!=='quantity'?'hidden':''}>${renderLoans(l)}</section>`;
+        $('asset-content').innerHTML='<p id="asset-mine-summary" role="status">正在读取全部校区借用汇总…</p>'+(window.AssetScan?'<div class="asset-mine-scan-actions asset-actions"><button type="button" class="btn" data-asset-scan-task="borrow">扫码借用</button><button type="button" class="btn" data-asset-scan-task="return">扫码归还</button></div>':'')+(window.AssetUnits?`<nav class="asset-detail-tabs" aria-label="借用记录类型"><button type="button" data-asset-mine-view="units" aria-pressed="${mineView==='units'}">单件设备与待接收</button><button type="button" data-asset-mine-view="quantity" aria-pressed="${mineView==='quantity'}">按数量借用 · ${l.total} 笔</button></nav>`:'')+`<section id="asset-quantity-loans" ${window.AssetUnits&&mineView!=='quantity'?'hidden':''}>${renderLoans(l)}</section>`;
         if(window.AssetUnits){await window.AssetUnits.loadMine();if(own!==generation)return;$('asset-mine-units').hidden=mineView!=='units';}
       }else{
         const search=new URLSearchParams({q:filter.elements.q.value,campus_id:filter.elements.campus_id.value,category:filter.elements.category.value==='__uncategorized__'?'':filter.elements.category.value,view:assetView,page:String(listPage)});
@@ -604,7 +628,7 @@
       document.dispatchEvent(new CustomEvent("asset-operation-saved",{detail:saved}));
       dialog.close();const refreshed=await load();if(refreshed)status('已保存。');
     }catch(error){
-      const unknown=!error.status||error.status>=500;
+      const unknown=!error.businessRejected;
       if(!unknown)forgetPending();
       $('asset-form-status').textContent=error.message+(unknown?'；结果尚未确认，可重试原请求；刷新或重新打开页面后仍会保留该请求。':'');
       $('asset-form-status').focus();

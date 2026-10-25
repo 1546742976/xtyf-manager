@@ -70,6 +70,7 @@
   }
   async function refresh(){
     const seq=++sequence;drawer.setAttribute('aria-busy','true');status('正在读取实物记录…');$('asset-unit-content').inert=true;$('asset-unit-actions').inert=true;
+    if(mine&&$('asset-mine-summary'))$('asset-mine-summary').textContent='正在读取全部校区借用汇总…';
     try{
       meta=await api('units/catalog');
       if(seq!==sequence)return;
@@ -81,6 +82,11 @@
       const data=await api('units?'+query);
       if(seq!==sequence)return;
       rows=data.units;page=data.page;
+      if(mine&&$('asset-mine-summary')){
+        const s=data.summary;
+        $('asset-mine-summary').textContent=s?`全部校区：按数量借用 ${s.quantity_loans} 单 · 未还单件 ${s.unit_loans} 件 · 待接收 ${s.pending_receipts} 件`:'当前服务器暂不提供借用汇总。';
+      }
+
       canManage=data.can_manage;
       $('asset-unit-campus').innerHTML=options(core.catalog.campuses,$('asset-unit-campus').value,'全部校区');
       $('asset-unit-content').innerHTML=`<div class="asset-heading asset-unit-list-heading"><div><h3>实物清单</h3>${item?`<p class="asset-muted"><a href="/assets/detail?id=${item.id}">查看物料详情与全部流水</a> · 每件实物单独追踪</p>`:'<p class="asset-muted">行内借还只操作当前实物，批量操作只处理已选清单。</p>'}</div>${data.can_manage&&item?`<div class="asset-actions">${scanBtn('receive','扫码收货')}${btn('receive','手工登记实物')}</div>`:''}</div>`+
@@ -88,7 +94,7 @@
         (rows.length?'<div class="asset-unit-list">'+rows.map(renderUnit).join('')+'</div>':`<div class="asset-empty"><h3>${mine?'暂无借用或待接收实物':'当前校区暂无实物记录'}</h3><p>${mine?'借用或收到移交后，实物会出现在这里。':data.can_manage&&item?'新设备到货后，点击「新增实物 / 批量建档」登记。':'可切换校区查看其他实物。'}</p></div>`)+
         core.renderPager('units',page,data.total,data.per_page||perPage);
       renderActions();selectedSummary();status('选择操作后可先核对，确认保存才会改变记录。');
-    }catch(e){status(e.message);}finally{if(seq===sequence){drawer.setAttribute('aria-busy','false');$('asset-unit-content').inert=false;$('asset-unit-actions').inert=false;}}
+    }catch(e){if(seq===sequence){status(e.message);if(mine&&$('asset-mine-summary'))$('asset-mine-summary').textContent='借用汇总读取失败，请刷新重试。';}}finally{if(seq===sequence){drawer.setAttribute('aria-busy','false');$('asset-unit-content').inert=false;$('asset-unit-actions').inert=false;}}
   }
   async function migration(){
     $('asset-unit-actions').replaceChildren();

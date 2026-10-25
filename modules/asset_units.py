@@ -169,7 +169,7 @@ def units():
             (*args, per_page, (page_number - 1) * per_page),
         )
     ]
-    return {
+    result = {
         "units": values,
         "total": count,
         "page": page_number,
@@ -177,6 +177,17 @@ def units():
         "can_manage": manager(),
         "member_id": current_user()["id"],
     }
+    if request.args.get("mine") == "1":
+        uid = current_user()["id"]
+        # This overview deliberately ignores page and campus filters.
+        result["summary"] = dict(db.execute(
+            "SELECT (SELECT COUNT(*) FROM asset_loans l JOIN asset_items i ON i.id=l.item_id "
+            "WHERE l.member_id=? AND l.outstanding>0 AND i.tracking<>'unit') quantity_loans, "
+            "(SELECT COUNT(*) FROM asset_unit_loans WHERE member_id=? AND closed_at IS NULL) unit_loans, "
+            "(SELECT COUNT(DISTINCT unit_id) FROM asset_handoffs WHERE receiver_id=? AND status='pending') pending_receipts",
+            (uid, uid, uid),
+        ).fetchone())
+    return result
 
 
 @bp.get("/api/assets/units/<int:identity>")
