@@ -5,7 +5,12 @@
   let token = document.querySelector('meta[name="csrf-token"]')?.content || "";
   const originalFetch = window.fetch.bind(window);
   let pageInactive = false;
-  window.addEventListener("pagehide", () => { pageInactive = true; });
+  const activeReads = new Set();
+  window.addEventListener("pagehide", () => {
+    pageInactive = true;
+    for (const controller of activeReads) controller.abort();
+    activeReads.clear();
+  });
   window.addEventListener("pageshow", () => { pageInactive = false; });
   window.fetch = async (input, options = {}) => {
     const url = new URL(input instanceof Request ? input.url : input, location.href);
@@ -21,7 +26,22 @@
       headers.set("X-CSRF-Token", token);
       options = { ...options, headers };
     }
-    const response = await originalFetch(input, options);
+    let controller, callerSignal, cancel;
+    if (sameOrigin && ["GET", "HEAD"].includes(method)) {
+      controller = new AbortController();
+      callerSignal = options.signal || (input instanceof Request ? input.signal : null);
+      cancel = () => controller.abort();
+      if (callerSignal?.aborted) cancel();
+      else callerSignal?.addEventListener("abort", cancel, {once: true});
+      activeReads.add(controller);
+      options = {...options, signal: controller.signal};
+    }
+    let response;
+    try { response = await originalFetch(input, options); }
+    finally {
+      if (controller) activeReads.delete(controller);
+      callerSignal?.removeEventListener("abort", cancel);
+    }
     if (sameOrigin) {
       const renewed = response.headers.get("X-CSRF-Token");
       if (renewed) {
