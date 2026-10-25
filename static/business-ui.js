@@ -62,7 +62,7 @@ window.BusinessUI = (() => {
         if (data.code === 0 || data.code == null) data.code = response.status;
         if(response.status===401 && location.pathname!=="/login") notify("登录已失效，当前输入已保留。请在新标签页重新登录。", true);
       }
-      return {ok:response.ok, status:response.status, json:async () => data};
+      return {ok:response.ok, status:response.status, headers:response.headers, json:async () => data};
     });
   }
   function action(key, controls, operation, report = notify) {
@@ -120,11 +120,19 @@ window.BusinessUI = (() => {
       });
     }));
   });
+  function updateTextCount(input) {
+    if(!input?.matches?.('[data-count-text][maxlength]'))return;
+    let count=input.nextElementSibling;
+    if(!count?.classList.contains('text-counter')){count=document.createElement('small');count.className='text-counter';input.after(count);}
+    count.textContent=`${Array.from(input.value).length} / ${input.maxLength} 字`;
+  }
+  document.addEventListener('input',event=>updateTextCount(event.target));
+  document.addEventListener('DOMContentLoaded',()=>document.querySelectorAll('[data-count-text]').forEach(updateTextCount));
   // 唯一实现：页面脚本通过 window.BusinessUI.escape 共用。
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>"']/g, (char) => (
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]
     ));
   }
-  return {fetch:request, action, guard, download, notify, message, escape: escapeHtml};
+  return {fetch:request, action, guard, download, notify, message, escape: escapeHtml, toast:{hide(){const box=document.getElementById("business-feedback");if(box)box.hidden=true;}}};
 })();

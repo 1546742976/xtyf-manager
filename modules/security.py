@@ -4,13 +4,17 @@ import os
 import secrets
 import sqlite3
 import subprocess
+import threading
+import time
+from datetime import datetime, timedelta
 from contextlib import closing
 from functools import wraps
 
 from flask import (Blueprint, current_app, g, jsonify, redirect, render_template,
                    request, session, url_for)
 
-from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str
+from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str, error_response
+from modules.client_address import client_address
 
 bp = Blueprint("security", __name__)
 PERMISSIONS = {"funds.review": "资金审核", "invoices.manage": "发票管理", "assets.manage": "资产管理"}
@@ -19,6 +23,67 @@ AUDITED_READS = {"funds.export_csv", "invoices.api_export_download", "invoices.a
 AUDIT_FIELDS = {"id", "ids", "member_id", "record_type", "amount", "invoice_count",
                 "record_date", "status", "submitter_id", "permissions", "role",
                 "is_active", "type", "job_type", "group_ids", "project_ids"}
+LOGIN_ENDPOINTS = {"login", "client_api.login"}
+_audit_lock = threading.Lock()
+_audit_rate = {}
+_audit_writes = 0
+
+
+def _limited_audit_event(kind):
+    now = time.monotonic()
+    key = (kind, client_address())
+    with _audit_lock:
+        if now - _audit_rate.get(key, -60) < 60:
+            return False
+        if len(_audit_rate) >= 4096:
+            for old in list(_audit_rate):
+                if now - _audit_rate[old] >= 60:
+                    del _audit_rate[old]
+            if len(_audit_rate) >= 4096:
+                return False
+        _audit_rate[key] = now
+        return True
+
+
+def cleanup_audit_rows(db):
+    """Capacity takes priority over age; pending and complete job chains are exempt.
+
+    Zero disables each limit independently. A single transaction prevents cleanup
+    from racing a new job reference; protected rows may exceed the configured cap.
+    """
+    days = max(0, int(os.environ.get('AUDIT_RETENTION_DAYS', '90')))
+    limit = max(0, int(os.environ.get('AUDIT_MAX_ROWS', '100000')))
+    protected = """WITH RECURSIVE protected(id) AS (
+        SELECT id FROM security_audit WHERE outcome='pending'
+        UNION SELECT audit_id FROM invoice_jobs
+        UNION SELECT CAST(json_extract(a.details,'$.request_audit_id') AS INTEGER)
+          FROM security_audit a JOIN protected p ON p.id=a.id
+          WHERE json_valid(a.details) AND json_type(a.details,'$.request_audit_id')='integer'
+    ) """
+    db.execute('SAVEPOINT audit_cleanup')
+    try:
+        if days:
+            cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+            db.execute(protected + 'DELETE FROM security_audit WHERE created_at<? AND id NOT IN (SELECT id FROM protected)', (cutoff,))
+        if limit:
+            excess = max(0, db.execute('SELECT COUNT(*) FROM security_audit').fetchone()[0] - limit)
+            if excess:
+                db.execute(protected + 'DELETE FROM security_audit WHERE id IN (SELECT id FROM security_audit WHERE id NOT IN (SELECT id FROM protected) ORDER BY id LIMIT ?)', (excess,))
+        db.execute('RELEASE audit_cleanup')
+    except Exception:
+        db.execute('ROLLBACK TO audit_cleanup')
+        db.execute('RELEASE audit_cleanup')
+        raise
+
+
+def _start_request_audit(user):
+    g.audit_details = {}
+    with closing(sqlite3.connect(DB_PATH, timeout=15)) as db, db:
+        g.audit_id = db.execute(
+            'INSERT INTO security_audit(actor_id,actor_name,action,method,target,details,created_at) VALUES(?,?,?,?,?,?,?)',
+            (user['id'] if user else None, user['name'] if user else '',
+             request.endpoint or 'unknown', request.method, request.path, '{}', now_str()),
+        ).lastrowid
 
 
 def write_initial_credentials(path, password):
@@ -82,12 +147,24 @@ def migrate_security(db):
         raise
 
 
+def permission_is_current(db, member_id, permission, session_version=None):
+    """Role and explicit grants share the same live account checks, including workers."""
+    if permission not in PERMISSIONS:
+        return False
+    sql = ("SELECT 1 FROM members m WHERE m.id=? AND m.is_active=1 "
+           "AND m.deleted_at IS NULL AND m.must_change_password=0 "
+           "AND (m.role='admin' OR EXISTS (SELECT 1 FROM member_permissions p "
+           "WHERE p.member_id=m.id AND p.permission=?))")
+    args = [member_id, permission]
+    if session_version is not None:
+        sql += ' AND m.session_version=?'
+        args.append(session_version)
+    return db.execute(sql, args).fetchone() is not None
+
+
 def has_permission(permission, user=None):
     user = user or current_user()
-    return bool(user and get_db().execute(
-        "SELECT 1 FROM member_permissions WHERE member_id=? AND permission=?",
-        (user["id"], permission),
-    ).fetchone())
+    return bool(user and permission_is_current(get_db(), user['id'], permission, user.get('session_version')))
 
 
 def admin_required(view):
@@ -95,7 +172,7 @@ def admin_required(view):
     @login_required
     def wrapped(*args, **kwargs):
         if current_user()["role"] != "admin":
-            return jsonify(ok=False, error="仅管理员可访问"), 403
+            return error_response(403, "无权限，仅超级管理员可访问")
         return view(*args, **kwargs)
     return wrapped
 
@@ -169,23 +246,18 @@ def init_security(app):
             if request.content_length is not None and request.content_length > limit:
                 return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
             if request.content_length is None:
-                raw = request.stream.read(limit + 1)
+                # Read at most one sentinel byte beyond the cap. The limited
+                # stream itself can stop at the cap and hide this extra byte.
+                raw = request.input_stream.read(limit + 1)
                 if len(raw) > limit:
                     return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
                 request._cached_data = raw  # Retain the bounded body for get_json/audit.
         user = current_user() if request.endpoint != "static" else None
         unsafe = request.method not in SAFE_METHODS
-        if unsafe or request.endpoint in AUDITED_READS:
-            details = _audit_details(request.get_json(silent=True)) if request.is_json else {}
-            g.audit_details = details
-            with closing(sqlite3.connect(DB_PATH, timeout=15)) as db, db:
-                g.audit_id = db.execute(
-                    "INSERT INTO security_audit(actor_id,actor_name,action,method,target,details,created_at) "
-                    "VALUES(?,?,?,?,?,?,?)",
-                    (user["id"] if user else None, user["name"] if user else "",
-                     request.endpoint or "unknown", request.method, request.path,
-                     json.dumps(details, ensure_ascii=False)[:20000], now_str()),
-                ).lastrowid
+        if user and (unsafe or request.endpoint in AUDITED_READS):
+            _start_request_audit(user)
+        elif unsafe and request.endpoint not in LOGIN_ENDPOINTS and _limited_audit_event('anonymous'):
+            current_app.logger.warning('未认证写请求已拒绝审计存储: %s', request.path)
         if unsafe:
             expected = session.get("csrf_token")
             supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token")
@@ -195,6 +267,8 @@ def init_security(app):
                 return _error("页面凭据已过期，请刷新页面后重试", "csrf_failed")
             if request.is_json and not isinstance(request.get_json(silent=True), dict):
                 return _error("请求必须是 JSON 对象", "invalid_payload", 400)
+        if getattr(g, 'audit_id', None) and request.is_json:
+            g.audit_details = _audit_details(request.get_json(silent=True))
         native_client = request.headers.get("X-XTYF-Client-Protocol") == "1"
         if native_client and user is None and request.endpoint not in {
             "client_api.bootstrap", "client_api.login", "client_api.logout", "security.get_csrf",
@@ -202,7 +276,7 @@ def init_security(app):
         }:
             return _error("未登录", "authentication_required", 401)
         if user and user["must_change_password"] and request.endpoint not in {
-            "static", "account", "api_password", "logout", "security.get_csrf",
+            "static", "web_vendor", "favicon", "account", "api_password", "logout", "security.get_csrf",
             "client_api.bootstrap", "client_api.logout",
             "client_updates.updates", "client_updates.bundle_download",
         }:
@@ -212,7 +286,7 @@ def init_security(app):
 
     @app.after_request
     def finish_request(response):
-        if request.endpoint != "static":
+        if request.endpoint not in {"static", "web_vendor"}:
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-CSRF-Token"] = csrf_token()
             # Inline handlers are still used by the finance pages, so this policy
@@ -224,6 +298,18 @@ def init_security(app):
                 "Content-Security-Policy",
                 "frame-ancestors 'self'; object-src 'none'; base-uri 'self'",
             )
+        # An earlier body-limit hook may return before protect_request runs.
+        # Preserve authenticated rejected writes without touching their bodies.
+        if request.method not in SAFE_METHODS and not getattr(g, 'audit_id', None):
+            user = current_user()
+            if user:
+                _start_request_audit(user)
+        if (request.method not in SAFE_METHODS and request.endpoint in LOGIN_ENDPOINTS
+                and not getattr(g, 'audit_id', None)):
+            payload = response.get_json(silent=True) if response.is_json else None
+            succeeded = response.status_code < 400 and isinstance(payload, dict) and payload.get('ok') is True
+            if succeeded or _limited_audit_event('login_failure'):
+                _start_request_audit(current_user() if succeeded else None)
         audit_id = getattr(g, "audit_id", None)
         if audit_id:
             payload = response.get_json(silent=True) if response.is_json else None
@@ -248,6 +334,17 @@ def init_security(app):
                                (outcome, response.status_code, now_str(), json.dumps(g.audit_details, ensure_ascii=False)[:20000], audit_id))
             except sqlite3.Error:
                 current_app.logger.exception("Could not finalize audit record %s", audit_id)
+        if audit_id:
+            global _audit_writes
+            with _audit_lock:
+                _audit_writes += 1
+                cleanup_due = _audit_writes % 500 == 0
+            if cleanup_due:
+                try:
+                    with closing(sqlite3.connect(DB_PATH, timeout=5)) as db, db:
+                        cleanup_audit_rows(db)
+                except sqlite3.Error:
+                    current_app.logger.exception('审计保留清理失败')
         return response
 
 
@@ -267,12 +364,17 @@ def security_page():
 def permissions_get():
     db = get_db()
     members = [dict(row) for row in db.execute(
-        "SELECT id,name,username,role,is_active,deleted_at FROM members ORDER BY id")]
+        "SELECT id,name,username,role,is_active,deleted_at,must_change_password FROM members ORDER BY id")]
     grants = {}
     for row in db.execute("SELECT member_id,permission FROM member_permissions ORDER BY permission"):
         grants.setdefault(row["member_id"], []).append(row["permission"])
-    return jsonify(ok=True, permissions=PERMISSIONS,
-                   members=[member | {"permissions": grants.get(member["id"], [])} for member in members])
+    for member in members:
+        explicit = grants.get(member['id'], [])
+        inherited = list(PERMISSIONS) if member['role'] == 'admin' else []
+        ready = member['is_active'] and not member['deleted_at'] and not member['must_change_password']
+        member.update(explicit_permissions=explicit, inherited_permissions=inherited,
+                      permissions=sorted(set(explicit + inherited) & PERMISSIONS.keys()) if ready else [])
+    return jsonify(ok=True, permissions=PERMISSIONS, members=members)
 
 
 @bp.post("/api/admin/permissions/<int:member_id>")
@@ -291,12 +393,15 @@ def permissions_set(member_id):
     if row is None:
         db.rollback()
         return jsonify(ok=False, error="成员不存在"), 404
+    if row['role'] == 'admin':
+        db.rollback()
+        return jsonify(ok=False, error='超级管理员的权限由角色自带，不可单独撤销；请先调整角色'), 409
     if values and (not row["is_active"] or row["deleted_at"] is not None):
         db.rollback()
         return jsonify(ok=False, error="停用或已删除账号只能撤销权限"), 400
     if "funds.review" in values and row["role"] not in ("admin", "manager"):
         db.rollback()
-        return jsonify(ok=False, error="资金审核人必须具备资金工作区访问角色（管理员或项管）"), 400
+        return jsonify(ok=False, error="资金审核人必须具备资金工作区访问角色（超级管理员或项管）"), 400
     db.execute("DELETE FROM member_permissions WHERE member_id=?", (member_id,))
     db.executemany("INSERT INTO member_permissions VALUES(?,?,?,?)",
                    [(member_id, p, current_user()["id"], now_str()) for p in values])

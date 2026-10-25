@@ -14,6 +14,8 @@ from time import time as epoch_now
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
 from common import ROLE_NAMES, current_user, get_db, login_required
+from modules.input_validation import clean_text, parse_int_text
+from modules import collaboration_storage
 from modules.collaboration_storage import (
     UploadError, attachment_path, cleanup_staged, finalize_staged, stage_uploads,
 )
@@ -40,11 +42,10 @@ def root():
 
 
 def integer(value, label, minimum=1, maximum=MAX_ID):
-    if isinstance(value, bool) or not isinstance(value, (int, str)):
-        raise UploadError(label + '不合法')
-    if isinstance(value, str) and (len(value) > 19 or not value.isascii() or not value.isdecimal()):
-        raise UploadError(label + '不合法')
-    value = int(value)
+    try:
+        value = parse_int_text(value, label)
+    except ValueError as exc:
+        raise UploadError(str(exc)) from exc
     if not minimum <= value <= maximum:
         raise UploadError(label + '不合法')
     return value
@@ -212,8 +213,10 @@ def submission_fields(new_topic):
     title = title.strip()
     if new_topic and not 1 <= len(title) <= 120:
         raise UploadError('话题标题须为 1–120 个字符')
-    if len(text) > 5000:
-        raise UploadError('正文不能超过 5000 个字符')
+    try:
+        clean_text(text, '正文', 20000, required=False)
+    except ValueError as exc:
+        raise UploadError(str(exc)) from exc
     if not text.strip() and not uploads:
         raise UploadError('请填写正文或添加文件')
     return sid, title, text, uploads
@@ -241,6 +244,10 @@ def post_message(tid=None):
             result = committed_payload(db, prior['topic_id'], prior['message_id'], user, now, duplicate=True)
             db.commit(); cleanup_staged(staged)
             return jsonify(result)
+        quota = collaboration_storage.MEMBER_QUOTA_BYTES
+        used = db.execute('SELECT COALESCE(SUM(a.size_bytes),0) FROM collaboration_attachments a JOIN collaboration_messages m ON m.id=a.message_id WHERE m.author_id=?', (user['id'],)).fetchone()[0]
+        if staged and used + sum(item.size_bytes for item in staged) > quota:
+            raise UploadError('附件总量已超过成员配额，请联系管理员处理', 413)
         when = stamp(now)
         if tid is None:
             tid = db.execute('INSERT INTO collaboration_topics(title,author_id,author_name,created_at,created_epoch,last_activity_at) VALUES(?,?,?,?,?,?)',

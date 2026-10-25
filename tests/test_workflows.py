@@ -1,5 +1,6 @@
 """前端资源与关键业务流程冒烟测试（隔离于生产数据）。"""
 import unittest
+from uuid import uuid4
 from test_tasks import app_module
 
 from modules.funds import get_funds_db
@@ -12,6 +13,12 @@ class TestWorkflows(unittest.TestCase):
             'username': 'admin', 'password': 'ci-test-password-only',
         })
         self.assertTrue(result.get_json()['ok'])
+        username = 'workflow_' + uuid4().hex[:12]
+        created = self.admin.post('/api/member', json={'name': username, 'username': username,
+            'password': 'workflow-password', 'role': 'manager'})
+        self.assertTrue(created.get_json()['ok'])
+        self.writer = app_module.app.test_client()
+        self.assertTrue(self.writer.post('/login', json={'username': username, 'password': 'workflow-password'}).get_json()['ok'])
 
     def test_all_pages_load_new_assets(self):
         for url, fragment in (
@@ -36,21 +43,21 @@ class TestWorkflows(unittest.TestCase):
         self.assertEqual(bad.status_code, 400)
 
     def test_funds_invalid_and_review_permission(self):
-        bad = self.admin.post('/funds/api/records', json={
+        bad = self.admin.post('/funds/api/records', json={'request_id': uuid4().hex,
             'record_type': '进', 'amount': 'NaN', 'record_date': '2026-10-01',
         })
         self.assertEqual(bad.status_code, 400)
-        created = self.admin.post('/funds/api/records', json={
+        created = self.writer.post('/funds/api/records', json={'request_id': uuid4().hex,
             'record_type': '进', 'amount': 123.5, 'record_date': '2026-10-01',
             'source_dest': '单元测试',
         })
         self.assertEqual(created.get_json()['code'], 0)
         rid = created.get_json()['id']
-        unauth = self.admin.post(f'/funds/api/records/{rid}/review')
+        unauth = self.writer.post(f'/funds/api/records/{rid}/review')
         self.assertEqual(unauth.status_code, 403)
 
     def test_approved_record_edit_reopens_review(self):
-        created = self.admin.post('/funds/api/records', json={
+        created = self.writer.post('/funds/api/records', json={'request_id': uuid4().hex,
             'record_type': '进', 'amount': 25, 'record_date': '2026-10-02',
         })
         self.assertEqual(created.get_json()['code'], 0)

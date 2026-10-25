@@ -113,11 +113,11 @@ class LocalCollaborationTests(unittest.TestCase):
         self.assertFalse(self.author.get(f'{API}/topics/{tid}/messages').get_json()['messages'][0]['withdrawn'])
 
     def test_title_body_limits_and_literal_text_are_preserved(self):
-        title, body = '题' * 120, '文' * 5000
+        title, body = '题' * 120, '文' * 20000
         topic = self.topic(title=title, body=body)
         self.assertEqual(topic['topic']['title'], title)
         self.assertEqual(topic['message']['body'], body)
-        for fields in ({'title': '题' * 121}, {'title': ' \n '}, {'body': '文' * 5001}, {'body': 'x' + ' ' * 5000},
+        for fields in ({'title': '题' * 121}, {'title': ' \n '}, {'body': '文' * 20001}, {'body': 'x' + ' ' * 20000},
                        {'body': ' \n '}, {'submission_id': 'bad!'}):
             with self.subTest(fields=list(fields)):
                 response = self.author.post(API + '/topics', json={

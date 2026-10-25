@@ -53,7 +53,7 @@ def _clean_text(value: object, label: str, max_length: int) -> tuple[str, str | 
 def _save(member_id: int, as_admin: bool):
     actor = current_user()
     if as_admin and actor["role"] != "admin":
-        return jsonify(ok=False, error="仅管理员可修改其他成员资料"), 403
+        return jsonify(ok=False, error="仅超级管理员可修改其他成员资料"), 403
     if member_id <= 0 or member_id > MAX_SQLITE_INTEGER:
         return jsonify(ok=False, error="ID 格式不正确"), 400
     data = request.get_json(silent=True)
@@ -241,7 +241,7 @@ def delete_member(member_id: int):
     """Admin-only reversible removal; never break foreign keys or historical logs."""
     actor = current_user()
     if actor["role"] != "admin":
-        return jsonify(ok=False, error="仅管理员可删除成员"), 403
+        return jsonify(ok=False, error="仅超级管理员可删除成员"), 403
     if member_id <= 0 or member_id > MAX_SQLITE_INTEGER:
         return jsonify(ok=False, error="ID 格式不正确"), 400
     data = request.get_json(silent=True)
@@ -276,7 +276,7 @@ def delete_member(member_id: int):
 def restore_member(member_id: int):
     actor = current_user()
     if actor["role"] != "admin":
-        return jsonify(ok=False, error="仅管理员可恢复成员"), 403
+        return jsonify(ok=False, error="仅超级管理员可恢复成员"), 403
     if member_id <= 0 or member_id > MAX_SQLITE_INTEGER:
         return jsonify(ok=False, error="ID 格式不正确"), 400
     db = get_db()
