@@ -39,6 +39,7 @@ class MailInstallerTests(unittest.TestCase):
                       (self.units / "rm-mail.service").read_text(encoding="utf-8"))
         self.assertIn("OnUnitInactiveSec=15s",
                       (self.units / "rm-mail.timer").read_text(encoding="utf-8"))
+        self.assertIn("OnBootSec=15s", (self.units / "rm-mail.timer").read_text(encoding="utf-8"))
         self.assertIn("AccuracySec=1s", (self.units / "rm-mail.timer").read_text(encoding="utf-8"))
         self.assertFalse((self.units / "timers.target.wants").exists())
         if os.name == "posix":
