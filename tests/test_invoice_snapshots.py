@@ -26,6 +26,49 @@ class TestInvoiceSnapshots(unittest.TestCase):
         }).get_json()['tmp_path']
         return path, {'tmp_path': path, 'month': '2026.10', 'amount': amount, 'submitter_id': 1}
 
+    def test_rejected_writes_do_not_scan_or_change_snapshot_state(self):
+        _, item = self.upload('0')
+        with open(invoices.SNAPSHOT_STATE_FILE, 'rb') as file:
+            before = file.read()
+        with patch.object(invoices, 'scan_invoices', wraps=invoices.scan_invoices) as scan:
+            self.assertEqual(self.client.post('/invoices/api/upload/confirm', json=item).status_code, 400)
+            self.assertEqual(self.client.post('/invoices/api/upload/confirm', json={**item, 'amount': '3', 'month': 'bad-month'}).status_code, 400)
+            with patch.object(invoices, '_is_finance', return_value=False):
+                self.assertEqual(self.client.post('/invoices/api/invoice/update', json={'id': 'missing.pdf'}).status_code, 403)
+            scan.assert_not_called()
+        with open(invoices.SNAPSHOT_STATE_FILE, 'rb') as file:
+            self.assertEqual(file.read(), before)
+
+    def test_partially_successful_batch_publishes_once(self):
+        _, valid = self.upload()
+        _, invalid = self.upload('0')
+        with patch.object(invoices, 'scan_invoices', wraps=invoices.scan_invoices) as scan:
+            response = self.client.post('/invoices/api/upload/confirm/batch', json={'items': [valid, invalid]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(scan.call_count, 1)
+
+    def test_partial_commit_followed_by_500_publishes_but_remains_failed(self):
+        _, item = self.upload()
+        commit = invoices._commit_upload
+        def committed_then_failed(*args, **kwargs):
+            commit(*args, **kwargs)
+            raise RuntimeError('synthetic failure after durable commit')
+        with patch.object(invoices, '_commit_upload', side_effect=committed_then_failed), patch.object(invoices, 'scan_invoices', wraps=invoices.scan_invoices) as scan:
+            response = self.client.post('/invoices/api/upload/confirm', json=item)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(scan.call_count, 1)
+        self.assertEqual(self.client.get('/invoices/api/invoices').headers['X-Invoice-Snapshot-State'], 'failed')
+        self.client.post('/invoices/api/refresh')
+
+    def test_failed_atomic_move_restores_metadata_without_scanning(self):
+        _, item = self.upload()
+        before = invoices.load_meta()
+        with patch('modules.invoices.os.rename', side_effect=OSError('synthetic disk fault')), patch.object(invoices, 'scan_invoices', wraps=invoices.scan_invoices) as scan:
+            response = self.client.post('/invoices/api/upload/confirm', json=item)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(scan.call_count, 0)
+        self.assertEqual(invoices.load_meta(), before)
+
     def test_long_confirmation_returns_previous_complete_snapshot_then_new_snapshot(self):
         _, initial = self.upload()
         self.assertTrue(self.client.post('/invoices/api/upload/confirm', json=initial).get_json()['success'])

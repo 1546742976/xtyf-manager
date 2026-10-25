@@ -32,6 +32,7 @@ from modules.funds_revisions import migrate as migrate_funds_revisions
 from modules.funds_requests import migrate as migrate_funds_requests, valid_request_id, fingerprint
 from modules.task_validation import InvalidIdError, parse_id
 from modules.invoice_storage import InvoiceFileLock
+from modules import funds_ledger
 
 # ---- 数据目录：默认 <项目>/data/funds，可用环境变量 FUNDS_DIR 覆盖 ----
 FUNDS_DIR = os.environ.get(
@@ -205,6 +206,8 @@ def sync_txt():
     with ledger_access():
         conn = get_funds_db()
         try:
+            conn.execute('BEGIN')
+            revision = funds_ledger.status(conn)['revision']
             records = conn.execute('SELECT * FROM records ORDER BY record_date DESC,id DESC').fetchall()
         finally:
             conn.close()
@@ -228,6 +231,11 @@ def sync_txt():
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, FUNDS_TXT)
+            conn = get_funds_db()
+            try:
+                funds_ledger.synced(conn, revision)
+            finally:
+                conn.close()
         finally:
             if os.path.exists(temporary):
                 os.remove(temporary)
@@ -239,6 +247,7 @@ def init_funds_db():
         migrate_funds_money(conn)
         migrate_funds_revisions(conn)
         migrate_funds_requests(conn)
+        funds_ledger.migrate(conn)
         # The review badge and the ledger list scan these columns on every page
         # load; without indexes both degrade to full table scans.
         conn.executescript("""
@@ -463,11 +472,42 @@ def committed_response(result, record_id, request_id=None):
         sync_txt()
         result['ledger_sync'] = 'ok'
     except Exception as exc:
+        _record_sync_failure(exc)
         result['ledger_sync'] = 'failed'
         result['msg'] = ('记录已保存' if request_id else '操作已完成') + '，台账文件同步失败；请勿重复提交'
         current_app.logger.error('资金同步失败 stage=ledger_sync record_id=%s request_id=%s error_type=%s',
                                  record_id, request_id, type(exc).__name__)
     return jsonify(result)
+
+
+def _record_sync_failure(exc):
+    try:
+        conn = get_funds_db()
+        try:
+            funds_ledger.failed(conn, exc)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        current_app.logger.exception('资金台账失败状态未能持久化；请核对数据库')
+
+
+@funds_bp.route('/api/ledger-sync', methods=['GET', 'POST'])
+def ledger_sync():
+    if request.method == 'POST':
+        if not can_review():
+            return jsonify(code=1, msg='重新同步台账需要资金审核管理权限'), 403
+        try:
+            sync_txt()
+        except Exception as exc:
+            _record_sync_failure(exc)
+            current_app.logger.error('资金主动同步失败 stage=ledger_sync error_type=%s', type(exc).__name__)
+            return jsonify(code=1, state='failed', msg='数据库记录不变，台账仍未同步；请检查目录权限及磁盘后重试'), 503
+    conn = get_funds_db()
+    try:
+        state = funds_ledger.status(conn)
+    finally:
+        conn.close()
+    return jsonify(code=0, can_sync=can_review(), **state)
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["PUT"])

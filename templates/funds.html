@@ -26,6 +26,7 @@
 <div class="page-head"><div><p class="ux-eyebrow">FINANCE / LEDGER</p><h1>资金台账</h1><p class="ux-head-sub">统一管理经费收支、审批状态与资金流向。</p></div><div class="actions"><button type="button" onclick="doExport()">导出资金 CSV</button></div></div>
 
 <div class="container-fluid px-3 py-3">
+  <div class="actions"><p id="funds-ledger-state" role="status" aria-live="polite">正在核对 TXT 台账同步状态…</p>{% if can_review %}<button type="button" id="funds-ledger-repair" onclick="repairFundsLedger(this)">重新同步台账</button>{% endif %}</div>
   <div class="row mb-3">
     <div class="col-md-3 col-6 mb-2"><div class="card stat-card income"><div class="value" id="sIn">--</div><div class="label">总进账</div></div></div>
     <div class="col-md-3 col-6 mb-2"><div class="card stat-card expense"><div class="value" id="sOut">--</div><div class="label">总支出</div></div></div>

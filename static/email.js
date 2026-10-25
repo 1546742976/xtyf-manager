@@ -68,7 +68,7 @@
         return `<article class="daily-card">
           <strong>${esc(m.name)}</strong><p>${esc(m.address||'未绑定')} · ${m.verified?'已验证':'未验证'}${!m.is_active||m.deleted_at?' · 账户停用':''}</p>
           <button class="btn" type="button" data-mail-member="${m.id}" data-paused="${m.paused?'0':'1'}">${m.paused?'恢复提醒':'暂停提醒'}</button>
-          <form data-mail-prefs="${m.id}" class="ux-account-form"><label><input name="assignment_enabled" type="checkbox" ${p.assignment_enabled?'checked':''} ${p.assignment_enabled===undefined?'disabled':''}> 即时任务指派邮件</label>
+          <form data-mail-prefs="${m.id}" class="ux-account-form"><label><input name="assignment_enabled" type="checkbox" ${p.assignment_enabled?'checked':''} ${p.assignment_enabled===undefined?'disabled':''}> 任务指派汇总邮件</label>
             <label><input name="morning_enabled" type="checkbox" ${p.morning_enabled?'checked':''}> 个人详细汇总</label>
             <label>间隔（0.5–7 天）<input name="morning_interval_days" type="number" min="0.5" max="7" step="0.5" value="${p.morning_interval_hours/24}" required></label>
             <label><input name="daily_enabled" type="checkbox" ${p.daily_enabled?'checked':''}> 团队详细汇总</label>

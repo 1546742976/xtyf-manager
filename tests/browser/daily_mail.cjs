@@ -4,6 +4,18 @@ const {spawn,spawnSync}=require('node:child_process');
 const {chromium,webkit,devices}=require('playwright');
 const root=path.resolve(__dirname,'../..'),output=path.join(root,'.venv','daily-mail-check');fs.mkdirSync(output,{recursive:true});
 async function api(page,url,data){return page.evaluate(async({url,data})=>{const r=await fetch(url,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return {status:r.status,body:await r.json()};},{url,data});}
+async function imageUpload(page,id,stage){
+  const form=page.locator(`[data-progress-form=${stage}]`), endpoint=`/api/daily-projects/${id}/groups/${stage}`;
+  const bytes=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=3000;canvas.height=100;canvas.getContext('2d').fillRect(0,0,5,5);return canvas.toDataURL('image/png').split(',')[1];});
+  await form.locator('[name=files]').setInputFiles({name:'transparent.png',mimeType:'image/png',buffer:Buffer.from(bytes,'base64')});
+  const prepared=await page.evaluate(async stage=>{const original=document.querySelector(`[data-progress-form=${stage}] [name=files]`).files[0];const result=await DailyImages.prepare(original);const bitmap=await createImageBitmap(result.file);const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;const ctx=canvas.getContext('2d');ctx.drawImage(bitmap,0,0);const info={width:bitmap.width,alpha:ctx.getImageData(bitmap.width-1,0,1,1).data[3]};bitmap.close();return info;},stage);
+  assert.equal(prepared.width,2048);assert.equal(prepared.alpha,0);
+  let uploads=0;const listener=request=>{if(request.method()==='POST'&&request.url().endsWith(endpoint+'/progress'))uploads++;};page.on('request',listener);
+  await page.route('**'+endpoint+'/preflight?*',route=>route.fulfill({status:409,json:{ok:false,error:'预检版本变化'}}));
+  await form.locator('[name=note]').fill('图片上传草稿');await form.locator('button').click();await form.locator('.form-message').filter({hasText:'预检版本变化'}).waitFor();
+  assert.equal(uploads,0);assert.equal(await form.locator('[name=files]').evaluate(input=>input.files.length),1);assert.equal(await form.locator('[name=note]').inputValue(),'图片上传草稿');
+  await page.unroute('**'+endpoint+'/preflight?*');await form.locator('button').click();await form.locator('.form-message').filter({hasText:'进度已保存'}).waitFor();assert.equal(uploads,1);page.off('request',listener);
+}
 (async()=>{
   const python=process.env.REVIEW_PYTHON||'python';
   const server=spawn(python,['-B',path.join(__dirname,'server.py')],{cwd:root,env:{...process.env,MAIL_MODE:'preview',PUBLIC_BASE_URL:'https://team.example'},stdio:['ignore','pipe','pipe']});
@@ -37,6 +49,7 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.route(`**/api/daily-projects/${id}/groups/${vision}/progress`,r=>r.request().method()==='POST'?r.fulfill({status:409,json:{ok:false,error:'分配或进度已变化'}}):r.continue());
     await groupForm(page,vision).locator('button').click();await groupForm(page,vision).locator('.form-message').filter({hasText:'输入已保留'}).waitFor();assert.equal(await groupForm(page,vision).locator('[name=note]').inputValue(),'尚未提交的视觉草稿');
     await page.unroute(`**/api/daily-projects/${id}/groups/${vision}/progress`);checks.push('goal creation, group progress, cross-group draft retention and conflict recovery');
+    await imageUpload(page,id,mechanical);checks.push('local image resize, alpha retention, preflight denial and draft retry');
     for(const theme of ['light','dark']){
       await api(page,'/api/account/preferences',{theme});
       for(const width of [375,390,767,768,1280]){
@@ -113,6 +126,7 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
       phoneBrowser=await webkit.launch({headless:true,executablePath:process.env.REVIEW_WEBKIT_PATH});
       const context=await phoneBrowser.newContext({...devices['iPhone 13']});await context.addCookies(await page.context().cookies());const phone=await context.newPage();phone.on('pageerror',e=>errors.push(e.message));
       await phone.goto(base+`/daily-projects/${id}`);await groupForm(phone,mechanical).waitFor();assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+      await imageUpload(phone,id,mechanical);
       await groupForm(phone,mechanical).locator('[name=note]').fill('WebKit 手机更新');await groupForm(phone,mechanical).locator('button').click();await groupForm(phone,mechanical).locator('.form-message').filter({hasText:'进度已保存'}).waitFor();await phone.screenshot({path:path.join(output,'daily-webkit-iphone.png'),fullPage:true});checks.push('iPhone WebKit simulated group update');
     }
     assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:true,checks,errors},null,2));console.log('DAILY_MAIL_BROWSER_OK '+JSON.stringify(checks));

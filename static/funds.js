@@ -131,6 +131,7 @@ function resetF(){ document.querySelectorAll('#ft,#fkw,#famin,#famax,#fdf,#fdt')
 function setSort(f){ sort.order=(sort.by===f?(sort.order==='ASC'?'DESC':'ASC'):'DESC'); sort.by=f; reload(); }
 
 function reload(){
+  loadLedgerStatus();
   var p = new URLSearchParams();
   [{id:'ft',key:'record_type'},{id:'fkw',key:'keyword'},{id:'famin',key:'amount_min'},{id:'famax',key:'amount_max'},{id:'fdf',key:'date_from'},{id:'fdt',key:'date_to'}].forEach(function(x){
     var v = document.getElementById(x.id).value.trim(); if(v) p.append(x.key,v);
@@ -158,6 +159,30 @@ function reload(){
         '</tr>';
     }).join('') : '';
   }).catch(function(e){ fundsToast('记录加载失败：'+e.message,'error'); });
+}
+
+async function loadLedgerStatus() {
+  var status = document.getElementById('funds-ledger-state');
+  if (!status) return;
+  try {
+    var response = await fetch('/funds/api/ledger-sync'), result = await response.json();
+    if (!response.ok || result.code !== 0) throw new Error(result.msg || '无法读取台账同步状态');
+    status.textContent = result.state === 'ok' ? 'TXT 台账已同步' : '数据库已保存，TXT 台账未同步；请使用“重新同步台账”或联系资金管理人员。';
+    status.dataset.state = result.state;
+    var button = document.getElementById('funds-ledger-repair');
+    if (button) button.hidden = !result.can_sync;
+  } catch (error) { status.textContent = '台账同步状态暂不可用：' + error.message; }
+}
+
+async function repairFundsLedger(button) {
+  button.disabled = true;
+  try {
+    var response = await fetch('/funds/api/ledger-sync', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    var result = await response.json();
+    if (!response.ok || result.code !== 0) throw new Error(result.msg || '台账同步失败');
+    fundsToast(result.state === 'ok' ? 'TXT 台账已重新同步，资金记录未改变' : '同步期间又有新记录，请再次同步核对', result.state === 'ok' ? 'success' : 'error');
+  } catch (error) { fundsToast(error.message, 'error'); }
+  finally { button.disabled = false; await loadLedgerStatus(); }
 }
 
 async function handleAdd(e){
