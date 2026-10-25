@@ -60,9 +60,13 @@ class AuditTests(unittest.TestCase):
             db.execute('UPDATE security_audit SET details=? WHERE id=2', (json.dumps({'request_audit_id': 3}),))
             db.execute('INSERT INTO invoice_jobs VALUES(2)')
             db.commit()
+            db.execute("ALTER TABLE security_audit ADD COLUMN level TEXT NOT NULL DEFAULT 'critical'")
             with patch.dict('os.environ', {'AUDIT_RETENTION_DAYS': '90', 'AUDIT_MAX_ROWS': '4'}):
-                security.cleanup_audit_rows(db)
-            self.assertEqual([row[0] for row in db.execute('SELECT id FROM security_audit ORDER BY id')], [1, 2, 3, 8])
+                plan = security.cleanup_audit_rows(db)
+                self.assertEqual(plan['ids'], [4])
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM security_audit').fetchone()[0], 8)
+                security.cleanup_audit_rows(db, confirmed=True)
+            self.assertEqual([row[0] for row in db.execute('SELECT id FROM security_audit ORDER BY id')], [1, 2, 3, 5, 6, 7, 8])
 
 
 if __name__ == '__main__':
