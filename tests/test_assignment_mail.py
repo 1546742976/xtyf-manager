@@ -34,6 +34,43 @@ class AssignmentMailTests(unittest.TestCase):
     def jobs(self):
         return [j for j in self.admin.get('/api/admin/mail').get_json()['jobs'] if j['member_id'] == self.mid and j['kind'] == 'assignment']
 
+    def test_assignments_aggregate_with_fixed_ten_minute_deadline(self):
+        from modules.mail_service import claim
+        now = datetime.now(TZ)
+        with patch('modules.task_assignment_mail.datetime') as clock:
+            clock.now.return_value = now
+            self.admin.post('/api/task', json={'title': '第一项', 'owner_id': self.mid})
+            clock.now.return_value = now + timedelta(minutes=9)
+            self.admin.post('/api/task', json={'title': '第二项', 'owner_id': self.mid})
+        jobs = self.db.execute("SELECT * FROM mail_jobs WHERE member_id=? AND kind='assignment'", (self.mid,)).fetchall()
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]['next_at'], now.timestamp() + 600)
+        claim(self.db, now)
+        self.assertEqual(self.db.execute('SELECT state FROM mail_jobs WHERE id=?', (jobs[0]['id'],)).fetchone()[0], 'pending')
+        state, messages = self.deliver(jobs[0]['id'], now + timedelta(minutes=10))
+        self.assertEqual(state, 'sent')
+        text = messages[0].get_body(preferencelist=('plain',)).get_content()
+        self.assertIn('第一项', text)
+        self.assertIn('第二项', text)
+
+    def test_aggregation_filters_revoked_tasks_and_starts_new_window(self):
+        now = datetime.now(TZ)
+        with patch('modules.task_assignment_mail.datetime') as clock:
+            clock.now.return_value = now
+            first = self.admin.post('/api/task', json={'title': '后来取消', 'owner_id': self.mid}).get_json()['id']
+            self.admin.post('/api/task', json={'title': '仍需执行', 'owner_id': self.mid})
+            clock.now.return_value = now + timedelta(minutes=10)
+            self.admin.post('/api/task', json={'title': '下一窗口', 'owner_id': self.mid})
+        self.assertEqual(len(self.jobs()), 2)
+        self.admin.post(f'/api/task/{first}', json={'version': 1, 'status': '已取消', 'note': '测试取消'})
+        oldest = min(job['id'] for job in self.jobs())
+        state, messages = self.deliver(oldest, now + timedelta(minutes=10))
+        self.assertEqual(state, 'sent')
+        text = messages[0].get_body(preferencelist=('plain',)).get_content()
+        self.assertIn('仍需执行', text)
+        self.assertNotIn('后来取消', text)
+        self.assertNotIn('下一窗口', text)
+
     def deliver(self, job_id, at=None):
         job = dict(self.db.execute('SELECT * FROM mail_jobs WHERE id=?', (job_id,)).fetchone())
         job['attempts'] = 1
