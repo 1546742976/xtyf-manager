@@ -40,7 +40,7 @@ async function api(page,url,data,method='POST') {
     await page.locator('#account-result').filter({hasText:'模拟操作失败'}).waitFor();assert.equal(await page.locator('#account-password-form [name=new]').inputValue(),'action-test-password');
     await page.unroute('**/api/password');await page.locator('#account-password-form button').click();await page.waitForURL(base+'/');
     checks.push('login network failure and password-save rejection retain inputs and recover');
-    await api(page,'/api/admin/permissions/1',{permissions:['funds.review','invoices.manage']});
+    assert.equal((await api(page,'/api/admin/permissions/1',{permissions:['funds.review','invoices.manage']})).status,409);
     const task=(await api(page,'/api/task',{title:'按钮失败测试任务'})).body;
 
     await page.goto(base+'/tasks');await page.locator('#new-task-toggle').click();await page.locator('#create-form [name=title]').fill('保留任务输入');
@@ -148,9 +148,10 @@ async function api(page,url,data,method='POST') {
     const [download]=await Promise.all([page.waitForEvent('download'),page.locator('[onclick="exportCSV()"]').click()]);assert.equal(download.suggestedFilename(),'invoices.csv');
     checks.push('failed download preserves page and subsequent successful download works');
 
-    await page.goto(base+'/admin/security');await page.locator('[data-save-permissions]').first().waitFor();await reject('**/api/admin/permissions/1',403);
-    await page.locator('[data-member-id="1"] [data-save-permissions]').click();await page.locator('#permission-result').filter({hasText:'模拟操作失败'}).waitFor();await idle('[data-member-id="1"] [data-save-permissions]');
-    await page.unroute('**/api/admin/permissions/1');checks.push('permission-save rejection restores button');
+    const permissionMember=(await api(page,'/api/member',{name:'权限失败样本',username:'permission-failure',password:'synthetic-password',role:'member'})).body;
+    await page.goto(base+'/admin/security');await page.locator('[data-save-permissions]').first().waitFor();await reject(`**/api/admin/permissions/${permissionMember.id}`,403);
+    await page.locator(`[data-member-id="${permissionMember.id}"] [data-save-permissions]`).click();await page.locator('#permission-result').filter({hasText:'模拟操作失败'}).waitFor();await idle(`[data-member-id="${permissionMember.id}"] [data-save-permissions]`);
+    await page.unroute(`**/api/admin/permissions/${permissionMember.id}`);checks.push('permission-save rejection restores button');
     await reject('**/discussions/api/topics?*',503);await page.goto(base+'/discussions');await page.locator('#collab-list-retry').waitFor();
     await page.unroute('**/discussions/api/topics?*');await page.locator('#collab-list-retry').click();await page.locator('#collab-topics').filter({hasText:'还没有话题'}).waitFor();checks.push('local collaboration loading failure has a working retry');
     await reject('**/logout',500);await page.locator('.ws-signout').click();await page.locator('#business-feedback').filter({hasText:'退出登录失败'}).waitFor();await idle('.ws-signout');assert.equal(page.url(),base+'/discussions');
