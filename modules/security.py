@@ -6,7 +6,6 @@ import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
 from contextlib import closing
 from functools import wraps
 
@@ -15,6 +14,7 @@ from flask import (Blueprint, current_app, g, jsonify, redirect, render_template
 
 from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str, error_response
 from modules.client_address import client_address
+from modules.audit_retention import ROUTINE_ACTIONS, migrate_classification, cleanup_audit_rows  # noqa: F401
 
 bp = Blueprint("security", __name__)
 PERMISSIONS = {"funds.review": "资金审核", "invoices.manage": "发票管理", "assets.manage": "资产管理"}
@@ -26,7 +26,6 @@ AUDIT_FIELDS = {"id", "ids", "member_id", "record_type", "amount", "invoice_coun
 LOGIN_ENDPOINTS = {"login", "client_api.login"}
 _audit_lock = threading.Lock()
 _audit_rate = {}
-_audit_writes = 0
 
 
 def _limited_audit_event(kind):
@@ -43,37 +42,6 @@ def _limited_audit_event(kind):
                 return False
         _audit_rate[key] = now
         return True
-
-
-def cleanup_audit_rows(db):
-    """Capacity takes priority over age; pending and complete job chains are exempt.
-
-    Zero disables each limit independently. A single transaction prevents cleanup
-    from racing a new job reference; protected rows may exceed the configured cap.
-    """
-    days = max(0, int(os.environ.get('AUDIT_RETENTION_DAYS', '90')))
-    limit = max(0, int(os.environ.get('AUDIT_MAX_ROWS', '100000')))
-    protected = """WITH RECURSIVE protected(id) AS (
-        SELECT id FROM security_audit WHERE outcome='pending'
-        UNION SELECT audit_id FROM invoice_jobs
-        UNION SELECT CAST(json_extract(a.details,'$.request_audit_id') AS INTEGER)
-          FROM security_audit a JOIN protected p ON p.id=a.id
-          WHERE json_valid(a.details) AND json_type(a.details,'$.request_audit_id')='integer'
-    ) """
-    db.execute('SAVEPOINT audit_cleanup')
-    try:
-        if days:
-            cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
-            db.execute(protected + 'DELETE FROM security_audit WHERE created_at<? AND id NOT IN (SELECT id FROM protected)', (cutoff,))
-        if limit:
-            excess = max(0, db.execute('SELECT COUNT(*) FROM security_audit').fetchone()[0] - limit)
-            if excess:
-                db.execute(protected + 'DELETE FROM security_audit WHERE id IN (SELECT id FROM security_audit WHERE id NOT IN (SELECT id FROM protected) ORDER BY id LIMIT ?)', (excess,))
-        db.execute('RELEASE audit_cleanup')
-    except Exception:
-        db.execute('ROLLBACK TO audit_cleanup')
-        db.execute('RELEASE audit_cleanup')
-        raise
 
 
 def _start_request_audit(user):
@@ -125,6 +93,7 @@ def migrate_security(db):
     """)
     db.execute("BEGIN IMMEDIATE")
     try:
+        migrate_classification(db)
         cols = {row[1] for row in db.execute("PRAGMA table_info(members)")}
         if "must_change_password" not in cols:
             db.execute("ALTER TABLE members ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
@@ -254,7 +223,7 @@ def init_security(app):
                 request._cached_data = raw  # Retain the bounded body for get_json/audit.
         user = current_user() if request.endpoint != "static" else None
         unsafe = request.method not in SAFE_METHODS
-        if user and (unsafe or request.endpoint in AUDITED_READS):
+        if user and (unsafe or request.endpoint in AUDITED_READS) and request.endpoint not in ROUTINE_ACTIONS:
             _start_request_audit(user)
         elif unsafe and request.endpoint not in LOGIN_ENDPOINTS and _limited_audit_event('anonymous'):
             current_app.logger.warning('未认证写请求已拒绝审计存储: %s', request.path)
@@ -302,7 +271,7 @@ def init_security(app):
         # Preserve authenticated rejected writes without touching their bodies.
         if request.method not in SAFE_METHODS and not getattr(g, 'audit_id', None):
             user = current_user()
-            if user:
+            if user and (request.endpoint not in ROUTINE_ACTIONS or response.status_code >= 400):
                 _start_request_audit(user)
         if (request.method not in SAFE_METHODS and request.endpoint in LOGIN_ENDPOINTS
                 and not getattr(g, 'audit_id', None)):
@@ -334,17 +303,6 @@ def init_security(app):
                                (outcome, response.status_code, now_str(), json.dumps(g.audit_details, ensure_ascii=False)[:20000], audit_id))
             except sqlite3.Error:
                 current_app.logger.exception("Could not finalize audit record %s", audit_id)
-        if audit_id:
-            global _audit_writes
-            with _audit_lock:
-                _audit_writes += 1
-                cleanup_due = _audit_writes % 500 == 0
-            if cleanup_due:
-                try:
-                    with closing(sqlite3.connect(DB_PATH, timeout=5)) as db, db:
-                        cleanup_audit_rows(db)
-                except sqlite3.Error:
-                    current_app.logger.exception('审计保留清理失败')
         return response
 
 
@@ -418,6 +376,10 @@ def audit_get():
             raise ValueError()
     except ValueError:
         return jsonify(ok=False, error="分页参数不合法"), 400
+    level = request.args.get('level', 'critical')
+    if level not in {'critical', 'routine', 'all'}:
+        return jsonify(ok=False, error='审计分类不合法'), 400
     rows = [dict(row) for row in get_db().execute(
-        "SELECT * FROM security_audit WHERE (?=0 OR id<?) ORDER BY id DESC LIMIT 51", (before, before))]
+        "SELECT * FROM security_audit WHERE (?=0 OR id<?) AND (?='all' OR level=?) ORDER BY id DESC LIMIT 51",
+        (before, before, level, level))]
     return jsonify(ok=True, events=rows[:50], next_before=rows[49]["id"] if len(rows) > 50 else None)
