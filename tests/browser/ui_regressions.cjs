@@ -58,7 +58,7 @@ fs.mkdirSync(output, {recursive:true});
       await page.locator('#import-form [name=text]').fill('验收成员,,ui-'+engine+'\n验收重名,,ui-'+engine);
       await page.locator('#import-form [type=submit]').click();
       await page.locator('#member-import-result').waitFor();
-      assert.match(await page.locator('#member-import-result').innerText(),/成功 1 人，失败 1 行/);
+      assert.match(await page.locator('#member-import-result').innerText(),/整批拒绝，未创建账号/);
       assert.match(await page.locator('#member-import-result').innerText(),/2/);
       const task=await page.evaluate(async()=>{
         const me=await (await fetch('/api/client/bootstrap')).json();
