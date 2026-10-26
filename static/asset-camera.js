@@ -3,6 +3,8 @@
   'use strict';
   const $=id=>document.getElementById(id),host=$('asset-scan-camera'),scanner=window.AssetScan;
   let reader=null,stream=null,generation=0,last='',failed='',sound=true,audio=null,flashTimer=null,decodeTimer=null;
+  let nativeDetector=null,decodeWorker=null,workerBusy=false,workerWatchdog=null,nativeMisses=0;
+  const cameraScriptURL=document.currentScript?.src||'';
   let scanSerial=0,hadLiveCamera=false;
   const recentLabels=new Map();
   // The camera only decodes; AssetScan owns asynchronous lookups and queue deduplication.
@@ -10,7 +12,9 @@
   const RECENT_LABEL_MS=2500,MAX_RECENT_LABELS=64;
   // Decode a capped-size frame at bounded intervals, rather than asking ZXing
   // to decode the full-resolution stream indefinitely on every video tick.
-  const SCAN_INTERVAL_MS=260,MAX_DECODE_WIDTH=1024;
+  const SCAN_INTERVAL_MS=260,NATIVE_INTERVAL_MS=120,MAX_DECODE_WIDTH=800,WORKER_TIMEOUT_MS=2500;
+  // Decode full video only with the browser's native engine; copy a smaller
+  // centred region for ZXing. The video element itself stays full resolution.
   const frameCanvas=document.createElement('canvas');
   const frameContext=frameCanvas.getContext('2d',{willReadFrequently:true});
   host.innerHTML=`<div class="asset-camera-frame" id="asset-camera-frame">
@@ -91,6 +95,8 @@
     // dialog's own close handler cancels those jobs when the session ends.
     $('asset-camera-retry').hidden=true;$('asset-camera-retry').disabled=false;
     if(decodeTimer!==null){clearTimeout(decodeTimer);decodeTimer=null;}
+    if(workerWatchdog!==null){clearTimeout(workerWatchdog);workerWatchdog=null;}
+    decodeWorker?.terminate();decodeWorker=null;workerBusy=false;nativeDetector=null;nativeMisses=0;
     reader?.reset();reader=null;
     const video=$('asset-camera-video');video.pause();video.srcObject=null;
     stream?.getTracks().forEach(t=>t.stop());stream=null;
@@ -140,26 +146,105 @@
     return true;
   }
   $('asset-camera-retry').onclick=()=>{if(failed)found(failed,true);};
-  function scheduleDecode(own){
-    if(own!==generation||!stream||!reader)return;
-    decodeTimer=setTimeout(()=>decodeFrame(own),SCAN_INTERVAL_MS);
+  function scheduleDecode(own,delay=SCAN_INTERVAL_MS){
+    if(own!==generation||!stream||(!reader&&!decodeWorker&&!nativeDetector))return;
+    if(decodeTimer!==null)clearTimeout(decodeTimer);
+    decodeTimer=setTimeout(()=>{decodeTimer=null;void decodeFrame(own);},delay);
   }
-  function decodeFrame(own){
-    if(own!==generation||!reader||!stream)return;
+  function videoReady(){
     const video=$('asset-camera-video');
-    // A slow lookup never pauses camera decoding of the next frame.
-    if(video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA&&frameContext&&video.videoWidth&&video.videoHeight){
+    return video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA&&video.videoWidth>0&&video.videoHeight>0;
+  }
+  function grabFrame(){
+    if(!frameContext||!videoReady())return null;
+    const video=$('asset-camera-video'),vw=video.videoWidth,vh=video.videoHeight;
+    // The target guide is centred; do not expend CPU on the outer margins.
+    const cropWidth=Math.round(vw*.9),cropHeight=Math.round(vh*.8);
+    const width=Math.min(MAX_DECODE_WIDTH,cropWidth);
+    const height=Math.max(1,Math.round(cropHeight*width/cropWidth));
+    if(frameCanvas.width!==width||frameCanvas.height!==height){frameCanvas.width=width;frameCanvas.height=height;}
+    frameContext.drawImage(video,Math.round((vw-cropWidth)/2),Math.round((vh-cropHeight)/2),cropWidth,cropHeight,0,0,width,height);
+    return {width,height,pixels:frameContext.getImageData(0,0,width,height).data};
+  }
+  function disableWorker(own){
+    if(workerWatchdog!==null){clearTimeout(workerWatchdog);workerWatchdog=null;}
+    decodeWorker?.terminate();decodeWorker=null;workerBusy=false;
+    if(!nativeDetector&&own===generation&&stream){reader??=new ZXing.MultiFormatReader();scheduleDecode(own);}
+  }
+  function submitWorkerFrame(own){
+    if(workerBusy||!decodeWorker||own!==generation||!videoReady())return false;
+    try{
+      const frame=grabFrame();if(!frame)return false;
+      workerBusy=true;
+      // Transfer ownership rather than cloning a new multi-megabyte RGBA buffer.
+      decodeWorker.postMessage({generation:own,width:frame.width,height:frame.height,rgba:frame.pixels.buffer},[frame.pixels.buffer]);
+      workerWatchdog=setTimeout(()=>{if(own===generation&&workerBusy)disableWorker(own);},WORKER_TIMEOUT_MS);
+      return true;
+    }catch(_){disableWorker(own);return false;}
+  }
+  async function prepareDecoder(own){
+    if(typeof window.BarcodeDetector==='function'){
       try{
-        const width=Math.min(MAX_DECODE_WIDTH,video.videoWidth);
-        const height=Math.max(1,Math.round(video.videoHeight*width/video.videoWidth));
-        if(frameCanvas.width!==width||frameCanvas.height!==height){frameCanvas.width=width;frameCanvas.height=height;}
-        frameContext.drawImage(video,0,0,width,height);
-        const pixels=frameContext.getImageData(0,0,width,height);
-        const luminance=new ZXing.RGBLuminanceSource(new Int32Array(pixels.data.buffer,pixels.data.byteOffset,width*height),width,height);
-        const bitmap=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminance));
-        const match=reader.decode(bitmap);
-        if(match&&own===generation)void found(match.getText(),false,own);
-      }catch(_){/* Most frames contain no readable code; keep scanning. */}
+        const formats=await window.BarcodeDetector.getSupportedFormats();
+        // Code128 is used by printed labels; QR is used by supplier packages.
+        if(own===generation&&['qr_code','code_128'].every(f=>formats.includes(f))){
+          nativeDetector=new window.BarcodeDetector({formats});
+        }
+      }catch(_){/* Browser API is optional. */}
+    }
+    if(own!==generation)return;
+    if(typeof Worker==='function'){
+      try{
+        const workerURL=new URL('asset-zxing-worker.js',cameraScriptURL||new URL('/static/asset-camera.js',location.href).href);
+        const worker=new Worker(workerURL.href);
+        decodeWorker=worker;
+        worker.onmessage=event=>{
+          if(own!==generation||decodeWorker!==worker||!workerBusy||event.data?.generation!==own)return;
+          workerBusy=false;
+          if(workerWatchdog!==null){clearTimeout(workerWatchdog);workerWatchdog=null;}
+          if(typeof event.data.text==='string'&&event.data.text)void found(event.data.text,false,own);
+          if(!nativeDetector)scheduleDecode(own);
+        };
+        worker.onerror=()=>{if(own===generation&&decodeWorker===worker)disableWorker(own);};
+      }catch(_){/* Some embedded WebViews do not support workers. */}
+    }
+    if(!nativeDetector&&!decodeWorker)reader=new ZXing.MultiFormatReader();
+  }
+  async function decodeFrame(own){
+    if(own!==generation||!stream)return;
+    if(!videoReady()){scheduleDecode(own);return;}
+    if(nativeDetector){
+      try{
+        const results=await nativeDetector.detect($('asset-camera-video'));
+        if(own!==generation||!stream)return;
+        if(results?.length){
+          nativeMisses=0;
+          const text=results.find(result=>typeof result.rawValue==='string'&&result.rawValue.trim())?.rawValue;
+          if(text)void found(text,false,own);
+        }else if(++nativeMisses>=7){
+          // Native implementations cover different symbologies. Periodically
+          // ask ZXing for uncommon vendor labels without blocking preview.
+          nativeMisses=0;submitWorkerFrame(own);
+        }
+      }catch(_){if(own===generation){nativeDetector=null;if(!decodeWorker&&!reader)reader=new ZXing.MultiFormatReader();}}
+      if(own===generation&&stream)scheduleDecode(own,nativeDetector?NATIVE_INTERVAL_MS:SCAN_INTERVAL_MS);
+      return;
+    }
+    if(decodeWorker){
+      if(!submitWorkerFrame(own))scheduleDecode(own);
+      return; // The worker response schedules the next decode; no backlog.
+    }
+    if(reader&&frameContext){
+      try{
+        const frame=grabFrame();
+        if(frame){
+          const luminance=new ZXing.RGBLuminanceSource(
+            new Int32Array(frame.pixels.buffer,frame.pixels.byteOffset,frame.width*frame.height),
+            frame.width,frame.height);
+          const match=reader.decode(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminance)));
+          if(match&&own===generation)void found(match.getText(),false,own);
+        }
+      }catch(_){/* No readable label in this frame. */}
       finally{reader?.reset();}
     }
     scheduleDecode(own);
@@ -173,7 +258,7 @@
     try{
       const device=$('asset-camera-device').value;
       const cameraChoice=device?{deviceId:{exact:device}}:{facingMode:{ideal:'environment'}};
-      const videoConstraints={...cameraChoice,width:{ideal:1280},height:{ideal:720},frameRate:{ideal:15,max:24}};
+      const videoConstraints={...cameraChoice,width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}};
       const openedStream=await navigator.mediaDevices.getUserMedia({audio:false,video:videoConstraints});
       if(own!==generation){openedStream.getTracks().forEach(t=>t.stop());return;}
       stream=openedStream;hadLiveCamera=true;
@@ -182,8 +267,9 @@
       video.srcObject=stream;
       await video.play();
       if(own!==generation)return;
-      reader=new ZXing.MultiFormatReader();
-      scheduleDecode(own);
+      await prepareDecoder(own);
+      if(own!==generation)return;
+      scheduleDecode(own,nativeDetector?NATIVE_INTERVAL_MS:SCAN_INTERVAL_MS);
       try{
         const devices=(await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==='videoinput');
         if(own!==generation)return;

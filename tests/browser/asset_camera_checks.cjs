@@ -5,6 +5,12 @@ module.exports=async function(page,unit){
   await page.locator('#asset-scan-mode').selectOption('general');
   await page.evaluate(()=>{
     window.originalReader=ZXing.MultiFormatReader;
+    // This test stubs ZXing pixels, so force the legacy engine in its isolated page.
+    // Native BarcodeDetector / Worker have their own regression coverage.
+    window.originalBarcodeDetector=window.BarcodeDetector;
+    window.originalWorker=window.Worker;
+    Object.defineProperty(window,'BarcodeDetector',{configurable:true,value:undefined});
+    Object.defineProperty(window,'Worker',{configurable:true,value:undefined});
     const video=document.getElementById('asset-camera-video');
     Object.defineProperty(video,'srcObject',{configurable:true,get:()=>null,set(){}});
     for(const [key,value] of Object.entries({readyState:2,videoWidth:2,videoHeight:2}))Object.defineProperty(video,key,{configurable:true,value});
@@ -27,5 +33,10 @@ module.exports=async function(page,unit){
   assert.equal(calls,2);await page.locator('#asset-camera-retry').waitFor({state:'hidden'});
   await page.locator('#asset-camera-stop').click();
   await page.locator('#asset-scan-close').click();await page.unroute('**/api/assets/scan/resolve',handler);
-  await page.evaluate(()=>{ZXing.MultiFormatReader=window.originalReader;CanvasRenderingContext2D.prototype.drawImage=window.originalDraw;});
+  await page.evaluate(()=>{
+    ZXing.MultiFormatReader=window.originalReader;
+    CanvasRenderingContext2D.prototype.drawImage=window.originalDraw;
+    Object.defineProperty(window,'BarcodeDetector',{configurable:true,value:window.originalBarcodeDetector});
+    Object.defineProperty(window,'Worker',{configurable:true,value:window.originalWorker});
+  });
 };
