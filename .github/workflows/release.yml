@@ -56,6 +56,7 @@ jobs:
       release_version: ${{needs.resolve.outputs.version}}
       android_version_code: ${{needs.resolve.outputs.code}}
       signed_android: true
+      build_packages: true
     secrets: inherit
     permissions:
       contents: read

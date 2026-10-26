@@ -11,6 +11,7 @@ import unittest
 
 TESTS_DIR = Path(__file__).resolve().parent
 SHARDS = ("tasks", "members", "finance", "assets", "collaboration", "platform")
+SPLIT_SHARDS = ("tasks-1of2", "tasks-2of2", "members-1of2", "members-2of2")
 
 
 def shard_for(module_name: str) -> str:
@@ -38,9 +39,22 @@ def shard_for(module_name: str) -> str:
     return "platform"
 
 
+def files_for_shard(shard: str, files: list[Path]) -> list[Path]:
+    """Select disjoint file partitions that reconstruct the original group."""
+    if shard in SHARDS:
+        group, offset = shard, None
+    elif shard in SPLIT_SHARDS:
+        group, partition = shard.rsplit("-", 1)
+        offset = int(partition[0]) - 1
+    else:
+        raise ValueError(f"Unknown CI shard: {shard}")
+    selected = [path for path in sorted(files) if shard_for(path.stem) == group]
+    return selected if offset is None else selected[offset::2]
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or argv[1] not in SHARDS:
-        print(f"Usage: python tests/ci_shards.py <{'|'.join(SHARDS)}>", file=sys.stderr)
+    if len(argv) != 2 or argv[1] not in SHARDS + SPLIT_SHARDS:
+        print(f"Usage: python tests/ci_shards.py <{'|'.join(SHARDS + SPLIT_SHARDS)}>", file=sys.stderr)
         return 2
 
     files = sorted(TESTS_DIR.glob("test_*.py"))
@@ -49,7 +63,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     shard = argv[1]
-    selected = [path for path in files if shard_for(path.stem) == shard]
+    selected = files_for_shard(shard, files)
     if not selected:
         print(f"CI shard {shard!r} has no test modules", file=sys.stderr)
         return 2
