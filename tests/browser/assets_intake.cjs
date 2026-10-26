@@ -42,7 +42,8 @@ async function main(){
   async function assertNoOverflow(){assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),true,'page fits viewport');}
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]){
     engineName=label;phase='launch';browser=await engine.launch();
-    const context=await browser.newContext({...options,storageState:await api.storageState()});
+    // Fault-injection routes bypass Service Workers; pwa.cjs exercises the real worker.
+    const context=await browser.newContext({...options,serviceWorkers:'block',storageState:await api.storageState()});
     page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(label+': '+e.message));
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     assert.equal(await page.evaluate(()=>window.AssetLedger.catalog.intake_enabled),true);

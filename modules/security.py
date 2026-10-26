@@ -14,6 +14,7 @@ from flask import (Blueprint, current_app, g, jsonify, redirect, render_template
 
 from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str, error_response
 from modules.client_address import client_address
+from modules.pwa import PUBLIC_ENDPOINTS
 from modules.audit_retention import ROUTINE_ACTIONS, migrate_classification, cleanup_audit_rows  # noqa: F401
 
 bp = Blueprint("security", __name__)
@@ -221,7 +222,8 @@ def init_security(app):
                 if len(raw) > limit:
                     return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
                 request._cached_data = raw  # Retain the bounded body for get_json/audit.
-        user = current_user() if request.endpoint != "static" else None
+        public_pwa = request.endpoint in PUBLIC_ENDPOINTS and request.method in SAFE_METHODS
+        user = current_user() if request.endpoint != "static" and not public_pwa else None
         unsafe = request.method not in SAFE_METHODS
         if user and (unsafe or request.endpoint in AUDITED_READS) and request.endpoint not in ROUTINE_ACTIONS:
             _start_request_audit(user)
@@ -255,7 +257,7 @@ def init_security(app):
 
     @app.after_request
     def finish_request(response):
-        if request.endpoint not in {"static", "web_vendor"}:
+        if request.endpoint not in {"static", "web_vendor"} | PUBLIC_ENDPOINTS:
             response.headers["Cache-Control"] = "no-store"
             response.headers["X-CSRF-Token"] = csrf_token()
             # Inline handlers are still used by the finance pages, so this policy

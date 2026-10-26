@@ -79,3 +79,8 @@ coverage report -m 的未覆盖行和分支继续补测。
 ## 2026-10-22 验收范围
 
 现有 17 组场景加 `ui_regressions` 共 18 组；`diagnostics.cjs` 是辅助模块，不计作套件。完整命令、当前统计及平台边界见 [本轮修复记录](全项目审查修复-2026-10-22.md)。CI 保持 Node 22；本地验证须记录实际 Node 版本。Python 与客户端 Python Playwright 均固定 1.57.0。
+
+
+## 网页与 PWA
+
+[安装与成员使用说明](../usage/网页与PWA.md)；[缓存边界、CI、上线/回滚及待人工验收清单](../technical/PWA迁移与运维.md)。旧客户端兼容入口和客户端 CI 继续保留。

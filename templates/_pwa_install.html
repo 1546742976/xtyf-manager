@@ -1,0 +1,9 @@
+{% if pwa_enabled %}
+<section class="panel pwa-install" aria-labelledby="pwa-title">
+  <h2 id="pwa-title">安装到设备</h2>
+  <p>使用同一套网站，可从桌面或主屏幕直接打开。主题随账户同步，登录状态遵循服务器策略。</p>
+  <button type="button" class="btn primary" id="pwa-install" hidden>安装巡天御风</button>
+  <p id="pwa-status" role="status" aria-live="polite">Chrome / Edge：使用地址栏或浏览器菜单的“安装应用”。iPhone / iPad Safari：分享 → 添加到主屏幕。未提供安装入口时可直接在浏览器使用。</p>
+  <p class="ux-note">离线只显示连接说明，无法查看或修改业务数据。更新准备好后，保存工作并关闭所有本站窗口，再重新打开；不会强制刷新正在填写的页面。</p>
+</section>
+{% endif %}

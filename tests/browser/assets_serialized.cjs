@@ -16,7 +16,8 @@ async function main(){
   const campus=(await post('/api/assets/catalog/campuses',{request_id:crypto.randomUUID(),name:'合成校区'})).id;
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]){
     engineName=label;browser=await engine.launch();
-    const context=await browser.newContext({...options,storageState:await api.storageState()});
+    // Fault-injection routes bypass Service Workers; pwa.cjs exercises the real worker.
+    const context=await browser.newContext({...options,serviceWorkers:'block',storageState:await api.storageState()});
     page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));
     await require('./asset_uncertain_checks.cjs')({page,api,post,base,campus,label});
     await page.goto(base+'/assets');await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();

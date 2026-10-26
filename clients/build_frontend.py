@@ -116,6 +116,8 @@ def adapt_script(text):
 
 
 def adapt_template(name, text):
+    if name in {'_pwa_head.html', '_pwa_install.html'}:
+        return ''  # Website-only: old clients retain their native update/session lifecycle.
     if name == "_security_head.html":
         text = text.replace('<script src="{{ url_for(\'static\', filename=\'security.js\') }}"></script>', '')
     if name == "email_verify.html":

@@ -45,7 +45,8 @@ async function main(){
   const ordinaryApi=await account('assets_ordinary_member','member');
   await post('/api/admin/permissions/'+member,{permissions:['invoices.manage']});
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]){
-    engineName=label;browser=await engine.launch();const context=await browser.newContext({...options,storageState:await api.storageState()});
+    // Fault-injection routes bypass Service Workers; pwa.cjs exercises the real worker.
+    engineName=label;browser=await engine.launch();const context=await browser.newContext({...options,serviceWorkers:'block',storageState:await api.storageState()});
     page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',e=>{errors.push(e.message);console.error('Asset page error ['+engineName+']',e.stack);});
     await page.goto(base+'/admin/security');
     const permissionRow=page.locator(`[data-member-id="${member}"]`);

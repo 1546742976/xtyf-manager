@@ -220,6 +220,8 @@ jobs:
             suites: 'palette_workspace local_collaboration account_avatar'
           - group: ui-clients
             suites: 'account_invoice_ui client_updates_avatar client_connection'
+          - group: pwa
+            suites: 'pwa'
           - group: assets-ledger
             suites: 'assets'
           - group: assets-serialized

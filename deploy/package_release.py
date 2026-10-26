@@ -17,6 +17,12 @@ else:
     from site_updates_snapshot import create_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
+PWA_REQUIRED_FILES = (
+    'modules/pwa.py', 'templates/_pwa_head.html', 'templates/_pwa_install.html',
+    'static/pwa.js', 'static/pwa.css', 'static/pwa/sw.js', 'static/pwa/offline.html',
+    'static/pwa/icon-192.png', 'static/pwa/icon-512.png',
+    'static/pwa/maskable-512.png', 'static/pwa/apple-touch-icon.png',
+)
 
 
 def archive_head(commit):
@@ -82,7 +88,7 @@ def main():
                 raise RuntimeError('Runtime data or reserved name tracked by Git: ' + item.name)
             files[item.name] = source.extractfile(item).read()
     required = ('deploy/update_release.py', 'deploy/consistent_snapshot.py', 'app.py', 'requirements.txt',
-                'clients/ui_release.py', 'clients/update-public-key.pem')
+                'clients/ui_release.py', 'clients/update-public-key.pem') + PWA_REQUIRED_FILES
     if any(name not in files for name in required):
         raise RuntimeError('HEAD does not contain the release scripts yet. Commit them before packaging.')
     files.update(build_ui_from_head(files, commit, args.ui_signing_key, args.installers))

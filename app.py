@@ -59,6 +59,7 @@ from modules.workspace_settings import bp as workspace_settings_bp, migrate as m
 from modules.client_api import create_client_blueprint
 from modules.client_updates import bp as client_updates_bp
 from modules.site_updates import bp as site_updates_bp
+from modules.pwa import init_pwa
 
 # ---- 关键路径与端口（secret.key 用于会话签名，首次运行自动生成）----
 SECRET_PATH = os.environ.get("PROGRESS_SECRET_PATH", os.path.join(BASE_DIR, "secret.key"))
@@ -125,6 +126,8 @@ app.json.ensure_ascii = False
 app.permanent_session_lifetime = timedelta(days=30)
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# Opt in only on HTTPS deployments; loopback HTTP development keeps working.
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get('PROGRESS_COOKIE_SECURE', '').lower() in {'1', 'true', 'yes'}
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 app.config.setdefault("TASK_ATTACHMENTS_DIR", os.environ.get("TASK_ATTACHMENTS_DIR", os.path.join(BASE_DIR, "data", "task_attachments")))
 configure_mail(app)
@@ -214,6 +217,7 @@ app.register_blueprint(item_topics_bp)
 app.register_blueprint(email_bp)
 app.register_blueprint(workspace_settings_bp)
 app.context_processor(theme_context)
+init_pwa(app)
 init_security(app)
 
 

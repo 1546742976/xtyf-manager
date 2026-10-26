@@ -158,8 +158,9 @@ async function adjustCrop(page, mobile) {
     for (const [engine, mobile] of [[chromium, false], [webkit, true]]) {
       const executablePath = engine === webkit ? process.env.REVIEW_WEBKIT_PATH : undefined;
       browser = await engine.launch({headless:true, ...(executablePath ? {executablePath} : {})});
-      const context = await browser.newContext(mobile ? {...devices['iPhone 13'], reducedMotion:'reduce'} :
-        {viewport:{width:1280, height:900}, reducedMotion:'reduce'});
+      // Fault-injection routes bypass Service Workers; pwa.cjs exercises the real worker.
+      const context = await browser.newContext({serviceWorkers:'block', ...(mobile ? {...devices['iPhone 13'], reducedMotion:'reduce'} :
+        {viewport:{width:1280, height:900}, reducedMotion:'reduce'})});
       // Public assets must load locally; no network CDN fallback is permitted.
       await context.route(/^https:\/\/(cdn\.bootcdn\.net|cdn\.jsdelivr\.net)\//, route => route.abort());
       assert.equal((await context.request.get(base+'/vendor/bootstrap/bootstrap.min.css')).status(),200);
