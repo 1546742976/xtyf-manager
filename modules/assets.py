@@ -133,8 +133,9 @@ def mutation(view):
     def wrapped(*args, **kwargs):
         db = get_db()
         try:
-            if request.content_length is not None and request.content_length > MAX_ASSET_REQUEST_BYTES:
-                raise Invalid("资产请求体超过 16 KiB 限制", 413)
+            max_bytes = getattr(view, "asset_max_request_bytes", MAX_ASSET_REQUEST_BYTES)
+            if request.content_length is not None and request.content_length > max_bytes:
+                raise Invalid(f"资产请求体超过 {max_bytes // 1024} KiB 限制", 413)
             data = request.get_json(silent=True)
             if not isinstance(data, dict):
                 raise Invalid("请求必须是 JSON 对象")

@@ -19,6 +19,7 @@
   <nav class="asset-tabs asset-main-nav" aria-label="物料管理主导航">
     <a class="asset-main-link" data-asset-nav="all" href="/assets">物料仓库</a>
     <a class="asset-main-link" data-asset-nav="mine" href="/assets?view=mine">我的借用</a>
+    <a class="asset-main-link" data-asset-nav="table" href="/assets?view=table">表格批量</a>
   </nav>
   <div id="asset-admin-tools" class="asset-admin-tools" hidden>
     <span class="asset-tools-label">管理工具</span>
@@ -66,6 +67,49 @@
   <div id="asset-content" aria-busy="true"></div>
   </section>
   <section id="asset-mine-units" class="asset-section asset-unit-drawer" aria-labelledby="asset-unit-title" hidden></section>
+<section id="asset-bom-page" class="asset-bom-page" aria-labelledby="asset-bom-page-title" hidden>
+  <header class="asset-heading asset-bom-page-head">
+    <div><p class="asset-eyebrow">SPREADSHEET / 批量物料工作区</p>
+      <h2 id="asset-bom-page-title">导入与编辑表格</h2>
+      <p class="asset-muted">先导入并整理物料清单，再选择批量入库或按套数出库。编辑与匹配均不会修改实际库存。</p></div>
+    <button class="btn" id="asset-bom-clear" type="button">清空工作区</button>
+  </header>
+  <section class="asset-bom-step" aria-labelledby="asset-bom-upload-title">
+    <h3 id="asset-bom-upload-title"><span class="asset-bom-step-number">1</span> 导入表格</h3>
+    <div class="asset-bom-import-bar">
+      <label>CSV / TSV / XLSX（最大 2 MiB，最多 200 行）
+        <input id="asset-bom-file" type="file" accept=".csv,.tsv,.xlsx"></label>
+      <button class="btn primary" id="asset-bom-import" type="button">导入并读取表格</button>
+    </div>
+    <p id="asset-bom-import-name" class="asset-muted" aria-live="polite"></p>
+      <p id="asset-bom-message" role="status" aria-live="polite">请选择表格，上传后可映射列名并编辑每一行。</p>
+
+  </section>
+  <section id="asset-bom-editor" class="asset-bom-step" aria-labelledby="asset-bom-editor-title" hidden>
+    <h3 id="asset-bom-editor-title"><span class="asset-bom-step-number">2</span> 列映射与表格编辑</h3>
+    <p class="asset-muted">自动识别列名，也可以手动指定每列的含义；会记住相同表头的映射。变更列映射会重新读取原文件，覆盖当前逐格修改。</p>
+    <label class="asset-bom-header-picker">表头位于<select id="asset-bom-header-row"></select></label>
+    <div id="asset-bom-mapping" class="asset-bom-mapping"></div>
+    <p class="asset-muted">以下内容可以直接修改名称、型号、物料编号、数量及单位。无需回到 Excel 整理。非数量物料请移除，另走原有单件或充足／不足管理。</p>
+    <div id="asset-bom-rows" class="asset-bom-table-wrap" role="region" aria-label="可编辑物料表格" tabindex="0"></div>
+    <div class="asset-actions"><button class="btn" id="asset-bom-add-row" type="button">＋ 添加物料行</button></div>
+  </section>
+  <section id="asset-bom-operation" class="asset-bom-step" aria-labelledby="asset-bom-operation-title" hidden>
+    <h3 id="asset-bom-operation-title"><span class="asset-bom-step-number">3</span> 选择操作、匹配并提交</h3>
+    <form id="asset-bom-form" class="asset-fields">
+      <div class="asset-form-grid">
+        <label>操作方式<select id="asset-bom-mode"><option value="inbound">表格批量入库（按每行实际数量）</option><option value="outbound">按 BOM 套数出库 / 领用</option></select></label>
+        <label>物料所在校区<select id="asset-bom-campus" required><option value="">请选择校区</option></select></label>
+      </div>
+      <label id="asset-bom-sets-label" hidden>出库套数<input id="asset-bom-sets" type="number" min="1" max="1000000" step="1" value="1" required></label>
+      <div class="asset-actions"><button class="btn" id="asset-bom-match" type="button">匹配 / 重新匹配库存</button><span class="asset-muted">自动匹配编号或名称规格；多个候选需人工选择，也可指定物料 ID。</span></div>
+      <p id="asset-bom-summary" class="asset-operation-summary" aria-live="polite"></p>
+      <label>用途或入库原因<textarea id="asset-bom-reason" rows="2" maxlength="500" required placeholder="例如：制作 3 套步兵电控板；本次采购补货"></textarea></label>
+      <div class="asset-bom-submit"><button class="btn primary" id="asset-bom-save" type="submit" disabled>核对无误，确认批量提交 / 重试</button></div>
+    </form>
+  </section>
+  <p id="asset-bom-message-placeholder" class="asset-muted">表格仅在内存中解析；不会保存原始文件。已有库存及操作记录只有在最后确认提交时才会改变。</p>
+</section>
 </section>
 <dialog id="asset-add-dialog" class="asset-dialog" aria-labelledby="asset-add-title">
   <header class="asset-heading"><h2 id="asset-add-title">新增 / 扫码入库</h2><button class="btn" id="asset-add-close" type="button">关闭</button></header>
@@ -110,4 +154,4 @@
 <div class="asset-label-download"><p id="asset-label-status" role="status"></p><a id="asset-label-download" class="btn primary" download="asset-labels.pdf" hidden>下载打印 PDF</a></div>
 </dialog>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='assets.js') }}"></script>{% if asset_units_enabled %}<script src="{{ url_for('static', filename='vendor/asset-tools/zxing.js') }}"></script><script src="{{ url_for('static', filename='vendor/asset-tools/barcode.js') }}"></script><script src="{{ url_for('static', filename='asset-label-layout.js') }}"></script>{% for script in ['asset-units.js','asset-scan.js','asset-camera.js','asset-labels.js','asset-lifecycle.js'] %}<script src="{{ url_for('static', filename=script) }}"></script>{% endfor %}{% endif %}{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='assets.js') }}"></script>{% if asset_units_enabled %}<script src="{{ url_for('static', filename='vendor/asset-tools/zxing.js') }}"></script><script src="{{ url_for('static', filename='vendor/asset-tools/barcode.js') }}"></script><script src="{{ url_for('static', filename='asset-label-layout.js') }}"></script>{% for script in ['asset-units.js','asset-scan.js','asset-camera.js','asset-labels.js','asset-lifecycle.js'] %}<script src="{{ url_for('static', filename=script) }}"></script>{% endfor %}{% endif %}<script src="{{ url_for('static', filename='asset-bom.js') }}"></script>{% endblock %}

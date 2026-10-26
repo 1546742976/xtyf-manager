@@ -3,7 +3,7 @@
   'use strict';
   const $=id=>document.getElementById(id), esc=window.BusinessUI.escape;
   const params=new URLSearchParams(location.search), itemId=Number(params.get('id'))||null;
-  const mine=params.get('view')==='mine';
+  const mine=params.get('view')==='mine',tableView=params.get('view')==='table'&&!itemId;
   const validAssetViews=['all','equipment','quantity','supply','attention'];
   let assetView=validAssetViews.includes(params.get('type'))?params.get('type'):'all';
   const names={receive:'入库',borrow:'借用',return:'归还',consume:'领用',adjust:'盘点调整',transfer:'校区调拨',correct:'纠错',catalog:'目录维护',supply_status:'耗材状态'};
@@ -241,25 +241,28 @@
     $('asset-content').setAttribute('aria-busy','true');status('正在加载…');
     try{
       const c=await api('catalog'); if(own!==generation)return; catalog=c;serverReceivedAt=Date.now();showPending();
-      $('asset-create').hidden=(!c.can_manage&&!window.AssetScan)||!!itemId||mine;
+      $('asset-create').hidden=(!c.can_manage&&!window.AssetScan)||!!itemId||mine||tableView;
       $('asset-add-manual').hidden=!c.can_manage;
-      $('asset-admin-tools').hidden=!c.can_manage||!!itemId||mine;
-      $('asset-view-filters').hidden=!!itemId||mine;
-      $('asset-result-summary').hidden=!!itemId||mine;
-      $('asset-results-heading').hidden=!!itemId||mine;
-      $('asset-summary-scope').hidden=!!itemId||mine;
-      $('asset-discovery').hidden=!!itemId||mine;
+      $('asset-admin-tools').hidden=!c.can_manage||!!itemId||mine||tableView;
+      $('asset-view-filters').hidden=!!itemId||mine||tableView;
+      $('asset-result-summary').hidden=!!itemId||mine||tableView;
+      $('asset-results-heading').hidden=!!itemId||mine||tableView;
+      $('asset-summary-scope').hidden=!!itemId||mine||tableView;
+      $('asset-discovery').hidden=!!itemId||mine||tableView;
       $('asset-inventory-panel').classList.toggle('asset-secondary-view',!!itemId||mine);
-      $('asset-description').textContent=itemId?'查看各校区库存、借用情况与物料流转记录。':mine?'借出的每一件物料，在这里查看和归还。':'从一颗螺丝到一台设备，让每一份物料都有去处。';
+      $('asset-inventory-panel').hidden=tableView;
+      $('asset-bom-page').hidden=!tableView;
+      if(tableView)$('asset-mine-units').hidden=true;
+      $('asset-description').textContent=itemId?'查看各校区库存、借用情况与物料流转记录。':tableView?'导入清单，编辑字段并核对库存后完成批量操作。':mine?'借出的每一件物料，在这里查看和归还。':'从一颗螺丝到一台设备，让每一份物料都有去处。';
       $('asset-back').hidden=!itemId;
       for(const link of document.querySelectorAll('[data-asset-nav]')){
-        if((link.dataset.assetNav==='mine')===mine&&!itemId)link.setAttribute('aria-current','page');
+        if(link.dataset.assetNav===(tableView?'table':mine?'mine':'all')&&!itemId)link.setAttribute('aria-current','page');
         else link.removeAttribute('aria-current');
       }
       $('asset-campuses').hidden=!c.can_manage;
       $('asset-categories').hidden=!c.can_manage;
-      if(itemId||mine)organizing=false;
-      filter.hidden=!!itemId||mine;
+      if(itemId||mine||tableView)organizing=false;
+      filter.hidden=!!itemId||mine||tableView;
       const campus=filter.elements.campus_id.value;
       filter.elements.campus_id.innerHTML=options(c.campuses,campus,'全部校区');
       if(itemId){
@@ -267,6 +270,9 @@
         if(own!==generation)return; detail=d;
         $('asset-title').textContent=d.item.name;
         $('asset-content').innerHTML=renderItemDetail(d,l,e);
+      }else if(tableView){
+        $('asset-title').textContent='表格批量';
+        $('asset-content').replaceChildren();
       }else if(mine){
         const l=await api('loans?mine=1&page='+loanPage+pageQuery('loans'));if(own!==generation)return;
         $('asset-title').textContent='我的借用';
