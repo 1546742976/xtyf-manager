@@ -19,7 +19,8 @@ const root = path.resolve(__dirname, '../..');
     let password='browser-test-initial';
     for(const engine of ['chromium','webkit']){
       browser=await playwright[engine].launch({headless:true});
-      const page=await browser.newPage(), errors=[];
+      // Fault injection must reach Playwright routing; PWA has its own suite.
+      const page=await browser.newPage({serviceWorkers:'block'}), errors=[];
       page.on('pageerror',error=>errors.push(error.message));
       await page.goto(base+'/login');
       const api=(url,body)=>page.evaluate(async({url,body})=>{
