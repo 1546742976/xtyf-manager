@@ -304,9 +304,10 @@ class AssetBomTest(unittest.TestCase):
                 for name, data in content.items():
                     archive.writestr(name, data)
             self.preview("shared.xlsx", shared_file.getvalue(), status=status)
-        book.active.cell(2, 33).value = "unexpected"
-        output = io.BytesIO(); book.save(output)
-        self.preview("overflow.xlsx", output.getvalue(), status=400)
+        for value in ("unexpected", "=1+1"):
+            book.active.cell(2, 33).value = value
+            output = io.BytesIO(); book.save(output)
+            self.preview("overflow.xlsx", output.getvalue(), status=400)
         book.active.cell(2, 33).value = None
         book.active.cell(4097, 1).value = "tail"
         output = io.BytesIO(); book.save(output)

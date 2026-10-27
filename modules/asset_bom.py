@@ -80,9 +80,18 @@ def sparse_xlsx_rows(sheet):
     # openpyxl is pinned to 3.1.5. Use its streaming cell decoder (including
     # shared strings, cached formulas and dates) without dense _get_row tuples.
     from openpyxl.worksheet._reader import WorkSheetParser
+    class BoundedCellParser(WorkSheetParser):
+        def parse_cell(self, element):
+            cell = super().parse_cell(element)
+            # An uncached formula has value=None in data_only mode, but is
+            # actual content (including shared formulas with no own text).
+            if cell["column"] > 32 and element.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}f") is not None:
+                raise Invalid("表格超过 32 列，请删除多余列后导入")
+            return cell
+
     result = []
     with sheet._get_source() as source:
-        parser = WorkSheetParser(source, sheet._shared_strings, data_only=True,
+        parser = BoundedCellParser(source, sheet._shared_strings, data_only=True,
                                  epoch=sheet.parent.epoch, date_formats=sheet.parent._date_formats,
                                  timedelta_formats=sheet.parent._timedelta_formats)
         for index, cells in parser.parse():
