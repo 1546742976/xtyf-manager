@@ -1,9 +1,10 @@
 // Isolated real funds page; requests are controlled only for fault injection.
 'use strict';
-const assert=require('node:assert/strict'),{spawn}=require('node:child_process'),path=require('node:path');
+const assert=require('node:assert/strict'),{spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs');
 const {chromium,webkit,request}=require('playwright');
 const {recordFailure,cleanupResources}=require('./diagnostics.cjs');
-const root=path.resolve(__dirname,'../..'),output=path.join(root,'.build-tools/funds-filter-review');
+const root=path.resolve(__dirname,'../..'),output=path.join(root,'.build-tools/funds-filter-review-check');
+fs.mkdirSync(output,{recursive:true});
 const server=spawn(process.env.REVIEW_PYTHON||'python',['-B','tests/browser/server.py'],{cwd:root,env:{...process.env,PYTHONUTF8:'1'}});
 let browser,page,api,engineName;const passed=[],navigation=[];
 async function main(){
@@ -37,7 +38,7 @@ async function main(){
     navigation.push({engine:name,events:await page.evaluate(()=>JSON.parse(sessionStorage.getItem('synthetic-pageshow')))});
     assert.deepEqual(errors,[]);passed.push(name+': reversed responses, failure/retry, slow switches, actual history navigation');await browser.close();browser=null;
   }
-  console.log(JSON.stringify({ok:true,passed,navigation}));
+  const result={ok:true,passed,navigation};fs.writeFileSync(path.join(output,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }
 main().catch(async error=>{await recordFailure(error,{output,page,engine:engineName,phase:'funds filters',passed});console.error(error);process.exitCode=1;})
 .finally(()=>cleanupResources({browser:()=>browser?.close(),api:()=>api?.dispose(),server:()=>server.kill()}));
