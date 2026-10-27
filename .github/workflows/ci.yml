@@ -222,7 +222,7 @@ jobs:
       matrix:
         include:
           - group: foundation-core
-            suites: 'review_fixes pr22_merge'
+            suites: 'review_fixes pr22_merge funds_filter_race funds_recovery'
           - group: foundation-login
             suites: 'action_failures login_mobile'
           - group: tasks-core

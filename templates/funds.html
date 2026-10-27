@@ -67,14 +67,16 @@
       </div>
       <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <span>资金记录</span><span class="text-muted small" id="rcnt">加载中...</span></div>
+          <span>资金记录</span><span class="text-muted small" id="rcnt" aria-live="polite"></span></div>
         <div class="card-body p-0" style="overflow-x:auto;">
-          <table class="table table-hover mb-0"><thead><tr>
+          <div id="funds-list-loading" class="p-3" role="status">正在加载…</div>
+          <div id="funds-list-error" class="p-3" hidden><p id="funds-list-error-message" role="alert"></p><button type="button" class="btn btn-outline-primary" onclick="reload()">重试当前筛选</button></div>
+          <table id="funds-records" aria-busy="true" class="table table-hover mb-0"><thead><tr>
             <th>#</th><th>类型</th><th style="cursor:pointer" onclick="setSort('amount')">金额</th>
             <th>类别</th><th>来源/去向</th><th>申请人</th><th>发票</th><th>处理人</th>
             <th style="cursor:pointer" onclick="setSort('record_date')">日期</th><th>审核</th><th>备注</th><th>操作</th>
           </tr></thead><tbody id="tbody"></tbody></table>
-          <div class="empty-state" id="empty"><i class="bi bi-inbox" style="font-size:42px;"></i><p>暂无记录，请添加数据</p></div>
+          <div class="empty-state" id="empty" style="display:none"><i class="bi bi-inbox" style="font-size:42px;"></i><p>暂无记录，请添加数据</p></div>
         </div>
       </div>
     </div>
