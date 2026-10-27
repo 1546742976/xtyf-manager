@@ -314,6 +314,8 @@ class AssetBomTest(unittest.TestCase):
 
     def test_large_commit_and_replay_do_not_duplicate_stock(self):
         import json
+        self.assertEqual(self.admin.get("/api/assets/catalog").get_json()["write_limits"],
+                         {"default": 16 * 1024, "bom_commit": 512 * 1024})
         rows = [self.line(qty=200)] + [{"item_id": None, "name": f"Synthetic {i} " + "x" * 80,
                                       "specification": "synthetic", "unit": "pcs", "quantity": 1}
                                      for i in range(199)]

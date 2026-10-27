@@ -1,9 +1,10 @@
 // Real BOM editor, isolated server and synthetic inventory only.
 'use strict';
-const assert=require('node:assert/strict'),{spawn}=require('node:child_process'),path=require('node:path');
+const assert=require('node:assert/strict'),{spawn}=require('node:child_process'),path=require('node:path'),fs=require('node:fs');
 const {chromium,webkit,request}=require('playwright');
 const {recordFailure,cleanupResources}=require('./diagnostics.cjs');
-const root=path.resolve(__dirname,'../..'),output=path.join(root,'.build-tools/bom-review-browser');
+const root=path.resolve(__dirname,'../..'),output=path.join(root,'.build-tools/bom-review-check');
+fs.mkdirSync(output,{recursive:true});
 const server=spawn(process.env.REVIEW_PYTHON||'python',['-B','tests/browser/server.py'],{cwd:root,env:{...process.env,PYTHONUTF8:'1'}});
 let browser,page,api,engineName;const passed=[];
 async function main(){
@@ -35,7 +36,7 @@ async function main(){
     const detail=await(await api.get('/api/assets/items/'+id)).json();assert.equal(detail.campuses.find(c=>c.id===campus).available,1002);
     passed.push(name+': exact rejection, raw matching, integer commit and same-item aggregation');await browser.close();browser=null;
   }
-  console.log(JSON.stringify({ok:true,passed}));
+  const result={ok:true,passed};fs.writeFileSync(path.join(output,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
 }
 main().catch(async error=>{await recordFailure(error,{output,page,engine:engineName,phase:'BOM review',passed});console.error(error);process.exitCode=1;})
 .finally(()=>cleanupResources({browser:()=>browser?.close(),api:()=>api?.dispose(),server:()=>server.kill()}));
