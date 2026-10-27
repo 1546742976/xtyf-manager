@@ -6,6 +6,7 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, render_template, request
 from modules.task_validation import InvalidIdError, parse_id
+from modules.request_limits import asset_request_limit
 
 from common import ROLE_NAMES, current_user, get_db, login_required
 from modules.security import has_permission
@@ -133,7 +134,7 @@ def mutation(view):
     def wrapped(*args, **kwargs):
         db = get_db()
         try:
-            max_bytes = getattr(view, "asset_max_request_bytes", MAX_ASSET_REQUEST_BYTES)
+            max_bytes = asset_request_limit(request.endpoint)
             if request.content_length is not None and request.content_length > max_bytes:
                 raise Invalid(f"资产请求体超过 {max_bytes // 1024} KiB 限制", 413)
             data = request.get_json(silent=True)

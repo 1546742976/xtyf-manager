@@ -256,7 +256,7 @@
     setBusy(true);show('正在查询库存物料及当前库存版本…');
     try{
       const body={campus_id:Number(campus.value),rows:rows.map(r=>({
-        code:r.code,name:r.name,specification:r.specification,quantity:Number(r.quantity),unit:r.unit
+        code:r.code,name:r.name,specification:r.specification,quantity:r.quantity,unit:r.unit
       }))};
       const response=await fetch('/api/assets/bom/match',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       const result=await response.json();
