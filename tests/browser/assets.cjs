@@ -247,6 +247,8 @@ async function main(){
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
     await page.screenshot({path:path.join(output,label+'-registration.png'),fullPage:true});
     passed.push(label+': manager categories, ordinary member consumption and quantity adjustment, automatic campus filters, card dialog and Beijing registration time');
+    // Let every synthetic account's background refresh finish before closing WebKit.
+    for(const context of browser.contexts())for(const tab of context.pages())await tab.waitForLoadState('networkidle');
     await browser.close();browser=null;
   }
   const dist=path.join(output,'ui');

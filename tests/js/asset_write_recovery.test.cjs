@@ -55,3 +55,11 @@ test('BOM acknowledgement requires its actual operation results',()=>{
   assert.equal(ctx.validWriteReceipt('bom/commit',body,base),false);
   assert.equal(ctx.validWriteReceipt('bom/commit',body,{...base,rows:1,operations:[{event_id:2}]}),true);
 });
+
+test('category and stocktake receipts follow the existing API result shapes',()=>{
+  const {ctx}=fixture(),body={request_id:'original'},base={ok:true,request_id:'original'};
+  for(const changed of [[],[1,2]])assert.equal(ctx.validWriteReceipt('categories/assign',body,{...base,changed,selected:2}),true);
+  for(const changed of [0,2,[-1],[null]])assert.equal(ctx.validWriteReceipt('categories/assign',body,{...base,changed,selected:2}),false);
+  assert.equal(ctx.validWriteReceipt('units/stocktakes/scan-batch',body,{...base,events:[{event_id:3},{event_id:4}]}),true);
+  for(const events of [[],[3],[{}],[{event_id:0}]])assert.equal(ctx.validWriteReceipt('units/stocktakes/scan-batch',body,{...base,events}),false);
+});

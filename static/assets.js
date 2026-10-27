@@ -108,8 +108,8 @@
     const id=v=>Number.isSafeInteger(v)&&v>0, ids=v=>Array.isArray(v)&&v.length>0&&v.every(id);
     if(path==='bom/commit')return id(data.rows)&&Array.isArray(data.operations)&&data.operations.length>0&&data.operations.every(r=>id(r.event_id));
     if(path==='scan/batch')return Array.isArray(data.receipts)&&data.receipts.length>0&&data.receipts.every(r=>id(r.receipt_id));
-    if(path==='categories/assign')return Number.isSafeInteger(data.changed)&&data.changed>=0&&id(data.selected);
-    if(path==='units/stocktakes/scan-batch')return ids(data.events);
+    if(path==='categories/assign')return Array.isArray(data.changed)&&data.changed.every(id)&&id(data.selected);
+    if(path==='units/stocktakes/scan-batch')return Array.isArray(data.events)&&data.events.length>0&&data.events.every(r=>id(r?.event_id));
     if(path.startsWith('catalog/'))return id(data.id);
     if(path==='units/operate'||path==='units/object-move')return ids(data.event_ids)&&ids(data.unit_ids);
     if(path==='units/receive')return id(data.event_id)&&ids(data.unit_ids);
