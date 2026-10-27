@@ -54,6 +54,8 @@ def parse_quantity(value):
         if not re.fullmatch(r"[1-9][0-9]{0,2}(?:,[0-9]{3})+(?:\.0+)?", s):
             raise Invalid("数量的千分位格式无效")
         s = s.replace(",", "")
+    if not re.fullmatch(r"[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", s):
+        raise Invalid("数量必须是正整数，可使用小数零尾或科学计数法")
     try:
         n = Decimal(s)
     except InvalidOperation:
@@ -71,6 +73,32 @@ def bounded_rows(records):
         if any(value is not None and str(value).strip() for value in record[32:]):
             raise Invalid("表格超过 32 列，请删除多余列后导入")
         result.append(list(record[:32]))
+    return result
+
+
+def sparse_xlsx_rows(sheet):
+    # openpyxl is pinned to 3.1.5. Use its streaming cell decoder (including
+    # shared strings, cached formulas and dates) without dense _get_row tuples.
+    from openpyxl.worksheet._reader import WorkSheetParser
+    result = []
+    with sheet._get_source() as source:
+        parser = WorkSheetParser(source, sheet._shared_strings, data_only=True,
+                                 epoch=sheet.parent.epoch, date_formats=sheet.parent._date_formats,
+                                 timedelta_formats=sheet.parent._timedelta_formats)
+        for index, cells in parser.parse():
+            if not 1 <= index <= 4096:
+                raise Invalid("表格超过 4096 个物理行，请删除多余空行或拆分文件")
+            while len(result) < index:
+                result.append([None] * 32)
+            for cell in cells:
+                column, value = cell["column"], cell["value"]
+                if not 1 <= cell["row"] <= 4096:
+                    raise Invalid("表格超过 4096 个物理行，请删除多余空行或拆分文件")
+                if column > 32:
+                    if value is not None and str(value).strip():
+                        raise Invalid("表格超过 32 列，请删除多余列后导入")
+                elif column >= 1:
+                    result[index - 1][column - 1] = value
     return result
 
 
@@ -106,8 +134,7 @@ def spreadsheet_rows(upload):
         workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=True, keep_links=False)
         try:
             sheet = workbook.worksheets[0]
-            sheet.reset_dimensions()
-            return bounded_rows(sheet.iter_rows(values_only=True))
+            return sparse_xlsx_rows(sheet)
         finally:
             workbook.close()
     except (ValueError, KeyError, OSError, zipfile.BadZipFile, IndexError):

@@ -29,7 +29,24 @@
   let importedFile='';
   const show=(value,error=false)=>{status.textContent=value;status.dataset.state=error?'error':'info';};
   const selectedRow=r=>r.candidates?.find(item=>String(item.id)===String(r.selected));
-  const qty=r=>Number(r.quantity)*(mode.value==='outbound'?Number(sets.value):1);
+  function parseQuantity(value){
+    if(typeof value!=='string'&&typeof value!=='number')return NaN;
+    let raw=String(value).trim();if(!raw||raw.length>40)return NaN;
+    if(raw.includes(',')){
+      if(!/^[1-9][0-9]{0,2}(?:,[0-9]{3})+(?:\.0+)?$/.test(raw))return NaN;
+      raw=raw.replaceAll(',','');
+    }
+    const match=raw.match(/^\+?(?:([0-9]+)(?:\.([0-9]*))?|\.([0-9]+))(?:[eE]([+-]?[0-9]+))?$/);
+    if(!match)return NaN;
+    const fraction=match[2]??match[3]??'';
+    let digits=((match[1]||'')+fraction).replace(/^0+/,''),scale=Number(match[4]||0)-fraction.length;
+    if(!digits)return NaN;
+    while(scale<0&&digits.endsWith('0')){digits=digits.slice(0,-1);scale++;}
+    if(scale<0||digits.length+scale>10)return NaN;
+    const integer=Number(digits+'0'.repeat(scale));
+    return Number.isSafeInteger(integer)&&integer>=1&&integer<=1000000000?integer:NaN;
+  }
+  const qty=r=>parseQuantity(r.quantity)*(mode.value==='outbound'?parseQuantity(sets.value):1);
   function reset(){
     raw=[];rows=[];map={};matched=false;pendingBatch=null;
     editor.hidden=true;operation.hidden=true;rowHost.replaceChildren();
@@ -159,7 +176,7 @@
       const tr=document.createElement('tr');
       tr.dataset.row=String(r.row_no);
       const no=td();no.textContent=String(r.row_no);tr.append(no);
-      for(const field of fields)tr.append(attach(td(),cellInput(r,field,field==='quantity'?'number':'text')));
+      for(const field of fields)tr.append(attach(td(),cellInput(r,field,'text')));
       const choose=td(),picker=document.createElement('select');
       picker.setAttribute('aria-label','第 '+r.row_no+' 行库存匹配');
       picker.add(new Option('请选择库存物料',''));
@@ -207,10 +224,10 @@
     const errors=[],totals=new Map();let total=0;
     if(!rows.length)errors.push('没有可操作的物料行');
     if(!campus.value)errors.push('未选择操作校区');
-    const kits=Number(sets.value);
+    const kits=parseQuantity(sets.value);
     if(mode.value==='outbound'&&(!Number.isSafeInteger(kits)||kits<1||kits>1000000))errors.push('套数必须为 1 至 1000000');
     for(const r of rows){
-      const n=Number(r.quantity),count=qty(r);
+      const n=parseQuantity(r.quantity),count=qty(r);
       if(!Number.isSafeInteger(n)||n<1||n>1000000000||!Number.isSafeInteger(count)||count<1||count>1000000000)
         errors.push('第 '+r.row_no+' 行数量无效或超限');
       if(!r.name.trim()&&!r.code.trim())errors.push('第 '+r.row_no+' 行缺少编号与名称');
@@ -274,9 +291,9 @@
   function writeRows(){
     return rows.map(r=>{
       const item=selectedRow(r);
-      return r.selected==='new'?{item_id:null,quantity:Number(r.quantity),
+      return r.selected==='new'?{item_id:null,quantity:parseQuantity(r.quantity),
         code:r.code.trim(),name:r.name.trim(),specification:r.specification.trim(),unit:r.unit.trim()}:
-        {item_id:item.id,quantity:Number(r.quantity),version:item.version,stock_version:item.stock_version};
+        {item_id:item.id,quantity:parseQuantity(r.quantity),version:item.version,stock_version:item.stock_version};
     });
   }
   async function submit(event){
@@ -290,7 +307,7 @@
       if(!actor||sessionStorage.getItem(pendingKey)){show('存在未确认的操作，请先恢复核对。',true);return;}
       pendingBatch={
         actor_id:actor,path:'bom/commit',request_id:newToken(),
-        body:{mode:mode.value,campus_id:Number(campus.value),sets:mode.value==='outbound'?Number(sets.value):1,
+        body:{mode:mode.value,campus_id:Number(campus.value),sets:mode.value==='outbound'?parseQuantity(sets.value):1,
           reason:reason.value.trim(),rows:writeRows()}
       };
       try{sessionStorage.setItem(pendingKey,JSON.stringify(pendingBatch));}

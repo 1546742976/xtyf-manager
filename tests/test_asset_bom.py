@@ -258,7 +258,7 @@ class AssetBomTest(unittest.TestCase):
         self.assertEqual(self.detail()[1]['available'], 100)
 
     def test_quantities_are_validated_without_rounding(self):
-        for value in ['1.00000000000000001', '999999999.99999999', '1,2', 'NaN', 'Infinity']:
+        for value in ['1.00000000000000001', '999999999.99999999', '1,2', 'NaN', 'Infinity', '1_0', '١', '1e99999999999999999999']:
             with self.subTest(value=value):
                 self.match({
                     'campus_id': self.campus, 'rows': [{'code': 'C98765432', 'quantity': value}]}, status=400)
@@ -272,6 +272,57 @@ class AssetBomTest(unittest.TestCase):
         response = self.member.post('/api/assets/bom/import', data={
             'file': (io.BytesIO(('Name,Qty\n' + 'x' * 140000 + ',1').encode()), 'long.csv')})
         self.assertEqual(response.status_code, 400, response.get_json())
+
+    def test_sparse_far_styled_cells_do_not_expand_rows(self):
+        from openpyxl.styles import PatternFill
+        from openpyxl.worksheet._read_only import ReadOnlyWorksheet
+        book = Workbook()
+        book.active.append(["Name", "Qty"])
+        book.active.append(["Synthetic", 2])
+        book.active.cell(2, 16384).fill = PatternFill(fill_type="solid", fgColor="FF0000")
+        output = io.BytesIO(); book.save(output)
+        with patch.object(ReadOnlyWorksheet, "_get_row", side_effect=AssertionError("dense row expansion")):
+            self.preview("sparse.xlsx", output.getvalue())
+        # Shared-string indexes are not values: blank referenced strings are allowed.
+        import zipfile
+        for shared, status in [(" ", 200), ("outside", 400)]:
+            source = zipfile.ZipFile(io.BytesIO(output.getvalue()))
+            content = {name: source.read(name) for name in source.namelist()}
+            source.close()
+            sheet = content["xl/worksheets/sheet1.xml"].decode()
+            sheet = sheet.replace('<c r="XFD2" s="1" t="n"></c>', '<c r="XFD2" t="s"><v>0</v></c>')
+            self.assertIn('<v>0</v>', sheet)
+            content["xl/worksheets/sheet1.xml"] = sheet.encode()
+            content["[Content_Types].xml"] = content["[Content_Types].xml"].replace(b'</Types>', b'<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>')
+            content["xl/sharedStrings.xml"] = ('<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>'+shared+'</t></si></sst>').encode()
+            shared_file = io.BytesIO()
+            with zipfile.ZipFile(shared_file, 'w', zipfile.ZIP_DEFLATED) as archive:
+                for name, data in content.items():
+                    archive.writestr(name, data)
+            self.preview("shared.xlsx", shared_file.getvalue(), status=status)
+        book.active.cell(2, 33).value = "unexpected"
+        output = io.BytesIO(); book.save(output)
+        self.preview("overflow.xlsx", output.getvalue(), status=400)
+        book.active.cell(2, 33).value = None
+        book.active.cell(4097, 1).value = "tail"
+        output = io.BytesIO(); book.save(output)
+        self.preview("rows.xlsx", output.getvalue(), status=400)
+
+    def test_large_commit_and_replay_do_not_duplicate_stock(self):
+        import json
+        rows = [self.line(qty=200)] + [{"item_id": None, "name": f"Synthetic {i} " + "x" * 80,
+                                      "specification": "synthetic", "unit": "pcs", "quantity": 1}
+                                     for i in range(199)]
+        body = {"mode": "inbound", "campus_id": self.campus, "sets": 1,
+                "reason": "合成批量" * 80, "rows": rows}
+        self.assertGreater(len(json.dumps(body).encode()), 16 * 1024)
+        key = uuid4().hex
+        first = self.post(self.admin, "/api/assets/bom/commit", body, request_id=key)
+        self.assertEqual(self.post(self.admin, "/api/assets/bom/commit", body, request_id=key), first)
+        self.assertEqual(self.detail()[1]["available"], 300)
+        response = self.member.post('/api/assets/bom/commit', json={'padding': 'x' * (512 * 1024)})
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(self.detail()[1]["available"], 300)
 
     def test_bad_files_and_unauthorized_access(self):
         self.preview("bom.xls", b"nonsense", status=400)

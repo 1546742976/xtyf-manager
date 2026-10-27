@@ -207,7 +207,8 @@ def page():
 @login_required
 def catalog():
     db = get_db()
-    return jsonify(ok=True, can_manage=manager(), intake_enabled=True, server_time=stamp(),
+    return jsonify(ok=True, can_manage=manager(), intake_enabled=True, write_limits={"default": asset_request_limit("assets.operations"),
+                         "bom_commit": asset_request_limit("asset_bom.commit")}, server_time=stamp(),
                    member_id=current_user()["id"],
                    categories=[dict(r) for r in db.execute("SELECT * FROM asset_categories ORDER BY name,id")],
                    campuses=[dict(r) for r in db.execute("SELECT * FROM asset_campuses ORDER BY name,id")])
