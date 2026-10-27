@@ -1,5 +1,6 @@
 """Synthetic receiving drafts, external serials and ambiguous code regression."""
 
+import json
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -62,6 +63,23 @@ class ScanIntakeTest(unittest.TestCase):
         self.assertEqual(item_id, received["receipts"][1]["item_id"])
         self.assertEqual(self.stock(item_id)["available"], 7)
         self.assertEqual(self.resolve("C990001")["item"]["id"], item_id)
+
+    def test_legacy_batch_replay_completes_quantity_from_original_request(self):
+        entry = self.entry(f"M:{self.screw}", quantity=3)
+        key = uuid4().hex
+        received = self.batch([entry], request_id=key)
+        with app_module.app.app_context():
+            db = app_module.get_db()
+            stored = json.loads(db.execute("SELECT result FROM asset_requests WHERE actor_id=? AND request_id=?",
+                                           (self.admin_id, key)).fetchone()[0])
+            stored["receipts"][0].pop("actual_quantity")
+            db.execute("UPDATE asset_requests SET result=? WHERE actor_id=? AND request_id=?",
+                       (json.dumps(stored), self.admin_id, key))
+            db.commit()
+        replay = self.batch([entry], request_id=key)
+        self.assertEqual(replay, received)
+        self.assertEqual(replay["receipts"][0]["actual_quantity"], 3)
+        self.assertEqual(self.stock(self.screw)["available"], 3)
 
     def test_remote_metadata_priority_and_invalid_label_quantity(self):
         raw = "{pc:C990002,pm:LABEL-MODEL,qty:oops}"

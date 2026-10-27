@@ -53,7 +53,7 @@ class AssetBomTest(unittest.TestCase):
 
     def test_oversized_request_is_explicitly_rejected_before_write(self):
         token = self.admin.get("/api/csrf").get_json()["csrf_token"]
-        response = self.admin.post("/api/assets/bom/commit", json={"reason": "x" * 17000},
+        response = self.admin.post("/api/assets/operations", json={"reason": "x" * 17000},
                                    headers={"X-CSRF-Token": token})
         self.assertEqual(response.status_code, 413)
         self.assertTrue(response.get_json()["not_applied"])
