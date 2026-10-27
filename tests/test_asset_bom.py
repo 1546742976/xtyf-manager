@@ -285,14 +285,18 @@ class AssetBomTest(unittest.TestCase):
             self.preview("sparse.xlsx", output.getvalue())
         # Shared-string indexes are not values: blank referenced strings are allowed.
         import zipfile
+        from xml.etree import ElementTree as ET
         for shared, status in [(" ", 200), ("outside", 400)]:
             source = zipfile.ZipFile(io.BytesIO(output.getvalue()))
             content = {name: source.read(name) for name in source.namelist()}
             source.close()
-            sheet = content["xl/worksheets/sheet1.xml"].decode()
-            sheet = sheet.replace('<c r="XFD2" s="1" t="n"></c>', '<c r="XFD2" t="s"><v>0</v></c>')
-            self.assertIn('<v>0</v>', sheet)
-            content["xl/worksheets/sheet1.xml"] = sheet.encode()
+            sheet = ET.fromstring(content["xl/worksheets/sheet1.xml"])
+            cell = sheet.find('.//{*}c[@r="XFD2"]')
+            self.assertIsNotNone(cell)
+            cell.clear()
+            cell.attrib.update(r="XFD2", t="s")
+            ET.SubElement(cell, "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v").text = "0"
+            content["xl/worksheets/sheet1.xml"] = ET.tostring(sheet)
             content["[Content_Types].xml"] = content["[Content_Types].xml"].replace(b'</Types>', b'<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>')
             content["xl/sharedStrings.xml"] = ('<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>'+shared+'</t></si></sst>').encode()
             shared_file = io.BytesIO()
