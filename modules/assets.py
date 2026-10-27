@@ -163,7 +163,16 @@ def mutation(view):
                 if previous["payload"] != payload:
                     raise Invalid("重复请求标识对应了不同内容，请重新操作", 409)
                 db.rollback()
-                return jsonify({**json.loads(previous["result"]), "request_id": key})
+                result = json.loads(previous["result"])
+                # Complete legacy receipts from their original, committed request,
+                # never from today's mutable stock or catalog.
+                if request.path.endswith("/scan/batch") and len(result.get("receipts", [])) == len(data.get("receipts", [])):
+                    for receipt, original in zip(result["receipts"], data["receipts"]):
+                        receipt.setdefault("actual_quantity", original["quantity"])
+                if request.path.endswith("/units/stocktakes/scan-batch") and len(result.get("events", [])) == len(data.get("unit_ids", [])):
+                    for receipt, identity in zip(result["events"], data["unit_ids"]):
+                        receipt.setdefault("unit_id", identity)
+                return jsonify({**result, "request_id": key})
             result = dict(ok=True, **view(db, data, *args, **kwargs))
             db.execute("INSERT INTO asset_requests VALUES(?,?,?,?)",
                        (user["id"], key, payload, json.dumps(result)))

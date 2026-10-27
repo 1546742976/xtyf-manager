@@ -33,6 +33,7 @@
     }catch(_){return null;}
   }
   let unresolved=readPending();
+  if(unresolved)unresolved.attempted=true; // Recovery can never prove an earlier attempt did not commit.
   function showPending(){
     const host=$('asset-pending'),retry=$('asset-pending-retry');
     host.hidden=!unresolved;
@@ -45,6 +46,9 @@
     retry.hidden=!sameUser;
   }
   function rememberPending(value){
+    const limit=value.path==='bom/commit'?catalog?.write_limits?.bom_commit:catalog?.write_limits?.default;
+    const bytes=new TextEncoder().encode(JSON.stringify({...value.body,request_id:value.request_id})).length;
+    if(bytes>(Number.isSafeInteger(limit)&&limit>0?limit:16384))throw Error('请求超过服务器大小限制，未发送；请减少条目或缩短内容。');
     const stored=readPending();
     if(stored&&JSON.stringify(stored)!==JSON.stringify(value))throw Error('存在其他待确认请求，请先恢复核对');
     sessionStorage.setItem(pendingKey,JSON.stringify(value));
@@ -105,18 +109,51 @@
   const status=(message,state='info')=>{$('asset-status').textContent=message;$('asset-status').dataset.state=state;};
   function validWriteReceipt(path,body,data){
     if((catalog?.write_receipts||Object.hasOwn(data,'request_id'))&&data.request_id!==body.request_id)return false;
-    const id=v=>Number.isSafeInteger(v)&&v>0, ids=v=>Array.isArray(v)&&v.length>0&&v.every(id);
-    if(path==='bom/commit')return id(data.rows)&&Array.isArray(data.operations)&&data.operations.length>0&&data.operations.every(r=>id(r.event_id));
-    if(path==='scan/batch')return Array.isArray(data.receipts)&&data.receipts.length>0&&data.receipts.every(r=>id(r.receipt_id));
-    if(path==='categories/assign')return Array.isArray(data.changed)&&data.changed.every(id)&&id(data.selected);
-    if(path==='units/stocktakes/scan-batch')return Array.isArray(data.events)&&data.events.length>0&&data.events.every(r=>id(r?.event_id));
+    const id=v=>Number.isSafeInteger(v)&&v>0;
+    const ids=v=>Array.isArray(v)&&v.length>0&&v.every(id)&&new Set(v).size===v.length;
+    const same=(a,b)=>ids(a)&&ids(b)&&a.length===b.length&&a.every(x=>b.includes(x));
+    if(path==='bom/commit'){
+      if(!Array.isArray(body.rows)||data.rows!==body.rows.length||data.sets!==body.sets||!['inbound','outbound'].includes(body.mode)||
+          !Array.isArray(data.created)||!data.created.every(id)||new Set(data.created).size!==data.created.length)return false;
+      const totals=new Map(),drafts=new Map(),created=[];let next=0;
+      if(data.row_items!==undefined&&(!Array.isArray(data.row_items)||data.row_items.length!==body.rows.length))return false;
+      for(const [index,row] of body.rows.entries()){
+        let identity=row.item_id;
+        if(identity==null){
+          const key=row.code?.trim().toUpperCase()||JSON.stringify([row.name?.trim().toLowerCase(),row.specification?.trim().toLowerCase()]);
+          if(!drafts.has(key)){const value=data.created[next++];drafts.set(key,value);created.push(value);}
+          identity=drafts.get(key);
+        }
+        if(!id(identity)||(data.row_items&&data.row_items[index]!==identity)||!id(row.quantity))return false;
+        const quantity=row.quantity*(body.mode==='outbound'?body.sets:1);
+        if(!id(quantity))return false;
+        totals.set(identity,(totals.get(identity)||0)+quantity);
+      }
+      if(next!==data.created.length||!Array.isArray(data.operations)||data.operations.length!==totals.size||!ids(data.operations.map(x=>x.event_id))||!ids(data.operations.map(x=>x.item_id)))return false;
+      return data.operations.every(x=>totals.get(x.item_id)===x.quantity&&(body.mode==='inbound'?x.action==='receive':['borrow','consume'].includes(x.action)));
+    }
+    if(path==='scan/batch')return Array.isArray(body.receipts)&&Array.isArray(data.receipts)&&data.receipts.length===body.receipts.length&&
+      ids(data.receipts.map(r=>r.receipt_id))&&ids(data.receipts.map(r=>r.event_id))&&data.receipts.every((r,i)=>{
+        const original=body.receipts[i];return id(r.item_id)&&(!original.item_id||original.item_id===r.item_id)&&
+          (original.entry_id==null||original.entry_id===r.entry_id)&&r.actual_quantity===original.quantity;
+      });
+    if(path==='categories/assign')return Array.isArray(body.items)&&data.selected===body.items.length&&data.category_id===(body.category_id??null)&&
+      Array.isArray(data.changed)&&new Set(data.changed).size===data.changed.length&&data.changed.every(v=>id(v)&&body.items.some(x=>x.id===v));
+    if(path==='units/stocktakes/scan-batch')return Array.isArray(data.events)&&same(data.events.map(r=>r.unit_id),body.unit_ids)&&ids(data.events.map(r=>r.event_id));
     if(path.startsWith('catalog/'))return id(data.id);
-    if(path==='units/operate'||path==='units/object-move')return ids(data.event_ids)&&ids(data.unit_ids);
-    if(path==='units/receive')return id(data.event_id)&&ids(data.unit_ids);
+    if(path==='units/operate'||path==='units/object-move')return same(data.unit_ids,body.units?.map(u=>u.id))&&ids(data.event_ids)&&data.event_ids.length===body.units.length;
+    if(path==='units/receive')return id(data.event_id)&&ids(data.unit_ids)&&data.unit_ids.length===body.quantity;
     if(path==='scan/receive'||path==='scan/create-receive')return id(data.event_id)&&id(data.receipt_id);
     return id(data.event_id);
   }
   async function api(path, body, options={}){
+    let firstAttempt=false;
+    if(body&&unresolved?.path===path&&unresolved.request_id===body.request_id){
+      firstAttempt=!unresolved.attempted;
+      const attempted={...unresolved,attempted:true};
+      sessionStorage.setItem(pendingKey,JSON.stringify(attempted));
+      unresolved=attempted;
+    }
     const response=await fetch('/api/assets/'+path, body?{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:options.signal
     }:{signal:readController.signal});
@@ -125,7 +162,8 @@
     if(!response.ok||data?.ok!==true){
       const error=new Error(typeof data?.error==='string'?data.error:'服务器返回了无法识别的内容');
       // Only a structured business rejection proves the write did not succeed.
-      error.businessRejected=[400,409,422].includes(response.status)&&data?.ok===false&&typeof data.error==='string';
+      error.businessRejected=([400,409,422].includes(response.status)||(response.status===413&&firstAttempt&&data?.reason==='request_too_large'&&data.not_applied===true))&&data?.ok===false&&typeof data.error==='string';
+      if(response.status===413&&!error.businessRejected)error.message+='；原请求可能已处理，请使用原标识重试或交管理员核对，不要新建替代请求。';
       error.status=response.status;error.data=data;throw error;
     }
     if(body?.request_id&&!validWriteReceipt(path,body,data))throw new Error('服务器回执不完整或与原请求不匹配，请保留原请求核对');
@@ -335,6 +373,16 @@
       '<p>只会重发原来的完整请求及相同标识，不会再登记第二笔。</p>'+
       '<p>操作：'+esc(unresolved.path==='supply-status'?'耗材状态 → '+supplyName(body.status):names[body.action]||'目录维护')+' · 数量：'+esc(body.quantity??'—')+'</p>'+
       '<p>用途／原因：'+esc(body.reason||'目录维护')+'</p>';
+    if(unresolved.path==='bom/commit'){
+      const campus=catalog.campuses.find(c=>c.id===body.campus_id);
+      const total=body.rows.reduce((n,r)=>n+r.quantity*(body.mode==='outbound'?body.sets:1),0);
+      $('asset-fields').innerHTML='<p>BOM '+(body.mode==='outbound'?'出库':'入库')+' · 校区：'+esc(campus?.name||'未知')+'（ID '+esc(body.campus_id)+'）</p>'+
+        '<p>'+body.rows.length+' 行 · '+esc(body.sets)+' 套 · 实际合计 '+esc(total)+' 件</p><p>用途／原因：'+esc(body.reason)+'</p><ol>'+
+        body.rows.map(r=>'<li>'+esc(r.item_id?'物料 M:'+r.item_id:r.name+' '+(r.specification||''))+' · 数量 '+esc(r.quantity)+'</li>').join('')+'</ol>';
+    }
+    const copy=document.createElement('button');copy.type='button';copy.className='btn';copy.textContent='复制原请求供核对';
+    copy.onclick=async()=>{try{await navigator.clipboard.writeText(JSON.stringify(unresolved,null,2));copy.textContent='已复制';}catch(_){copy.textContent='复制失败，请使用原请求重试';}};
+    $('asset-fields').append(copy);
     $('asset-form-status').textContent='';
     $('asset-save').textContent='重试原请求';
     dialog.classList.remove('asset-dialog-wide');
@@ -636,12 +684,12 @@
     let saved=unresolved;
     if(!saved){
       saved={actor_id:catalog.member_id,path:operation.path,body,request_id:requestId()};
-      if(new TextEncoder().encode(JSON.stringify({...body,request_id:saved.request_id})).length>16384){
+      if(new TextEncoder().encode(JSON.stringify({...body,request_id:saved.request_id})).length>(catalog.write_limits?.default||16384)){
         $('asset-form-status').textContent='本次资料超过请求大小限制，请减少条目或缩短内容后重新提交。当前资料已保留。';return;
       }
       try{rememberPending(saved);}
-      catch(_){
-        $('asset-form-status').textContent='无法安全保存待确认请求，请检查浏览器会话存储设置后重试。';
+      catch(error){
+        $('asset-form-status').textContent=error.message||'无法安全保存待确认请求，请检查浏览器会话存储设置后重试。';
         return;
       }
     }

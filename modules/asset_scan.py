@@ -389,7 +389,7 @@ def apply_receipt(db, prepared, draft_items):
         (item_id, result["event_id"], fingerprint(parsed["raw"]), parsed["raw"],
          json.dumps(evidence, ensure_ascii=False), parsed.get("label_quantity"), quantity, prepared["duplicate_reason"]),
     ).lastrowid
-    return {**result, "item_id": item_id, "receipt_id": receipt_id,
+    return {**result, "item_id": item_id, "receipt_id": receipt_id, "actual_quantity": quantity,
             "entry_id": data.get("entry_id"), "actor_id": current_user()["id"], "created_at": stamp()}
 
 

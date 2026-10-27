@@ -290,6 +290,7 @@ def commit(db, data):
     if not isinstance(rows, list) or not 1 <= len(rows) <= BATCH_LIMIT:
         raise Invalid(f"每批必须包含 1 至 {BATCH_LIMIT} 行物料")
     quantities, identities = {}, {}
+    row_items = []
     created, new_drafts = [], {}
     for entry in rows:
         if not isinstance(entry, dict):
@@ -340,6 +341,7 @@ def commit(db, data):
                 raise Invalid(f"M:{item_id} 库存已经变化，请重新预览", 409)
         if item_id in identities and identities[item_id]["kind"] != item["kind"]:
             raise Invalid("同一物料类型不一致")
+        row_items.append(item_id)
         identities[item_id] = item
         quantities[item_id] = quantities.get(item_id, 0) + total_qty
         if quantities[item_id] > MAX_QUANTITY:
@@ -359,4 +361,4 @@ def commit(db, data):
                                      "reason": f"BOM批量{'入库' if mode == 'inbound' else f'出库（{sets}套）'}：{reason}"})
         results.append({"item_id": item_id, "quantity": qty, "action": action,
                         "event_id": result["event_id"], "loan_id": result["loan_id"]})
-    return {"rows": len(rows), "sets": sets, "created": created, "operations": results}
+    return {"rows": len(rows), "sets": sets, "created": created, "row_items": row_items, "operations": results}

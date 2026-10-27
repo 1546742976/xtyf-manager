@@ -51,6 +51,14 @@ class AssetBomTest(unittest.TestCase):
             "quantity": 100, "reason": "合成初始入库",
         })
 
+    def test_oversized_request_is_explicitly_rejected_before_write(self):
+        token = self.admin.get("/api/csrf").get_json()["csrf_token"]
+        response = self.admin.post("/api/assets/bom/commit", json={"reason": "x" * 17000},
+                                   headers={"X-CSRF-Token": token})
+        self.assertEqual(response.status_code, 413)
+        self.assertTrue(response.get_json()["not_applied"])
+        self.assertEqual(response.get_json()["reason"], "request_too_large")
+
     def client(self, identity):
         client = app_module.app.test_client()
         with client.session_transaction() as session:
@@ -152,6 +160,7 @@ class AssetBomTest(unittest.TestCase):
                  "unit": "个", "code": "C98765435", "quantity": 4}
         other = {**draft, "quantity": 6}
         result = self.batch([draft, other], mode="inbound", client=self.admin)
+        self.assertEqual(result["row_items"], [result["created"][0]] * 2)
         self.assertEqual(len(result["created"]), 1)
         self.assertEqual(result["operations"][0]["quantity"], 10)
         self.assertEqual(self.detail(result["created"][0])[1]["available"], 10)

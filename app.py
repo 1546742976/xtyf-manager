@@ -154,6 +154,9 @@ def request_body_limit():
         limit = 16 * 1024
     request.max_content_length = limit
     if request.content_length is not None and request.content_length > limit:
+        if request.path.startswith('/api/assets/'):
+            return jsonify(ok=False, error='请求内容过大，请减少文件或内容后重试',
+                           reason='request_too_large', not_applied=True), 413
         return error_response(413, '请求内容过大，请减少文件或内容后重试')
     return None
 

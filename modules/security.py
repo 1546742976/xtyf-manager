@@ -214,13 +214,13 @@ def init_security(app):
         if request.path.startswith('/api/assets/') and request.method not in SAFE_METHODS:
             limit = 16 * 1024
             if request.content_length is not None and request.content_length > limit:
-                return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
+                return jsonify(ok=False, error="资产请求体超过 16 KiB 限制", reason="request_too_large", not_applied=True), 413
             if request.content_length is None:
                 # Read at most one sentinel byte beyond the cap. The limited
                 # stream itself can stop at the cap and hide this extra byte.
                 raw = request.input_stream.read(limit + 1)
                 if len(raw) > limit:
-                    return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
+                    return jsonify(ok=False, error="资产请求体超过 16 KiB 限制", reason="request_too_large", not_applied=True), 413
                 request._cached_data = raw  # Retain the bounded body for get_json/audit.
         public_pwa = request.endpoint in PUBLIC_ENDPOINTS and request.method in SAFE_METHODS
         user = current_user() if request.endpoint != "static" and not public_pwa else None

@@ -621,7 +621,7 @@ def record_many(db, data):
         or len(set(values)) != len(values)
     ):
         raise Invalid("请选择 1 至 100 个不同单件")
-    return {"events": [record_observation(db, dict(data, unit_id=i, action="scan")) for i in values]}
+    return {"events": [{**record_observation(db, dict(data, unit_id=i, action="scan")), "unit_id": i} for i in values]}
 
 
 def record_observation(db, data):

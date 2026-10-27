@@ -157,7 +157,14 @@ async function main(){
     await page.locator('#asset-bom-message').filter({hasText:'提交结果暂未确认'}).waitFor();
     assert.equal(await page.evaluate(()=>window.AssetLedger.blocked),true);
     assert.equal(await page.evaluate(()=>{try{window.AssetLedger.rememberPending({actor_id:1,path:'operations',body:{},request_id:'replacement'});return true;}catch(_){return false;}}),false);
+    await page.evaluate(()=>window.AssetLedger.load());
+    assert.equal(await page.locator('#asset-bom-save').isDisabled(),false,'refresh catalog retains original retry');
+    malformedBom=true;
+    await page.locator('#asset-bom-save').click();
+    await page.locator('#asset-bom-message').filter({hasText:'提交结果暂未确认'}).waitFor();
     await page.reload();await page.locator('#asset-pending-retry').click();
+    assert.match(await page.locator('#asset-fields').innerText(),/BOM 入库/);
+    assert.match(await page.locator('#asset-fields').innerText(),/实际合计 1 件/);
     await page.getByRole('button',{name:'重试原请求',exact:true}).click();
     await page.locator('#asset-pending').waitFor({state:'hidden'});
     assert.equal((await (await api.get(`/api/assets/items/${bomItem}`)).json()).campuses.find(c=>c.id===campus).available,1);

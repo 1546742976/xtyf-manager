@@ -240,7 +240,7 @@
     const data=validate();
     summary.textContent=rows.length?'当前 '+rows.length+' 行 · '+(mode.value==='outbound'?'按 '+sets.value+' 套共 ':'入库共 ')+data.total+
       ' 件'+(matched?' · 关联 '+data.totals.size+' 种库存物料':' · 尚未匹配库存'):'尚未导入有效物料行';
-    save.disabled=busy||!!pendingBatch||!matched||!!data.errors.length||core.blocked;
+    save.disabled=busy||core.writing||(pendingBatch?!(pendingBatch.actor_id===core.catalog?.member_id&&core.saved?.request_id===pendingBatch.request_id):(!matched||!!data.errors.length||core.blocked));
     if(matched&&data.errors.length)show('提交受阻：'+data.errors.slice(0,3).join('；'),true);
   }
   async function matchRows(){
@@ -296,7 +296,7 @@
           reason:reason.value.trim(),rows:writeRows()}
       };
       try{core.rememberPending(pendingBatch);}
-      catch(_){pendingBatch=null;show('无法保存请求重试信息，本次没有提交。',true);return;}
+      catch(error){pendingBatch=null;show(error.message+'；本次没有提交。',true);return;}
     }
     busy=true;core.setWriting(true);freeze(true);save.disabled=true;show('正在批量写入库存与流水…');
     try{
@@ -316,7 +316,7 @@
     }finally{
       busy=false;
       core.setWriting(false);
-      if(pendingBatch)save.disabled=false;
+      updateSummary();
     }
   }
   importBtn.addEventListener('click',importFile);
