@@ -26,6 +26,18 @@ async function main(){
       assert.equal(await page.evaluate(()=>typeof window.FormControls?.refresh),'function');
       assert.deepEqual(await page.locator('input,select,textarea').evaluateAll(fields=>fields.filter(f=>getComputedStyle(f).resize!=='none').map(f=>f.id)),[]);
     }
+    for(const width of [320,768,1440]){
+      await page.setViewportSize({width,height:900});
+      for(const url of ['/invoices/','/account','/tasks','/discussions']){
+        await page.goto(base+url);await page.waitForLoadState('networkidle');await settle();
+        assert.deepEqual(await page.locator('input,select,textarea').evaluateAll(fields=>fields.filter(f=>f.getClientRects().length&&f.getBoundingClientRect().right>innerWidth+1).map(f=>f.id)),[],url+' controls overflow');
+        if(url==='/invoices/'&&width===1440){
+          assert.ok(await page.locator('#filterStatus').evaluate(f=>f.offsetWidth<f.parentElement.clientWidth/2),'inline invoice filter stretched');
+          await page.evaluate(()=>document.getElementById('batchBar').style.display='flex');
+          assert.ok(await page.locator('#batchStatus').evaluate(f=>f.offsetWidth<f.parentElement.clientWidth/2),'batch select stretched');
+        }
+      }
+    }
     phase=name+' dynamic dialog and responsive text';await page.goto(base+'/account');await page.waitForLoadState('networkidle');
     await page.evaluate(()=>{
       const box=document.createElement('dialog');box.id='responsive-probe';box.style.cssText='width:min(620px,calc(100vw - 32px));box-sizing:border-box;';
@@ -45,6 +57,11 @@ async function main(){
       assert.ok(await page.locator('#responsive-probe input[type=text]').evaluate(f=>f.offsetWidth<=f.form.clientWidth));
       assert.ok(await page.locator('#responsive-probe input[type=checkbox]').evaluate(f=>f.offsetWidth<50));
     }
+    // Visible prefill must work without an input event or reopening the dialog.
+    await page.evaluate(()=>{const f=document.querySelector('#responsive-probe textarea');f.value='程序赋值\n'.repeat(70);FormControls.refresh(f);});await settle();
+    assert.ok(await text.evaluate(f=>f.scrollHeight>f.clientHeight));
+    await page.evaluate(()=>{const f=document.querySelector('#responsive-probe textarea');f.value='';FormControls.refresh(f);});await settle();
+    assert.ok(await text.evaluate(f=>f.offsetHeight)<150);
     // Reopening, programmatic prefill, reset, parent-only resize and font zoom.
     await page.evaluate(()=>{const d=document.getElementById('responsive-probe');d.close();d.querySelector('textarea').value='预填\n'.repeat(60);d.showModal();});await settle();
     assert.ok(await text.evaluate(f=>f.scrollHeight>f.clientHeight));
@@ -55,6 +72,13 @@ async function main(){
     assert.ok(await text.evaluate(f=>f.offsetHeight)>wide);
     await page.evaluate(()=>document.documentElement.style.fontSize='200%');await settle();
     assert.ok(await text.evaluate(f=>f.offsetWidth<=f.form.clientWidth));
+    const scans=await page.evaluate(async()=>{
+      const query=document.querySelectorAll.bind(document);let scans=0;
+      document.querySelectorAll=selector=>{if(selector==='textarea')scans++;return query(selector);};
+      const tip=document.createElement('span');document.body.append(tip);
+      for(let i=0;i<5;i++){tip.style.left=i+'px';await new Promise(requestAnimationFrame);}
+      tip.remove();delete document.querySelectorAll;return scans;
+    });assert.equal(scans,0,'unrelated mutations must not scan all textareas');
     await page.screenshot({path:path.join(output,name+'.png')});
     assert.deepEqual(errors,[]);passed.push(name+': six page shells, 320/768/1440 widths, grow/shrink/cap, reset, prefill, container resize, font zoom');
     await browser.close();browser=null;

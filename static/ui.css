@@ -1,6 +1,7 @@
 [hidden]{display:none!important}
 /* Let the layout own control sizes; preserve native checkbox/radio/range sizing. */
-:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=button]):not([type=submit]):not([type=reset]):not([type=hidden]),select,textarea){box-sizing:border-box;width:100%;max-width:100%;min-width:0}
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=button]):not([type=submit]):not([type=reset]):not([type=hidden]),select,textarea){box-sizing:border-box;max-width:100%;min-width:0}
+:where(form textarea,.form-control,.form-select){width:100%}
 input,select,textarea{resize:none!important}
 textarea{--textarea-max-height:360px;max-height:var(--textarea-max-height);overflow-y:auto}
 /* XTYF Design System v2 — shared across progress, finance and invoices */

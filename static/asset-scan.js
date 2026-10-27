@@ -106,7 +106,7 @@
     if([...packages.values()].some(v=>v.parsed.raw===raw)){status('同一标签已在清单中，不重复累计数量；确为另一物品可从清单选择“新增重码条目”。');feedback('duplicate','已扫描过','此标签已在清单中，未重复增加',true);return {status:'duplicate'};}
     if(currentPackages().length>=20){status('每批最多 20 个包装，请先核对入库。');feedback('attention','本批已满 20 个','请先核对整批入库',true);return {status:'failure',message:'每批最多 20 个包装'};}
     const key='scan-'+(++nextEntry),entry={key,parsed:{raw},item:null,state:'loading',scopeItemId:Number(context.itemId)||null,campusId:context.campusId||''};
-    packages.set(key,entry);$('asset-scan-raw').value='';
+    packages.set(key,entry);$('asset-scan-raw').value='';window.FormControls?.refresh($('asset-scan-raw'));
     const lookup=refreshReceipt(entry);status(`已收集 ${currentPackages().length} 个标签，可继续扫描；查询结果会更新到清单。`);
     feedback('loading','正在识别标签','已保留标签，等待查询结果');
     return lookup;
@@ -131,7 +131,7 @@
     cancel();
     clearResult();context={...nextContext};setTask(aliases[value]||value);
     core.showDialog(dialog);status(hints[task]+(context.takeId?' 当前盘点 #'+context.takeId+'。':''));
-    $('asset-scan-raw').value='';
+    $('asset-scan-raw').value='';window.FormControls?.refresh($('asset-scan-raw'));
     if(intake())$('asset-scan-raw').placeholder='扫描采购包装、厂家二维码、条形码，或粘贴标签原文';
     if(!matchMedia('(pointer:coarse)').matches)$('asset-scan-raw').focus();
   }
@@ -231,7 +231,7 @@
         if(task==='count'&&!context.takeId)message='已找到实物。请选择盘点任务，再扫描加入该任务。';
         else message=addUnit(value);
       }
-      status(message);$('asset-scan-raw').value='';feedback('success',value.item?.name||value.supplier_lookup?.product?.name||value.parsed.code||'识别成功',message,true);return {status:'success'};
+      status(message);$('asset-scan-raw').value='';window.FormControls?.refresh($('asset-scan-raw'));feedback('success',value.item?.name||value.supplier_lookup?.product?.name||value.parsed.code||'识别成功',message,true);return {status:'success'};
     }catch(error){if(own!==sequence)return {status:'stale'};status(error.message);feedback('error','识别未完成',error.message,true);return {status:'failure',message:error.message};}
   }
   function receive(value){
@@ -365,7 +365,7 @@
       (v.history?.length?`<label>重复登记核对原因<textarea name="d${i}" required maxlength="500">${esc(v.duplicateReason||'')}</textarea></label>`:'')+'</fieldset>').join('');
     core.open('核对整批入库',`<div class="asset-operation-summary"><strong>本次登记 ${values.length} 条</strong><p>核对实收数量与实际校区，确认后统一建档并入库。</p></div><label>统一设置入库校区<select id="scan-batch-campus">${options(campuses,'','可统一选择，也可逐条设置')}</select></label>`+fields+reason(false),'scan/batch',{},[],form=>({receipts:values.map((v,i)=>({raw:v.parsed.raw,...(v.item?{item_id:v.item.id}:{}),quantity:Number(form.get('q'+i)),campus_id:Number(form.get('c'+i)),receipt_version:v.receipt_version??0,duplicate_reason:form.get('d'+i)||'',reason:form.get('reason'),...(intake()?{entry_id:v.key,match_version:v.match_version,draft_id:v.draft_id||undefined,draft:v.draft||undefined,intent:v.intent||'receive',code_role:v.code_role||'item',target_type:v.target_type,target_id:v.target_id,force_new:!!v.force_new,conflict_reason:v.conflict_reason||''}:{})}))}));
     const common=$('scan-batch-campus');if(!common)return;
-    const form=$('asset-form');form.elements.reason.value=batchReason;
+    const form=$('asset-form');form.elements.reason.value=batchReason;window.FormControls?.refresh(form.elements.reason);
     for(const [i,entry] of values.entries())for(const [prefix,key] of [['q','quantity'],['c','campusId'],['d','duplicateReason']]){
       const field=form.elements[prefix+i];if(field)field.oninput=()=>{entry[key]=field.value;};
     }
@@ -471,7 +471,7 @@
       for(const receipt of body.receipts){if(receipt.entry_id)packages.delete(receipt.entry_id);else for(const [key,v] of packages)if(v.parsed.raw===receipt.raw)packages.delete(key);}
       batchReason='';clearResult();queue();status('整批包装已入库，可以继续扫描。');feedback('success','整批入库完成',`本次 ${body.receipts.length} 个包装已保存`,true);
     }else if(['scan/receive','scan/create-receive'].includes(path)){
-      for(const [key,v] of packages)if(v.parsed.raw===body.raw)packages.delete(key);clearResult();queue();$('asset-scan-raw').value='';status('已入库，可以继续扫描。');
+      for(const [key,v] of packages)if(v.parsed.raw===body.raw)packages.delete(key);clearResult();queue();$('asset-scan-raw').value='';window.FormControls?.refresh($('asset-scan-raw'));status('已入库，可以继续扫描。');
     }else if(path==='units/operate'){
       for(const entries of unitQueues.values())for(const unit of body.units)if(entries.get(unit.id)?.version===unit.version)entries.delete(unit.id);
       clearResult();queue();status('实物操作已保存，可以继续扫描。');
