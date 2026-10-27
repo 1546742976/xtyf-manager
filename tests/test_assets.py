@@ -142,6 +142,8 @@ class AssetsTest(unittest.TestCase):
         payload = dict(request_id=uuid4().hex, action="receive", item_id=self.item,
                        campus_id=self.campus, quantity=10, reason="测试")
         first = self.post(self.admin, "/api/assets/operations", payload)
+        self.assertEqual(first['request_id'], payload['request_id'])
+        self.assertTrue(self.admin.get('/api/assets/catalog').get_json()['write_receipts'])
         self.assertEqual(first, self.post(self.admin, "/api/assets/operations", payload))
         self.post(self.admin, "/api/assets/operations", {**payload, "quantity": 11}, 409)
         self.assertEqual(self.stock()["available"], 10)

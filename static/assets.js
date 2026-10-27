@@ -45,12 +45,16 @@
     retry.hidden=!sameUser;
   }
   function rememberPending(value){
+    const stored=readPending();
+    if(stored&&JSON.stringify(stored)!==JSON.stringify(value))throw Error('存在其他待确认请求，请先恢复核对');
     sessionStorage.setItem(pendingKey,JSON.stringify(value));
     unresolved=value;showPending();
   }
   function forgetPending(){
+    const saved=unresolved;
     sessionStorage.removeItem(pendingKey);
     unresolved=null;showPending();
+    document.dispatchEvent(new CustomEvent('asset-pending-cleared',{detail:saved}));
   }
   const dialog=$('asset-dialog'), form=$('asset-form'), filter=$('asset-filter');
   const dialogOrigins=new WeakMap(),suspendedDialogs=new WeakSet();
@@ -99,6 +103,19 @@
   }
   const requestId=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
   const status=(message,state='info')=>{$('asset-status').textContent=message;$('asset-status').dataset.state=state;};
+  function validWriteReceipt(path,body,data){
+    if((catalog?.write_receipts||Object.hasOwn(data,'request_id'))&&data.request_id!==body.request_id)return false;
+    const id=v=>Number.isSafeInteger(v)&&v>0, ids=v=>Array.isArray(v)&&v.length>0&&v.every(id);
+    if(path==='bom/commit')return id(data.rows)&&Array.isArray(data.operations)&&data.operations.length>0&&data.operations.every(r=>id(r.event_id));
+    if(path==='scan/batch')return Array.isArray(data.receipts)&&data.receipts.length>0&&data.receipts.every(r=>id(r.receipt_id));
+    if(path==='categories/assign')return Number.isSafeInteger(data.changed)&&data.changed>=0&&id(data.selected);
+    if(path==='units/stocktakes/scan-batch')return ids(data.events);
+    if(path.startsWith('catalog/'))return id(data.id);
+    if(path==='units/operate'||path==='units/object-move')return ids(data.event_ids)&&ids(data.unit_ids);
+    if(path==='units/receive')return id(data.event_id)&&ids(data.unit_ids);
+    if(path==='scan/receive'||path==='scan/create-receive')return id(data.event_id)&&id(data.receipt_id);
+    return id(data.event_id);
+  }
   async function api(path, body, options={}){
     const response=await fetch('/api/assets/'+path, body?{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:options.signal
@@ -108,9 +125,10 @@
     if(!response.ok||data?.ok!==true){
       const error=new Error(typeof data?.error==='string'?data.error:'服务器返回了无法识别的内容');
       // Only a structured business rejection proves the write did not succeed.
-      error.businessRejected=response.status>=400&&response.status<500&&data?.ok===false&&typeof data.error==='string';
+      error.businessRejected=[400,409,422].includes(response.status)&&data?.ok===false&&typeof data.error==='string';
       error.status=response.status;error.data=data;throw error;
     }
+    if(body?.request_id&&!validWriteReceipt(path,body,data))throw new Error('服务器回执不完整或与原请求不匹配，请保留原请求核对');
     return data;
   }
   const button=(action,label,id,extra='')=>`<button type="button" class="btn" data-action="${action}" data-id="${id}" ${extra}>${label}</button>`;
@@ -182,7 +200,7 @@
       await api(saved.path,{...saved.body,request_id:saved.request_id});forgetPending();
       if(await load())status('已标记为'+supplyName(saved.body.status)+'。');
     }catch(error){
-      const unknown=!error.status||error.status>=500;if(!unknown)forgetPending();
+      const unknown=!error.businessRejected;if(!unknown)forgetPending();
       status(error.message+(unknown?'；结果尚未确认，请重试上次提交。':'；请刷新数据后核对。'));
     }finally{pending=false;trigger.disabled=false;showPending();}
   }
@@ -730,7 +748,9 @@
   filter.addEventListener('change',e=>{
     if(e.target.name==='campus_id'||e.target.name==='category'){listPage=1;load();}
   });
-  window.AssetLedger={api,load,open,showDialog,input,reason,options,esc,campusFields,scanQuantity,renderPager:pager,registerPager,get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
+  window.AssetLedger={api,load,open,showDialog,input,reason,options,esc,campusFields,scanQuantity,renderPager:pager,registerPager,
+    rememberPending,forgetPending,setWriting(value){pending=value;showPending();},get writing(){return pending;},get saved(){return unresolved;},
+    get catalog(){return catalog;},get blocked(){return !!unresolved||pending;},get detail(){return detail;},get listing(){return listing;}};
   window.addEventListener('load',updateCategorySelection,{once:true});
   // assets.js precedes asset-units.js and asset-scan.js in the template.
   // A fast API response can finish load() before those modules register on

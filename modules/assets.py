@@ -163,12 +163,12 @@ def mutation(view):
                 if previous["payload"] != payload:
                     raise Invalid("重复请求标识对应了不同内容，请重新操作", 409)
                 db.rollback()
-                return jsonify(json.loads(previous["result"]))
+                return jsonify({**json.loads(previous["result"]), "request_id": key})
             result = dict(ok=True, **view(db, data, *args, **kwargs))
             db.execute("INSERT INTO asset_requests VALUES(?,?,?,?)",
                        (user["id"], key, payload, json.dumps(result)))
             db.commit()
-            return jsonify(result)
+            return jsonify({**result, "request_id": key})
         except Invalid as error:
             db.rollback()
             return jsonify(ok=False, error=error.message), error.status
@@ -206,7 +206,7 @@ def page():
 @login_required
 def catalog():
     db = get_db()
-    return jsonify(ok=True, can_manage=manager(), intake_enabled=True, server_time=stamp(),
+    return jsonify(ok=True, can_manage=manager(), intake_enabled=True, write_receipts=True, server_time=stamp(),
                    member_id=current_user()["id"],
                    categories=[dict(r) for r in db.execute("SELECT * FROM asset_categories ORDER BY name,id")],
                    campuses=[dict(r) for r in db.execute("SELECT * FROM asset_campuses ORDER BY name,id")])

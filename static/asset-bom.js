@@ -23,7 +23,6 @@
   const normalize=v=>String(v||'').trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g,'');
   const aliasLookup={};
   for(const [field,values] of Object.entries(aliases))for(const v of values)aliasLookup[normalize(v)]=field;
-  const pendingKey='xtyf.assets.unconfirmed.v1:'+(window.XTYF?.config?.serverUrl||location.origin);
   const newToken=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
   let raw=[],headerAt=1,map={},rows=[],matched=false,managing=false,busy=false,pendingBatch=null;
   let importedFile='';
@@ -281,30 +280,33 @@
   }
   async function submit(event){
     event.preventDefault();
-    if(busy||core.blocked)return;
+    if(busy||core.writing||(core.blocked&&!pendingBatch))return;
+    if(pendingBatch&&(pendingBatch.actor_id!==core.catalog?.member_id||core.saved?.request_id!==pendingBatch.request_id)){
+      show('请使用原账号核对待确认请求，不能以当前身份重新登记。',true);return;
+    }
     if(!pendingBatch){
       if(!matched){show('请先完成库存匹配。',true);return;}
       const {errors}=validate();
       if(errors.length){show('无法提交：'+errors.join('；'),true);return;}
       const actor=core.catalog?.member_id;
-      if(!actor||sessionStorage.getItem(pendingKey)){show('存在未确认的操作，请先恢复核对。',true);return;}
+      if(!actor||core.blocked){show('存在未确认的操作，请先恢复核对。',true);return;}
       pendingBatch={
         actor_id:actor,path:'bom/commit',request_id:newToken(),
         body:{mode:mode.value,campus_id:Number(campus.value),sets:mode.value==='outbound'?Number(sets.value):1,
           reason:reason.value.trim(),rows:writeRows()}
       };
-      try{sessionStorage.setItem(pendingKey,JSON.stringify(pendingBatch));}
+      try{core.rememberPending(pendingBatch);}
       catch(_){pendingBatch=null;show('无法保存请求重试信息，本次没有提交。',true);return;}
     }
-    busy=true;freeze(true);save.disabled=true;show('正在批量写入库存与流水…');
+    busy=true;core.setWriting(true);freeze(true);save.disabled=true;show('正在批量写入库存与流水…');
     try{
       const result=await core.api(pendingBatch.path,{...pendingBatch.body,request_id:pendingBatch.request_id});
-      sessionStorage.removeItem(pendingKey);pendingBatch=null;
+      core.forgetPending();pendingBatch=null;
       busy=false;freeze(false);reset();
       await core.load();show('批量操作成功：已登记 '+result.operations.length+' 种物料，请到物料仓库查看记录。');
     }catch(error){
       if(error.businessRejected){
-        sessionStorage.removeItem(pendingKey);pendingBatch=null;
+        core.forgetPending();pendingBatch=null;
         busy=false;freeze(false);clearMatch();renderRows();
         show(error.message+'；未写入任何物料。请重新匹配库存后再提交。',true);
       }else{
@@ -313,6 +315,7 @@
       }
     }finally{
       busy=false;
+      core.setWriting(false);
       if(pendingBatch)save.disabled=false;
     }
   }
@@ -341,5 +344,8 @@
   match.addEventListener('click',matchRows);
   $('asset-bom-form').addEventListener('submit',submit);
   document.addEventListener('assets-loaded',configure);
+  document.addEventListener('asset-pending-cleared',event=>{
+    if(pendingBatch?.request_id===event.detail?.request_id){pendingBatch=null;freeze(false);clearMatch();updateSummary();}
+  });
   if(core.catalog)configure();
 })();

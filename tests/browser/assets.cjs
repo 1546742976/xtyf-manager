@@ -106,9 +106,11 @@ async function main(){
     await eastCard.getByRole('button',{name:'登记借用',exact:true}).click();await page.locator('#asset-form [name=quantity]').fill('3');
     // A committed response is lost: retry must return the existing result.
     await page.getByLabel('用途／备注（必填）',{exact:true}).fill('合成借用验证');
-    let lost=true;
+    let lost=true,failedRetry=null;
     await page.route('**/api/assets/operations',async route=>{
-      if(lost){lost=false;await route.fetch();await route.abort();}else await route.continue();
+      if(lost){lost=false;await route.fetch();await route.abort();}
+      else if(failedRetry)await route.fulfill({contentType:'application/json',...failedRetry});
+      else await route.continue();
     });
     await page.locator('#asset-save').click();await page.locator('#asset-form-status').filter({hasText:'结果尚未确认'}).waitFor();
     assert.equal(await page.locator('#asset-form [name=quantity]').inputValue(),'3');
@@ -120,12 +122,49 @@ async function main(){
     // Reloading the page must not lose a committed-but-unacknowledged request.
     await page.reload();await page.locator('#asset-pending-retry').waitFor({state:'visible'});
     await page.locator('#asset-pending-retry').click();
+    const pendingBefore=await page.evaluate(()=>Object.entries(sessionStorage).find(([k])=>k.startsWith('xtyf.assets.unconfirmed.v1:'))[1]);
+    for(const [status,data] of [[401,{ok:false,error:'synthetic expired login'}],[403,{ok:false,error:'synthetic permission change'}],[200,{ok:true}],[200,{ok:true,event_id:1,request_id:'wrong-request'}]]){
+      failedRetry={status,body:JSON.stringify(data)};
+      await page.getByRole('button',{name:'重试原请求',exact:true}).click();
+      await page.locator('#asset-form-status').filter({hasText:'结果尚未确认'}).waitFor();
+      await page.waitForFunction(()=>!document.getElementById('asset-save').disabled);
+      assert.equal(await page.evaluate(()=>Object.entries(sessionStorage).find(([k])=>k.startsWith('xtyf.assets.unconfirmed.v1:'))[1]),pendingBefore);
+    }
+    failedRetry=null;
     await page.getByRole('button',{name:'重试原请求',exact:true}).click();
     await page.locator('#asset-dialog').waitFor({state:'hidden'});
     await page.locator('#asset-pending').waitFor({state:'hidden'});
     await eastCard.getByText('总量 · 在库 7 / 借出 3',{exact:true}).waitFor();
     assert.equal((await (await api.get(`/api/assets/events?item_id=${id}`)).json()).events.filter(e=>e.action==='borrow').length,borrowEventsBefore);
     await page.unroute('**/api/assets/operations');
+    await page.waitForFunction(()=>!window.AssetLedger.writing);
+    const bomItem=await save('items',{name:label+' BOM recovery fixture',kind:'consumable',consumable_mode:'quantity',unit:'pcs'});
+    await page.goto(base+'/assets?view=table');
+    await page.locator('#asset-bom-file').setInputFiles({name:'synthetic.csv',mimeType:'text/csv',buffer:Buffer.from('Code,Name,Qty\nM:'+bomItem+',Synthetic,1\n')});
+    await page.locator('#asset-bom-import').click();
+    await page.locator('#asset-bom-editor').waitFor({state:'visible'});
+    await page.locator('#asset-bom-campus').selectOption(String(campus));
+    await page.locator('#asset-bom-mode').selectOption('inbound');
+    await page.locator('#asset-bom-reason').fill('synthetic BOM recovery');
+    await page.locator('#asset-bom-match').click();
+    await page.locator('#asset-bom-message').filter({hasText:'已匹配库存'}).waitFor();
+    let malformedBom=true;
+    await page.route('**/api/assets/bom/commit',async route=>{
+      if(malformedBom){malformedBom=false;await route.fetch();await route.fulfill({status:200,contentType:'application/json',body:'{"ok":true}'});}
+      else await route.continue();
+    });
+    await page.locator('#asset-bom-save').click();
+    await page.locator('#asset-bom-message').filter({hasText:'提交结果暂未确认'}).waitFor();
+    assert.equal(await page.evaluate(()=>window.AssetLedger.blocked),true);
+    assert.equal(await page.evaluate(()=>{try{window.AssetLedger.rememberPending({actor_id:1,path:'operations',body:{},request_id:'replacement'});return true;}catch(_){return false;}}),false);
+    await page.reload();await page.locator('#asset-pending-retry').click();
+    await page.getByRole('button',{name:'重试原请求',exact:true}).click();
+    await page.locator('#asset-pending').waitFor({state:'hidden'});
+    assert.equal((await (await api.get(`/api/assets/items/${bomItem}`)).json()).campuses.find(c=>c.id===campus).available,1);
+    await page.waitForFunction(()=>!window.AssetLedger.writing);
+    await page.unroute('**/api/assets/bom/commit');
+    await page.goto(base+'/assets');
+    await page.locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
     // A deliberately slow enhancement script must not race the initial mine
     // render: the quantity/units tab needs to exist even with a fast API.
     await page.route('**/static/asset-units.js',async route=>{
