@@ -258,6 +258,12 @@
 .asset-label-layout h3 { margin:0; font-size:15px; }
 .asset-label-layout .asset-fields { margin:0; align-content:start; }
 .asset-label-layout .asset-muted { margin:0; font-size:12px; }
+.asset-label-parts,.asset-label-text-settings { min-width:0; margin:0; padding:12px; border:1px solid var(--ux-stroke); border-radius:8px; }
+.asset-label-parts { display:flex; flex-wrap:wrap; gap:4px 16px; }
+.asset-label-text-settings { display:grid; gap:12px; }
+.asset-label-text-settings[hidden] { display:none; }
+.asset-label-text-row { gap:10px; }
+.asset-label-preview-panel { align-self:start; position:sticky; top:0; }
 .asset-label-download { position:sticky; bottom:-24px; padding:16px 24px; margin:20px -24px -24px; background:var(--ux-surface); border-top:1px solid var(--ux-stroke); }
 .asset-label-download p { margin:0 0 12px; font-size:12px; color:var(--ux-muted); }
 .asset-search { display:grid; gap:6px; min-width:0; }
@@ -385,6 +391,7 @@
   .asset-unit-row .btn,.asset-unit-selection-tools .btn,.asset-unit-action-group .btn { min-height:44px; }
   .asset-detail-overview,.asset-detail-supply,.asset-detail-history { padding:18px; }
   .asset-label-layout { grid-template-columns:minmax(0,1fr); }
+  .asset-label-preview-panel { position:static; }
   .asset-label-download { bottom:-18px; margin:18px -18px -18px; padding:14px 18px; }
   .asset-mine-scan-actions { padding:16px 18px 0; }
   .asset-text-button { min-height:36px; }

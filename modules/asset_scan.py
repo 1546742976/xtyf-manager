@@ -69,6 +69,9 @@ def parse_label(raw):
     if not isinstance(raw, str) or not raw.strip() or len(raw) > 4096:
         raise Invalid("标签内容为空或超过 4096 字符")
     raw = raw.strip()
+    numbered = re.fullmatch(r"M:([1-9][0-9]{0,17})/U:([1-9][0-9]{0,17})", raw)
+    if numbered:
+        return {"type": "unit", "id": int(numbered[2]), "item_id": int(numbered[1]), "raw": raw}
     if re.fullmatch(r"[UM]:[1-9][0-9]{0,17}", raw):
         return {"type": "unit" if raw[0] == "U" else "item", "id": int(raw[2:]), "raw": raw}
     if re.fullmatch(r"C[1-9][0-9]{0,17}", raw, re.I):
@@ -128,6 +131,10 @@ def attach_receipts(db, events):
 def exact_matches(db, parsed):
     """Internal IDs, old supplier bindings and external claims are all candidates."""
     targets = set()
+    if parsed.get("item_id") is not None:
+        unit = row(db, "asset_units", parsed["id"])
+        if unit["item_id"] != parsed["item_id"]:
+            raise Invalid("单件标签的物料编号与实物不匹配", 409)
     if parsed["type"] in ("item", "unit"):
         table = "asset_items" if parsed["type"] == "item" else "asset_units"
         if db.execute(f"SELECT 1 FROM {table} WHERE id=?", (parsed["id"],)).fetchone():

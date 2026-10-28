@@ -160,7 +160,7 @@
         const result=await request(`/api/daily-projects/${id}/groups/${stage}/progress`,body);
         group.version=result.version;group.progress=fields.progress;
         updateSummary(result.project);
-        form.elements.note.value='';form.elements.files.value='';local.textContent='进度已保存'+uploadNotice;
+        form.elements.note.value='';window.FormControls?.refresh(form.elements.note);form.elements.files.value='';local.textContent='进度已保存'+uploadNotice;
         const section=form.closest('.daily-group');section.querySelector('progress').value=fields.progress;section.querySelector('.daily-meter strong').textContent=fields.progress+'%';
         // Refresh only this history and total; preserve drafts in the other groups.
         try {

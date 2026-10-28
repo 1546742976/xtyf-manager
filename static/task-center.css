@@ -27,7 +27,7 @@ body.task-create-open { overflow:hidden; }
 .task-create-grid .task-create-wide, #create-form .task-create-dependencies { grid-column:1/-1; }
 .task-create-dialog input, .task-create-dialog select, .task-create-dialog textarea { width:100%; min-width:0; max-width:100%; }
 .task-create-dialog input[type=checkbox] { width:auto; }
-.task-create-dialog textarea[name=detail] { width:100%; height:120px; min-height:120px; max-height:120px; resize:none; }
+.task-create-dialog textarea[name=detail] { width:100%; min-height:120px; }
 .task-create-dialog .choice-item { display:flex; min-height:44px; }
 .task-create-dialog .choice-host { max-height:180px; overflow:auto; }
 .task-date-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }

@@ -114,7 +114,7 @@
     if(!explicit&&(text===last||recentLabels.has(text)))return false;
     if(recentLabels.size>=MAX_RECENT_LABELS)recentLabels.delete(recentLabels.keys().next().value);
     last=text;recentLabels.set(text,now+RECENT_LABEL_MS);
-    $('asset-scan-raw').value=text;
+    $('asset-scan-raw').value=text;window.FormControls?.refresh($('asset-scan-raw'));
     failed='';$('asset-camera-retry').hidden=true;
     const serial=++scanSerial;
     // Dispatch immediately: decoding must not wait on the 15-second lookup limit.

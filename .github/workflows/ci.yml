@@ -222,7 +222,7 @@ jobs:
       matrix:
         include:
           - group: foundation-core
-            suites: 'review_fixes pr22_merge'
+            suites: 'review_fixes pr22_merge funds_filter_race funds_recovery'
           - group: foundation-login
             suites: 'action_failures login_mobile'
           - group: tasks-core
@@ -232,7 +232,7 @@ jobs:
           - group: tasks-repairs
             suites: 'seven_repairs seven_repairs_review'
           - group: ui-core
-            suites: 'palette_workspace local_collaboration account_avatar'
+            suites: 'palette_workspace local_collaboration account_avatar responsive_inputs'
           - group: ui-clients
             suites: 'account_invoice_ui client_updates_avatar client_connection'
           - group: pwa
@@ -242,7 +242,7 @@ jobs:
           - group: assets-serialized
             suites: 'assets_serialized'
           - group: assets-intake
-            suites: 'assets_intake assets_catalog_paging'
+            suites: 'assets_intake assets_catalog_paging asset_bom_review'
     needs: browser-image
     # A missing image for a fork should not prevent the read-only fallback path.
     if: ${{ always() && (needs.browser-image.result == 'success' || needs.browser-image.result == 'skipped') }}
