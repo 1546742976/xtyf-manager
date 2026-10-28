@@ -5,12 +5,14 @@ use the shared asset_requests idempotency ledger and immutable asset_events.
 """
 import csv
 import io
-from itertools import islice
+from decimal import Decimal, InvalidOperation
 import re
 import zipfile
 
 from flask import Blueprint, jsonify, request
 from common import get_db, login_required
+from modules.task_validation import InvalidIdError, parse_id
+from modules.request_limits import asset_request_limit
 from modules.assets import (
     Invalid, MAX_QUANTITY, integer, manager, operate_record, require_manager,
     row, save_catalog_record, text, mutation,
@@ -47,14 +49,66 @@ def clean(value, limit=120):
 def parse_quantity(value):
     if isinstance(value, bool):
         raise Invalid("数量必须是正整数")
-    s = clean(value, 40).replace(",", "")
+    s = clean(value, 40)
+    if "," in s:
+        if not re.fullmatch(r"[1-9][0-9]{0,2}(?:,[0-9]{3})+(?:\.0+)?", s):
+            raise Invalid("数量的千分位格式无效")
+        s = s.replace(",", "")
+    if not re.fullmatch(r"[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", s):
+        raise Invalid("数量必须是正整数，可使用小数零尾或科学计数法")
     try:
-        n = float(s)
-    except (ValueError, OverflowError):
+        n = Decimal(s)
+    except InvalidOperation:
         raise Invalid("数量必须是正整数") from None
-    if not n.is_integer() or not 1 <= n <= MAX_QUANTITY:
+    if not n.is_finite() or not 1 <= n <= MAX_QUANTITY or n != n.to_integral_value():
         raise Invalid("数量必须是 1 至 1000000000 的整数")
     return int(n)
+
+
+def bounded_rows(records):
+    result = []
+    for index, record in enumerate(records):
+        if index >= 4096:
+            raise Invalid("表格超过 4096 个物理行，请删除多余空行或拆分文件")
+        if any(value is not None and str(value).strip() for value in record[32:]):
+            raise Invalid("表格超过 32 列，请删除多余列后导入")
+        result.append(list(record[:32]))
+    return result
+
+
+def sparse_xlsx_rows(sheet):
+    # openpyxl is pinned to 3.1.5. Use its streaming cell decoder (including
+    # shared strings, cached formulas and dates) without dense _get_row tuples.
+    from openpyxl.worksheet._reader import WorkSheetParser
+    class BoundedCellParser(WorkSheetParser):
+        def parse_cell(self, element):
+            cell = super().parse_cell(element)
+            # An uncached formula has value=None in data_only mode, but is
+            # actual content (including shared formulas with no own text).
+            if cell["column"] > 32 and element.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}f") is not None:
+                raise Invalid("表格超过 32 列，请删除多余列后导入")
+            return cell
+
+    result = []
+    with sheet._get_source() as source:
+        parser = BoundedCellParser(source, sheet._shared_strings, data_only=True,
+                                 epoch=sheet.parent.epoch, date_formats=sheet.parent._date_formats,
+                                 timedelta_formats=sheet.parent._timedelta_formats)
+        for index, cells in parser.parse():
+            if not 1 <= index <= 4096:
+                raise Invalid("表格超过 4096 个物理行，请删除多余空行或拆分文件")
+            while len(result) < index:
+                result.append([None] * 32)
+            for cell in cells:
+                column, value = cell["column"], cell["value"]
+                if not 1 <= cell["row"] <= 4096:
+                    raise Invalid("表格超过 4096 个物理行，请删除多余空行或拆分文件")
+                if column > 32:
+                    if value is not None and str(value).strip():
+                        raise Invalid("表格超过 32 列，请删除多余列后导入")
+                elif column >= 1:
+                    result[index - 1][column - 1] = value
+    return result
 
 
 def spreadsheet_rows(upload):
@@ -75,7 +129,10 @@ def spreadsheet_rows(upload):
                 raise Invalid("CSV 编码无效，请保存为 UTF-8") from None
         sample = payload[:4096]
         delimiter = "\t" if suffix == "tsv" else (max((",", "\t", ";"), key=sample.count))
-        return list(islice(csv.reader(io.StringIO(payload), delimiter=delimiter), ROW_LIMIT + 12))
+        try:
+            return bounded_rows(csv.reader(io.StringIO(payload), delimiter=delimiter))
+        except csv.Error:
+            raise Invalid("CSV 单元格过长或格式无效，请修正后导入") from None
     if not zipfile.is_zipfile(io.BytesIO(raw)):
         raise Invalid("XLSX 文件损坏")
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:
@@ -86,8 +143,7 @@ def spreadsheet_rows(upload):
         workbook = load_workbook(io.BytesIO(raw), read_only=True, data_only=True, keep_links=False)
         try:
             sheet = workbook.worksheets[0]
-            return [list(record[:32]) for record in
-                    list(sheet.iter_rows(min_row=1, max_row=ROW_LIMIT + 12, max_col=32, values_only=True))]
+            return sparse_xlsx_rows(sheet)
         finally:
             workbook.close()
     except (ValueError, KeyError, OSError, zipfile.BadZipFile, IndexError):
@@ -138,7 +194,10 @@ def match_candidates(db, entry, campus_id):
     code, name, spec = entry["code"].upper(), entry["name"].casefold(), entry["specification"].casefold()
     ids = set()
     if re.fullmatch(r"M:[1-9][0-9]*", code):
-        ids.add(int(code[2:]))
+        try:
+            ids.add(parse_id(code[2:], "物料 ID", False))
+        except InvalidIdError as exc:
+            raise Invalid(str(exc)) from None
     if re.fullmatch(r"C[1-9][0-9]{0,17}", code):
         ids.update(r[0] for r in db.execute(
             "SELECT item_id FROM asset_identifiers WHERE code=? "
@@ -213,7 +272,7 @@ def import_sheet():
 def match_rows():
     """Match a manually edited list without writing inventory or creating assets."""
     try:
-        if request.content_length and request.content_length > 96 * 1024:
+        if request.content_length and request.content_length > asset_request_limit(request.endpoint):
             raise Invalid("匹配请求体过大", 413)
         data = request.get_json(silent=True)
         if not isinstance(data, dict) or set(data) - {"campus_id", "rows"}:
@@ -270,7 +329,6 @@ def preview():
 
 def write_batch(view):
     view.asset_fields = {"request_id", "mode", "campus_id", "sets", "reason", "rows"}
-    view.asset_max_request_bytes = 96 * 1024
     return mutation(view)
 
 

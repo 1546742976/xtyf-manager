@@ -15,6 +15,7 @@ from flask import (Blueprint, current_app, g, jsonify, redirect, render_template
 from common import DB_PATH, ROLE_NAMES, current_user, get_db, login_required, now_str, error_response
 from modules.client_address import client_address
 from modules.pwa import PUBLIC_ENDPOINTS
+from modules.request_limits import asset_request_limit
 from modules.audit_retention import ROUTINE_ACTIONS, migrate_classification, cleanup_audit_rows  # noqa: F401
 
 bp = Blueprint("security", __name__)
@@ -212,15 +213,15 @@ def init_security(app):
         # Bound asset writes before the shared audit logger parses their JSON.
         # Support Flask 3.0 too (per-request max_content_length became writable in 3.1).
         if request.path.startswith('/api/assets/') and request.method not in SAFE_METHODS:
-            limit = 16 * 1024
+            limit = asset_request_limit(request.endpoint)
             if request.content_length is not None and request.content_length > limit:
-                return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
+                return jsonify(ok=False, error="资产请求体超过大小限制"), 413
             if request.content_length is None:
                 # Read at most one sentinel byte beyond the cap. The limited
                 # stream itself can stop at the cap and hide this extra byte.
                 raw = request.input_stream.read(limit + 1)
                 if len(raw) > limit:
-                    return jsonify(ok=False, error="资产请求体超过 16 KiB 限制"), 413
+                    return jsonify(ok=False, error="资产请求体超过大小限制"), 413
                 request._cached_data = raw  # Retain the bounded body for get_json/audit.
         public_pwa = request.endpoint in PUBLIC_ENDPOINTS and request.method in SAFE_METHODS
         user = current_user() if request.endpoint != "static" and not public_pwa else None

@@ -33,6 +33,7 @@ from common import (BASE_DIR, DB_PATH, current_user, get_db, login_required,
                     manager_required, error_response, now_str, ROLE_NAMES as COMMON_ROLE_NAMES)
 from modules.funds import funds_bp, can_review
 from modules.input_validation import valid_password
+from modules.request_limits import asset_request_limit
 from modules.client_address import client_address, parse_trusted_proxies
 from modules.task_validation import InvalidIdError, parse_id
 from modules.invoices import bp as invoices_bp, migrate_invoice_owners, start_invoice_worker
@@ -151,7 +152,7 @@ def request_body_limit():
     }
     limit = limits.get(request.endpoint, 16) * 1024 * 1024
     if request.path.startswith('/api/assets/'):
-        limit = 16 * 1024
+        limit = asset_request_limit(request.endpoint)
     request.max_content_length = limit
     if request.content_length is not None and request.content_length > limit:
         return error_response(413, '请求内容过大，请减少文件或内容后重试')

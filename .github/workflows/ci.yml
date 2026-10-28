@@ -242,7 +242,7 @@ jobs:
           - group: assets-serialized
             suites: 'assets_serialized'
           - group: assets-intake
-            suites: 'assets_intake assets_catalog_paging'
+            suites: 'assets_intake assets_catalog_paging asset_bom_review'
     needs: browser-image
     # A missing image for a fork should not prevent the read-only fallback path.
     if: ${{ always() && (needs.browser-image.result == 'success' || needs.browser-image.result == 'skipped') }}
