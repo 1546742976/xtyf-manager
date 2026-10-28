@@ -17,6 +17,14 @@ var chartRequest = 0, chartAbort = null, chartPalette = '', chartDirty = false;
 var ME_NAME = window.XTYF_USER.name, ME_USERNAME = window.XTYF_USER.username;
 var CAN_REVIEW = window.XTYF_USER.canReview;
 var fundsCreate = null, fundsCreateBusy = false, fundsFormRequest = null;
+var recordsRequest = 0, recordsAbort = null, recordsInactive = false;
+window.addEventListener('pagehide', function(){
+  recordsInactive = true; recordsRequest++;
+  if(recordsAbort)recordsAbort.abort();
+});
+window.addEventListener('pageshow', function(event){
+  if(event.persisted && recordsInactive){recordsInactive=false;reload();}
+});
 
 document.addEventListener('DOMContentLoaded', function(){
   edM = new bootstrap.Modal('#editMd');
@@ -130,16 +138,35 @@ function clearF(){
 function resetF(){ document.querySelectorAll('#ft,#fkw,#famin,#famax,#fdf,#fdt').forEach(function(e){e.value=''}); reload(); }
 function setSort(f){ sort.order=(sort.by===f?(sort.order==='ASC'?'DESC':'ASC'):'DESC'); sort.by=f; reload(); }
 
+function fundsListState(state, message){
+  document.getElementById('funds-list-loading').hidden = state !== 'loading';
+  document.getElementById('funds-list-error').hidden = state !== 'error';
+  document.getElementById('funds-list-error-message').textContent = message || '';
+  document.getElementById('funds-records').setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+  if(state !== 'ready'){
+    document.getElementById('tbody').innerHTML = '';
+    document.getElementById('rcnt').textContent = '';
+    document.getElementById('empty').style.display = 'none';
+  }
+}
+
 function reload(){
+  if(recordsInactive)return Promise.resolve();
+  var own = ++recordsRequest;
+  if(recordsAbort)recordsAbort.abort();
+  var controller = new AbortController(); recordsAbort = controller;
+  fundsListState('loading');
   loadLedgerStatus();
   var p = new URLSearchParams();
   [{id:'ft',key:'record_type'},{id:'fkw',key:'keyword'},{id:'famin',key:'amount_min'},{id:'famax',key:'amount_max'},{id:'fdf',key:'date_from'},{id:'fdt',key:'date_to'}].forEach(function(x){
     var v = document.getElementById(x.id).value.trim(); if(v) p.append(x.key,v);
   });
   p.append('sort_by',sort.by); p.append('sort_order',sort.order);
-  BusinessUI.fetch(API+'?'+p).then(function(r){return r.json()}).then(function(j){
-    if (!j || j.code !== 0) throw new Error((j && j.msg) || '服务端响应异常');
-    var rows = j.data||[];
+  return BusinessUI.fetch(API+'?'+p,{signal:controller.signal}).then(function(r){return r.json()}).then(function(j){
+    if(recordsInactive || own !== recordsRequest)return;
+    if (!j || j.code !== 0 || !Array.isArray(j.data)) throw new Error((j && j.msg) || '服务端响应异常');
+    fundsListState('ready');
+    var rows = j.data;
     document.getElementById('rcnt').textContent = rows.length + ' 条记录';
     document.getElementById('empty').style.display = rows.length?'none':'block';
     document.getElementById('tbody').innerHTML = rows.length ? rows.map(function(r){
@@ -158,7 +185,10 @@ function reload(){
         '<td><button class="btn btn-outline-secondary btn-sm" aria-label="编辑第 '+r.id+' 条记录" title="编辑记录" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" aria-label="删除第 '+r.id+' 条记录" title="删除记录" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button></td>'+
         '</tr>';
     }).join('') : '';
-  }).catch(function(e){ fundsToast('记录加载失败：'+e.message,'error'); });
+  }).catch(function(e){
+    if(recordsInactive || own !== recordsRequest || controller.signal.aborted)return;
+    fundsListState('error','记录加载失败：'+e.message);
+  }).finally(function(){if(own === recordsRequest)recordsAbort=null;});
 }
 
 async function loadLedgerStatus() {
