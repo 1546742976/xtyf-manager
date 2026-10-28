@@ -37,7 +37,7 @@
   function moderationState(profile){$('intro-moderation-state').textContent=profile.hidden?`此资料已被隐藏：${profile.moderation_reason}。可以修改，但保存不会解除隐藏。`:'';}
   $('intro-edit').onclick=async event=>{
     returnFocus=event.currentTarget;
-    try{if(!loaded){const data=await api('/api/account/introduction');requireHomepage(data.profile);version=data.profile.version;form.elements.bio.value=data.profile.bio;fillLinks('profile',data.profile.github_profiles);fillLinks('repository',data.profile.github_repositories);previewOwn(data.profile);legacyInfo(data.profile);moderationState(data.profile);loaded=true;}
+    try{if(!loaded){const data=await api('/api/account/introduction');requireHomepage(data.profile);version=data.profile.version;form.elements.bio.value=data.profile.bio;window.FormControls?.refresh(form.elements.bio);fillLinks('profile',data.profile.github_profiles);fillLinks('repository',data.profile.github_repositories);previewOwn(data.profile);legacyInfo(data.profile);moderationState(data.profile);loaded=true;}
       dialog.showModal();form.elements.bio.focus();
     }catch(error){$('intro-status').textContent=error.message;}
   };

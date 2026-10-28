@@ -178,7 +178,7 @@
   function mounted(form,item){return form===topicForm||current()?.draft===item;}
   function mountDraft(form,draftState) {
     if(!mounted(form,draftState))return;
-    form.elements.body.value=draftState.body;if(form.elements.title)form.elements.title.value=draftState.title;
+    form.elements.body.value=draftState.body;window.FormControls?.refresh(form.elements.body);if(form.elements.title)form.elements.title.value=draftState.title;
     renderDraft(form,draftState);
   }
   function renderDraft(form,item) {

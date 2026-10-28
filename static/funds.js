@@ -62,7 +62,7 @@ async function initializeFundsCreate() {
       var fields = {aT:'record_type',aAmt:'amount',aCat:'category',aSD:'source_dest',aDt:'record_date',
         aNotes:'notes',aApplicant:'applicant',aInvCnt:'invoice_count',aHandler:'handler'};
       Object.keys(fields).forEach(id=>{document.getElementById(id).value=body[fields[id]] ?? '';});
-      toggleF(); fundsFormRequest = body.request_id;
+      toggleF(); fundsFormRequest = body.request_id;window.FormControls?.refresh(document.getElementById('addF'));
     }
     renderFundsCreate();
     document.getElementById('funds-create-retry').onclick = ()=>submitFundsCreate(fundsCreate.pending()[0]);
@@ -247,7 +247,7 @@ async function edR(id){
     document.getElementById('eAmt').value=d.amount; document.getElementById('eCat').value=d.category||'';
     document.getElementById('eSD').value=d.source_dest||''; document.getElementById('eDt').value=d.record_date;
     document.getElementById('eInv').value=d.invoice_count||0; document.getElementById('eApl').value=d.applicant||'';
-    document.getElementById('eHdl').value=d.handler||''; document.getElementById('eNts').value=d.notes||'';
+    document.getElementById('eHdl').value=d.handler||''; document.getElementById('eNts').value=d.notes||'';window.FormControls?.refresh(document.getElementById('eNts'));
     edM.show();
   } catch(e){ fundsToast('记录加载失败：'+e.message,'error'); }
 }

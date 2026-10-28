@@ -102,7 +102,7 @@ dialog.modal[open]{display:block}
 .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 16px}
 .detail-grid .field label{display:block;font-size:11px;color:#888;margin-bottom:3px}
 .detail-grid .field input,.detail-grid .field select,.detail-grid .field textarea{width:100%;padding:7px 9px;border:1px solid #ddd;border-radius:5px;font-size:12px;outline:none}
-.detail-grid .field textarea{resize:vertical;min-height:48px}
+.detail-grid .field textarea{min-height:48px}
 .detail-grid .field input:focus,.detail-grid .field select:focus,.detail-grid .field textarea:focus{border-color:#1a73e8}
 .detail-grid .field.full{grid-column:1/-1}
 .detail-grid .field input[readonly]{background:#f9f9f9;color:#666}
