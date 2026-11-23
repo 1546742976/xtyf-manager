@@ -149,18 +149,19 @@ class TestLedgerUnits(unittest.TestCase):
             {"record_type": "进", "amount_cents": 105, "record_date": "2026-10-01",
              "source_dest": "赞助", "category": "", "applicant": "", "handler": ""},
             {"record_type": "出", "amount_cents": 37, "record_date": "2026-10-02",
-             "source_dest": "商家", "category": "电控", "applicant": "甲", "handler": "乙"},
+             "source_dest": "商家", "category": "电控", "applicant": "甲", "handler": "乙", "review_status": ""},
             {"record_type": "出", "amount_cents": 28, "record_date": "2026-11-02",
-             "source_dest": "商家", "category": "电控", "applicant": "甲", "handler": "乙"},
+             "source_dest": "商家", "category": "电控", "applicant": "甲", "handler": "乙", "review_status": "待审核"},
         ]
         stats = summarize_records(records)
         self.assertEqual((stats["total_in"], stats["total_out"], stats["balance"]),
-                         (105, 65, 40))
+                         (105, 65, 68))
+        self.assertEqual((stats["approved_out"], stats["unapproved_out"]), (37, 28))
         self.assertEqual(stats["category_stats"][0]["total"], 65)
         self.assertEqual(stats["monthly_stats"][0]["income"], 105)
         self.assertEqual(stats["monthly_stats"][1]["expense"], 28)
         payload = stats_payload(stats)
-        self.assertEqual(payload["balance"], "0.40")
+        self.assertEqual(payload["balance"], "0.68")
         self.assertEqual(payload["category_stats"][0]["total"], "0.65")
         self.assertEqual(payload["record_count"], 3)
 

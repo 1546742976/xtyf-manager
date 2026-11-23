@@ -26,7 +26,8 @@ class TestFundsChartTheme(unittest.TestCase):
             {'record_type': '进', 'amount_cents': 50000, 'record_date': '2026-10-14',
              'source_dest': 'Sponsor', 'category': '', 'applicant': '', 'handler': ''},
             {'record_type': '出', 'amount_cents': 12500, 'record_date': '2026-10-15',
-             'source_dest': 'Shop', 'category': 'Parts', 'applicant': 'Member', 'handler': 'Admin'},
+             'source_dest': 'Shop', 'category': 'Parts', 'applicant': 'Member', 'handler': 'Admin',
+             'review_status': '已审核'},
         ])
         for palette, tokens in CHART_PALETTES.items():
             text_rgb = ImageColor.getrgb(tokens[1])

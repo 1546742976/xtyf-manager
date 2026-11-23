@@ -67,13 +67,15 @@ class TestWorkspaceNavigation(unittest.TestCase):
         self.assertTrue(member.post('/login',json={
             'username':'workspace_member','password':'member-pass-123',
         }).get_json()['ok'])
-        for url in ('/manage','/members','/funds/'):
+        for url in ('/manage','/members'):
             with self.subTest(url=url):
                 self.assertEqual(member.get(url).status_code,403)
         text = member.get('/invoices/').get_data(as_text=True)
         self.assertIn('我的发票',text)
         self.assertNotIn('href="/members"',text)
-        self.assertNotIn('href="/funds/" class="ws-nav-link',text)
+        self.assertIn('href="/funds/" class="ws-nav-link',text)
+        self.assertEqual(member.get('/funds/').status_code, 200)
+        self.assertEqual(member.get('/funds/api/export').status_code, 403)
         self.assertEqual(member.get('/api/members/export.csv').status_code,403)
         self.assertEqual(member.get('/tasks').status_code,200)
 

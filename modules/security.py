@@ -119,6 +119,13 @@ def migrate_security(db):
                     db.execute("INSERT OR IGNORE INTO member_permissions VALUES(?,?,NULL,?)",
                                (member_id, permission, now_str()))
             db.execute("INSERT INTO security_migrations VALUES(1)")
+        if not db.execute("SELECT 1 FROM security_migrations WHERE version=3").fetchone():
+            db.execute("CREATE TABLE IF NOT EXISTS funds_personal_reviewer "
+                       "(id INTEGER PRIMARY KEY CHECK(id=1), member_id INTEGER NOT NULL)")
+            db.execute("""INSERT INTO funds_personal_reviewer
+                SELECT 1,id FROM members WHERE username='chy' AND name='陈虹宇'
+                AND role IN ('admin','manager') AND is_active=1 AND deleted_at IS NULL""")
+            db.execute("INSERT INTO security_migrations VALUES(3)")
         db.commit()
     except Exception:
         db.rollback()

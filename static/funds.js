@@ -16,6 +16,9 @@ var API = '/funds/api/records', sort = {by:'record_date',order:'DESC'}, edM, ct=
 var chartRequest = 0, chartAbort = null, chartPalette = '', chartDirty = false;
 var ME_NAME = window.XTYF_USER.name, ME_USERNAME = window.XTYF_USER.username;
 var CAN_REVIEW = window.XTYF_USER.canReview;
+var CAN_MANAGE = window.XTYF_USER.canManageRecords !== false;
+var PERSONAL_REVIEWER = window.XTYF_USER.personalReviewer;
+var personalCatalog = null;
 var fundsCreate = null, fundsCreateBusy = false, fundsFormRequest = null;
 var recordsRequest = 0, recordsAbort = null, recordsInactive = false;
 window.addEventListener('pagehide', function(){
@@ -30,6 +33,7 @@ document.addEventListener('DOMContentLoaded', function(){
   edM = new bootstrap.Modal('#editMd');
   document.getElementById('aDt').value = new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
   document.getElementById('aApplicant').value = ME_NAME;
+  toggleF();
   if (CAN_REVIEW) { loadPending(); setInterval(loadPending, 30000); }
   reload(); loadStats();
   initializeFundsCreate();
@@ -62,6 +66,8 @@ async function initializeFundsCreate() {
       var fields = {aT:'record_type',aAmt:'amount',aCat:'category',aSD:'source_dest',aDt:'record_date',
         aNotes:'notes',aApplicant:'applicant',aInvCnt:'invoice_count',aHandler:'handler'};
       Object.keys(fields).forEach(id=>{document.getElementById(id).value=body[fields[id]] ?? '';});
+      var selfFunded = document.getElementById('aSelfFunded');
+      if (selfFunded) selfFunded.checked = !!body.self_funded;
       toggleF(); fundsFormRequest = body.request_id;window.FormControls?.refresh(document.getElementById('addF'));
     }
     renderFundsCreate();
@@ -112,28 +118,30 @@ document.addEventListener('workspace-theme-change', function(){
 
 function toggleF(){
   var t = document.getElementById('aT').value, isExp = (t==='出');
+  var personal = isExp && (!CAN_MANAGE || document.getElementById('aSelfFunded')?.checked);
   document.getElementById('expF').style.display = isExp?'block':'none';
   document.getElementById('lSD').textContent = isExp?'去向':(t==='进'?'来源':'来源 / 去向');
   document.getElementById('aSD').placeholder = isExp?'例如：淘宝采购电机':(t==='进'?'例如：学校拨款':'');
   document.getElementById('lSD').className = isExp?'form-label required':'form-label';
   document.getElementById('aSD').required = isExp;
-  document.getElementById('aApplicant').required = isExp;
-  document.getElementById('aInvCnt').required = isExp;
-  document.getElementById('aHandler').required = isExp;
-  if(isExp) document.getElementById('aInvCnt').value = document.getElementById('aInvCnt').value || 1;
+  var applicant = document.getElementById('aApplicant');
+  applicant.required = isExp;
+  applicant.readOnly = !!personal;
+  if (personal) applicant.value = ME_NAME;
+  for (var [id, label] of [['aInvCnt', 'lInv'], ['aHandler', 'lHdl']]) {
+    var required = isExp && !personal;
+    document.getElementById(id).required = required;
+    document.getElementById(label).classList.toggle('required', required);
+  }
+  var invoiceCount = document.getElementById('aInvCnt');
+  invoiceCount.min = personal ? '0' : '1';
+  if (isExp && !personal && !Number(invoiceCount.value)) invoiceCount.value = '1';
 }
 function clearF(){
   document.getElementById('addF').reset();
   document.getElementById('aDt').value = new Date().toISOString().slice(0,10);
-  document.getElementById('expF').style.display = 'none';
-  document.getElementById('lSD').textContent='来源 / 去向';
-  document.getElementById('lSD').className = 'form-label';
-  document.getElementById('aSD').required = false;
-  document.getElementById('aApplicant').required = false;
-  document.getElementById('aInvCnt').required = false;
-  document.getElementById('aHandler').required = false;
-  document.getElementById('aInvCnt').value = '1';
   document.getElementById('aApplicant').value = ME_NAME;
+  toggleF();
 }
 function resetF(){ document.querySelectorAll('#ft,#fkw,#famin,#famax,#fdf,#fdt').forEach(function(e){e.value=''}); reload(); }
 function setSort(f){ sort.order=(sort.by===f?(sort.order==='ASC'?'DESC':'ASC'):'DESC'); sort.by=f; reload(); }
@@ -180,15 +188,55 @@ function reload(){
         '<td>'+(r.invoice_count||0)+'</td>'+
         '<td>'+escText(r.handler||'-')+'</td>'+
         '<td>'+r.record_date+'</td>'+
-        '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">待审核</span> '+(CAN_REVIEW?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>'+(r.reviewed_by?'<small class="d-block text-muted">审核人：'+escText(r.reviewed_by)+'</small>':''))+'</td>'+
+        '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">未审核</span> '+(CAN_REVIEW && (!r.self_funded || PERSONAL_REVIEWER)?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>'+(r.reviewed_by?'<small class="d-block text-muted">审核人：'+escText(r.reviewed_by)+'</small>':''))+'</td>'+
+        '<td>'+renderPersonalReimbursement(r)+'</td>'+
         '<td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+(r.notes||'').replace(/"/g,'&quot;')+'">'+escText(r.notes||'-')+'</td>'+
-        '<td><button class="btn btn-outline-secondary btn-sm" aria-label="编辑第 '+r.id+' 条记录" title="编辑记录" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" aria-label="删除第 '+r.id+' 条记录" title="删除记录" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button></td>'+
+        (CAN_MANAGE ? '<td>'+(r.personal_paid_at ? '—' : '<button class="btn btn-outline-secondary btn-sm" aria-label="编辑第 '+r.id+' 条记录" title="编辑记录" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" aria-label="删除第 '+r.id+' 条记录" title="删除记录" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button>')+'</td>' : '')+
         '</tr>';
     }).join('') : '';
   }).catch(function(e){
     if(recordsInactive || own !== recordsRequest || controller.signal.aborted)return;
     fundsListState('error','记录加载失败：'+e.message);
   }).finally(function(){if(own === recordsRequest)recordsAbort=null;});
+}
+
+function renderPersonalReimbursement(record) {
+  var badge = record.personal_status
+    ? '<span class="'+(record.personal_paid_at ? 'badge-ok' : 'badge-pending')+'">'+escText(record.personal_status)+'</span>'
+    : '—';
+  var actions = window.FundsReimbursement?.actions(record) || '';
+  if (!personalCatalog || !record.self_funded || record.personal_paid_at) return badge + actions;
+  var candidates = personalCatalog.matches[record.amount_cents] || [];
+  if (!candidates.length) return badge + '<small class="d-block">暂无同金额发票</small>' + actions;
+  return badge + actions + '<details class="mt-1"><summary>同金额发票（'+candidates.length+' 张）</summary><ul class="ps-3 mb-0">'+candidates.map(function(invoice){
+    var url = '/invoices/file/'+invoice.id.split('/').map(encodeURIComponent).join('/');
+    var owner = invoice.submitter_id ? invoice.submitter+' #'+invoice.submitter_id : '归属待确认';
+    var description = [owner,
+      invoice.date, invoice.vendor, invoice.invoice_number || invoice.filename].filter(Boolean).join(' · ');
+    var action = '';
+    if (invoice.paid) action = '<small class="d-block">已用于个人报销</small>';
+    else if (invoice.submitter_id !== record.applicant_id) action = '<small class="d-block">提交人与申请人不一致</small>';
+    return '<li class="mb-1"><a href="'+escText(url)+'" target="_blank" rel="noopener">'+escText(description)+'</a>'+action+'</li>';
+  }).join('')+'</ul></details>';
+}
+
+async function refreshPersonalInvoices(button) {
+  button.disabled = true;
+  var status = document.getElementById('personalInvoiceFeedback');
+  status.textContent = '正在查找同金额发票…';
+  try {
+    var response = await BusinessUI.fetch('/funds/api/personal-invoices');
+    var result = await response.json();
+    if (!response.ok || result.code !== 0) throw new Error(result.msg || '发票查找失败');
+    personalCatalog = result;
+    status.textContent = '已刷新，可在自费记录下核对候选发票。';
+  } catch (error) {
+    personalCatalog = null;
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    await reload();
+  }
 }
 
 async function loadLedgerStatus() {
@@ -227,6 +275,7 @@ async function handleAdd(e){
   };
   d.applicant = document.getElementById('aApplicant').value.trim() || ME_NAME;
   if(d.record_type==='出'){
+    if (!CAN_MANAGE || document.getElementById('aSelfFunded')?.checked) d.self_funded = true;
     d.invoice_count = parseInt(document.getElementById('aInvCnt').value)||0;
     d.handler = document.getElementById('aHandler').value.trim();
   }
@@ -247,6 +296,8 @@ async function edR(id){
     document.getElementById('eAmt').value=d.amount; document.getElementById('eCat').value=d.category||'';
     document.getElementById('eSD').value=d.source_dest||''; document.getElementById('eDt').value=d.record_date;
     document.getElementById('eInv').value=d.invoice_count||0; document.getElementById('eApl').value=d.applicant||'';
+    document.getElementById('eT').disabled = !!d.self_funded;
+    document.getElementById('eApl').readOnly = !!d.self_funded;
     document.getElementById('eHdl').value=d.handler||''; document.getElementById('eNts').value=d.notes||'';window.FormControls?.refresh(document.getElementById('eNts'));
     edM.show();
   } catch(e){ fundsToast('记录加载失败：'+e.message,'error'); }
@@ -315,7 +366,8 @@ function loadStats(){
     if(result.code!==0)throw new Error(result.msg||'统计加载失败');
     var d = result.data, cnt = d.record_count;
     document.getElementById('sIn').textContent = '¥'+Money.format(d.total_in);
-    document.getElementById('sOut').textContent = '¥'+Money.format(d.total_out);
+    document.getElementById('sOut').textContent = '¥'+Money.format(d.approved_out);
+    document.getElementById('sPendingOut').textContent = '¥'+Money.format(d.unapproved_out);
     var bal = d.balance;
     document.getElementById('sBal').textContent = '¥'+Money.format(bal);
     document.getElementById('sBal').style.color = Money.compare(bal,'0.00')>=0?'var(--funds-balance-positive, #1890ff)':'#ff4d4f';

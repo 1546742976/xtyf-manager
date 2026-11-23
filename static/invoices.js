@@ -1,5 +1,33 @@
 
 var App={currentPage:1,totalPages:1,selected:{},stats:null,searchTimer:null,_dupCache:null,sortBy:'date',sortOrder:'desc'};
+const invoiceLocation = globalThis.XTYFLocation || globalThis.location;
+const INVOICE_ALL_VIEW = IS_FINANCE && new URLSearchParams(invoiceLocation?.search).get('scope') !== 'mine';
+const invoiceStatuses = INVOICE_ALL_VIEW
+  ? [['已报销','accent-green'], ['正在报销','accent-orange'], ['未报销','accent-red']]
+  : [['未个人报销','accent-red'], ['已个人报销','accent-green']];
+
+function invoiceScopeQuery() { return INVOICE_ALL_VIEW ? '' : '?scope=mine'; }
+
+function changeInvoiceView(mine) {
+  invoiceLocation.assign(mine ? '/invoices/?scope=mine' : '/invoices/');
+}
+
+function invoiceStatisticsCards(stats, top) {
+  const cards = [
+    {label:'发票总数', value:stats.total_count, color:'accent-blue'},
+    {label:'总金额', value:'¥'+Money.format(stats.total_amount), color:'accent-blue'}
+  ];
+  for (const [label, color] of invoiceStatuses) {
+    const {count=0, amount='0.00'} = stats.status_stats?.[label] || {};
+    cards.push({label, color, value:count+(top ? ' / ¥' : '张 / ¥')+Money.format(amount)});
+  }
+  if (top && INVOICE_ALL_VIEW) {
+    const submitters = Object.keys(stats.submitter_stats || {}).filter(name => name !== '未指定');
+    cards.push({label:'提交人', color:'accent-purple', value:submitters.length+' 人'});
+  }
+  return cards.map(card => '<div class="stat-card '+card.color+'"><div class="label">'+card.label+
+    '</div><div class="value">'+card.value+'</div></div>').join('');
+}
 function showToast(msg,type){var t=document.getElementById('toast');t.setAttribute('role',type==='error'?'alert':'status');t.textContent=msg;t.className='toast show '+(type||'info');clearTimeout(App._toastTimer);if(type!=='error')App._toastTimer=setTimeout(function(){t.classList.remove('show')},3500)}
 
 
@@ -50,22 +78,14 @@ function validateInvoiceAmounts(focus=false) {
 async function loadStats(){
 let s;
 try {
-  const r=await BusinessUI.fetch('/invoices/api/stats');
+  const r=await BusinessUI.fetch('/invoices/api/stats'+invoiceScopeQuery());
   if(!r.ok) throw new Error('HTTP '+r.status);
   s=await r.json(); invoiceSnapshotStatus(r); App.stats=s;
 } catch(e) {
   showToast('发票统计加载失败：'+e.message,'error');
   return;
 }
-var ss=s.status_stats||{};
-document.getElementById('statsGrid').innerHTML=[
-{l:'发票总数',v:s.total_count,cls:'accent-blue'},
-{l:'总金额',v:'\xA5'+Money.format(s.total_amount),cls:'accent-blue'},
-{l:'已报销',v:(ss['已报销']||{}).count+' / \xA5'+Money.format((ss['已报销']||{}).amount),cls:'accent-green'},
-{l:'正在报销',v:(ss['正在报销']||{}).count+' / \xA5'+Money.format((ss['正在报销']||{}).amount),cls:'accent-orange'},
-{l:'未报销',v:(ss['未报销']||{}).count+' / \xA5'+Money.format((ss['未报销']||{}).amount),cls:'accent-red'},
-{l:'提交人',v:Object.keys(s.submitter_stats||{}).filter(function(k){return k!=='未指定'}).length+' 人',cls:'accent-purple'},
-].map(function(c){return '<div class="stat-card '+c.cls+'"><div class="label">'+c.l+'</div><div class="value">'+c.v+'</div></div>'}).join('');
+document.getElementById('statsGrid').innerHTML=invoiceStatisticsCards(s,true);
 ['filterMonth','filterCategory'].forEach(function(id){setOptions(id,Object.keys(s[id.replace('filter','').toLowerCase()+'_stats']||{}).sort().reverse())});
 try { await loadInvoiceOwners(); } catch (error) { showToast(error.message, 'error'); }
 }
@@ -103,7 +123,7 @@ let invoiceRequestSerial=0;
 async function loadInvoices(page,highlightDups){
 page=page||1;App.currentPage=page;
 const serial=++invoiceRequestSerial;
-var p=new URLSearchParams();
+var p=new URLSearchParams(invoiceScopeQuery());
 ['filterStatus','filterMonth','filterCategory'].forEach(function(id){var el=document.getElementById(id);if(el&&el.value)p.set(id.replace('filter','').toLowerCase(),el.value)});
 var ownerFilter=document.getElementById('filterSubmitter').value;if(ownerFilter)p.set('submitter_id',ownerFilter);
 if(document.getElementById('filterOwnership')?.checked)p.set('ownership','unresolved');
@@ -142,7 +162,7 @@ var erp = escHtml(inv.rel_path||'');
 var subHtml=inv.submitter?'<span class="clickable" data-invoice-detail="'+eid+'">'+escHtml(inv.submitter)+'</span>':'<span style="color:#ccc;cursor:pointer" data-invoice-detail="'+eid+'">-</span>';
 if(inv.ownership_unresolved)subHtml+=' <small>待确认</small>';else subHtml+=' <small>#'+Number(inv.submitter_id)+'</small>';
 var invNum=inv.invoice_number?('<span class="clickable" title="'+escHtml(inv.invoice_number)+'">'+escHtml(inv.invoice_number.substring(inv.invoice_number.length-8))+'</span>'):'-';
-var scol = inv.status==='已报销'?'#e6f4ea':inv.status==='正在报销'?'#fef7e0':'#fce8e6';
+var scol = ['已报销','已个人报销'].includes(inv.status)?'#e6f4ea':inv.status==='正在报销'?'#fef7e0':'#fce8e6';
 var unsel = inv.status==='未报销'?' selected':'';
 var insel = inv.status==='正在报销'?' selected':'';
 var resel = inv.status==='已报销'?' selected':'';
@@ -150,13 +170,13 @@ return '<tr class="'+sc+'" data-id="'+escHtml(inv.id)+'">'+
 '<td class="col-check"><input aria-label="选择发票 '+eid+'" type="checkbox" '+(App.selected[inv.id]?'checked':'')+' data-invoice-select="'+eid+'"></td>'+
 '<td><span class="month-label">'+escHtml(inv.month)+'</span></td>'+
 '<td>'+escHtml(inv.date||'-')+'</td>'+
-'<td>'+(IS_FINANCE?'<select aria-label="发票状态" class="inline-select" data-invoice-status="'+eid+'" data-saved-status="'+escHtml(inv.status)+'" style="background:'+scol+'"><option value="\u672a\u62a5\u9500"'+unsel+'>\u672a\u62a5\u9500</option><option value="\u6b63\u5728\u62a5\u9500"'+insel+'>\u6b63\u5728\u62a5\u9500</option><option value="\u5df2\u62a5\u9500"'+resel+'>\u5df2\u62a5\u9500</option></select>':'<span class="badge" style="background:'+scol+'">'+inv.status+'</span>')+'</td>'+
+'<td>'+(INVOICE_ALL_VIEW?'<select aria-label="发票状态" class="inline-select" data-invoice-status="'+eid+'" data-saved-status="'+escHtml(inv.status)+'" style="background:'+scol+'"><option value="\u672a\u62a5\u9500"'+unsel+'>\u672a\u62a5\u9500</option><option value="\u6b63\u5728\u62a5\u9500"'+insel+'>\u6b63\u5728\u62a5\u9500</option><option value="\u5df2\u62a5\u9500"'+resel+'>\u5df2\u62a5\u9500</option></select>':'<span class="badge" style="background:'+scol+'">'+escHtml(inv.status)+'</span>')+'</td>'+
 '<td>'+subHtml+'</td>'+
 '<td>'+escHtml(inv.category||'-')+'</td>'+
 '<td><span class="clickable" data-invoice-file="'+erp+'">'+escHtml(inv.vendor)+'</span></td>'+
 '<td class="amount-col">'+ah+'</td>'+
 '<td style="font-size:10px">'+invNum+'</td>'+
-'<td><button class="btn-sm" data-invoice-file="'+erp+'">\u6253\u5f00</button> <button class="btn-sm" data-invoice-detail="'+eid+'">'+(IS_FINANCE?'\u7f16\u8f91':'\u67e5\u770b')+'</button></td></tr>';
+'<td><button class="btn-sm" data-invoice-file="'+erp+'">\u6253\u5f00</button> <button class="btn-sm" data-invoice-detail="'+eid+'">'+(INVOICE_ALL_VIEW?'\u7f16\u8f91':'\u67e5\u770b')+'</button></td></tr>';
 }).join('');document.getElementById('selectAll').checked=false}
 renderPagination(data.total,page);updateBatchBar()
 }
@@ -265,14 +285,12 @@ function cleanupTmp(paths){if(!paths||!paths.length)return;BusinessUI.fetch('/in
 
 function duplicateOverride(result,label){
 if(!result||!result.has_duplicate)return false;
-if(!IS_FINANCE){showToast(label+' 疑似重复发票，只有财务可以确认入库','error');return false}
+if(!INVOICE_ALL_VIEW){showToast(label+' 疑似重复发票，只有财务可以确认入库','error');return false}
 return confirm('检测到可能的重复发票，仍要入库吗？');
 }
 async function quickConfirm(d){
-if(IS_FINANCE){await BUModal.open([d]);return}
-var sub=ME_NAME;
-if(!sub||!sub.trim()){showToast('需要填写提交人才能入库','error');cleanupTmp([d.tmp_path]);return}
-var body={tmp_path:d.tmp_path,original_name:d.original_name,month:d.info.month||'未归类',status:'未报销',submitter:sub.trim(),category:d.info.category||'',notes:'',amount:d.info.amount||'0.00',vendor:d.info.vendor||'',date:d.info.date||'',invoice_number:d.info.invoice_number||'',allow_duplicate:duplicateOverride(d,'该发票')};
+if(INVOICE_ALL_VIEW){await BUModal.open([d]);return}
+var body={tmp_path:d.tmp_path,original_name:d.original_name,month:d.info.month||'未归类',status:'未报销',submitter_id:Number(ME_ID),category:d.info.category||'',notes:'',amount:d.info.amount||'0.00',vendor:d.info.vendor||'',date:d.info.date||'',invoice_number:d.info.invoice_number||'',allow_duplicate:duplicateOverride(d,'该发票')};
 Progress.show('正在入库...');
 try{var r=await BusinessUI.fetch('/invoices/api/upload/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var dd=await r.json();Progress.hide();if(dd.success){showToast(dd.message,'success');App.stats=null;loadStats();loadInvoices(1)}else if(dd.code==='DUPLICATE'){showToast('存在重复发票，已拦截','error');cleanupTmp([d.tmp_path])}else{throw new Error(dd.error||'入库失败')}}
 catch(e){Progress.hide();await BUModal.open([d]);showToast('入库结果未确认，请先核对列表；确认信息已保留：'+e.message,'error')}
@@ -308,7 +326,7 @@ return '<tr class="'+dupClass+'">'+
 '<td><input type="text" value="'+escHtml(d.vendor||'')+'" style="width:120px" aria-label="第 '+(idx+1)+' 张发票供应商" class="bu-vendor-'+idx+'"></td>'+
 '<td><input type="text" value="'+escHtml(d.invoice_number||'')+'" style="width:100px" aria-label="第 '+(idx+1)+' 张发票发票号码" class="bu-inum-'+idx+'"></td>'+
 '<td><input type="text" value="'+escHtml(d.category||'')+'" style="width:60px" aria-label="第 '+(idx+1)+' 张发票类别" class="bu-cat-'+idx+'"></td>'+
-'<td><select aria-label="提交人" style="min-width:100px" class="bu-sub-'+idx+'"'+(IS_FINANCE?'':' disabled')+'>'+invoiceOwnerOptions(IS_FINANCE?(r.submitter_id||''):ME_ID,'使用统一提交人')+'</select></td>'+
+'<td><select aria-label="提交人" style="min-width:100px" class="bu-sub-'+idx+'"'+(INVOICE_ALL_VIEW?'':' disabled')+'>'+invoiceOwnerOptions(INVOICE_ALL_VIEW?(r.submitter_id||''):ME_ID,'使用统一提交人')+'</select></td>'+
 '<td>'+dupInfo+'</td></tr>';
 }).join('');
 validateInvoiceAmounts();
@@ -325,15 +343,15 @@ confirm:async function(){
 if(BUModal._ownersFailed){showToast('请先重新加载提交人，再确认入库','error');return}
 if(!validateInvoiceAmounts(true)){showToast('请先补录所有发票金额，按分四舍五入后必须大于 0','error');return}
 var dupN=BUModal._data.filter(function(r){return r.success&&r.has_duplicate}).length;
-if(dupN>0&&!confirm('有 '+dupN+' 张疑似重复发票，仍要入库吗？'+(IS_FINANCE?'':'（非财务账号的重复发票会被拦截）')))return;
-var globalSub=IS_FINANCE?document.getElementById('buSubmitter').value:String(ME_ID);
-var globalStatus=IS_FINANCE?document.getElementById('buStatus').value:'未报销';
+if(dupN>0&&!confirm('有 '+dupN+' 张疑似重复发票，仍要入库吗？'+(INVOICE_ALL_VIEW?'':'（非财务账号的重复发票会被拦截）')))return;
+var globalSub=INVOICE_ALL_VIEW?document.getElementById('buSubmitter').value:String(ME_ID);
+var globalStatus=INVOICE_ALL_VIEW?document.getElementById('buStatus').value:'未报销';
 var items=[];
 for(var i=0;i<BUModal._data.length;i++){
 var r=BUModal._data[i];
 if(!r.success)continue;
 var sub=document.querySelector('.bu-sub-'+i);
-items.push({tmp_path:r.tmp_path,original_name:r.original_name,status:globalStatus,submitter_id:Number((sub&&sub.value)||globalSub),category:document.querySelector('.bu-cat-'+i).value,notes:'',amount:document.querySelector('.bu-amount-'+i).value||'0.00',vendor:document.querySelector('.bu-vendor-'+i).value,date:document.querySelector('.bu-date-'+i).value,month:document.querySelector('.bu-month-'+i).value||'未归类',invoice_number:document.querySelector('.bu-inum-'+i).value,allow_duplicate:IS_FINANCE&&dupN>0});
+items.push({tmp_path:r.tmp_path,original_name:r.original_name,status:globalStatus,submitter_id:Number((sub&&sub.value)||globalSub),category:document.querySelector('.bu-cat-'+i).value,notes:'',amount:document.querySelector('.bu-amount-'+i).value||'0.00',vendor:document.querySelector('.bu-vendor-'+i).value,date:document.querySelector('.bu-date-'+i).value,month:document.querySelector('.bu-month-'+i).value||'未归类',invoice_number:document.querySelector('.bu-inum-'+i).value,allow_duplicate:INVOICE_ALL_VIEW&&dupN>0});
 }
 if(!items.every(function(it){return it.submitter_id>0})){showToast('请选择每张发票的提交人或统一提交人','error');return}
 Progress.show('正在入库 '+items.length+' 张发票...');
@@ -363,7 +381,7 @@ var InvoiceJobs={
     if(refresh){refresh.disabled=false;refresh.textContent='刷新PDF金额'}
   },
   load:function(){
-    if(!IS_FINANCE)return;
+    if(!INVOICE_ALL_VIEW)return;
     if(!InvoiceJobs.monitor)InvoiceJobs.monitor=InvoiceJobPolling.create({
       fetch:(url,options)=>BusinessUI.fetch(url,options),
       enabled:()=>!document.hidden&&navigator.onLine!==false,
@@ -489,7 +507,7 @@ document.getElementById('delDupModal').addEventListener('click',function(e){if(e
 // ====== 详情弹窗 (保持不变) ======
 var DetailModal={
 _id:'',
-open:async function(id){var r=await BusinessUI.fetch('/invoices/api/invoices?id='+encodeURIComponent(id)),d=await r.json();if(!r.ok)throw new Error(d.error||'发票详情加载失败');if(!Array.isArray(d.data))throw new Error('发票详情响应格式异常，请重试');var inv=d.data.length?d.data[0]:null;if(!inv){showToast('未找到发票','error');return}DetailModal._id=id;
+open:async function(id){var r=await BusinessUI.fetch('/invoices/api/invoices?'+new URLSearchParams({id,...(INVOICE_ALL_VIEW?{}:{scope:'mine'})})),d=await r.json();if(!r.ok)throw new Error(d.error||'发票详情加载失败');if(!Array.isArray(d.data))throw new Error('发票详情响应格式异常，请重试');var inv=d.data.length?d.data[0]:null;if(!inv){showToast('未找到发票','error');return}DetailModal._id=id;
 document.getElementById('detMonth').value=inv.month;
 document.getElementById('detDate').value=inv.date||'';
 document.getElementById('detStatus').value=inv.status||'未报销';
@@ -519,10 +537,10 @@ document.getElementById('detailModal').addEventListener('click',function(e){if(e
 
 // ====== 统计弹窗 (精简) ======
 var StatsModal={show:async function(){
-if(!App.stats){var r=await BusinessUI.fetch('/invoices/api/stats'),data=await r.json();if(!r.ok)throw new Error(data.error||'统计加载失败');if(!Number.isFinite(data.total_count))throw new Error('统计响应格式异常，请重试');App.stats=data}var s=App.stats,ss=s.status_stats||{};
-document.getElementById('modalStatsGrid').innerHTML=[{l:'发票总数',v:s.total_count,cls:'accent-blue'},{l:'总金额',v:'\xA5'+Money.format(s.total_amount),cls:'accent-blue'},{l:'已报销',v:(ss['已报销']||{}).count+'张 / \xA5'+Money.format((ss['已报销']||{}).amount),cls:'accent-green'},{l:'正在报销',v:(ss['正在报销']||{}).count+'张 / \xA5'+Money.format((ss['正在报销']||{}).amount),cls:'accent-orange'},{l:'未报销',v:(ss['未报销']||{}).count+'张 / \xA5'+Money.format((ss['未报销']||{}).amount),cls:'accent-red'}].map(function(o){return '<div class="stat-card '+o.cls+'"><div class="label">'+o.l+'</div><div class="value">'+o.v+'</div></div>'}).join('');
+if(!App.stats){var r=await BusinessUI.fetch('/invoices/api/stats'+invoiceScopeQuery()),data=await r.json();if(!r.ok)throw new Error(data.error||'统计加载失败');if(!Number.isFinite(data.total_count))throw new Error('统计响应格式异常，请重试');App.stats=data}var s=App.stats,ss=s.status_stats||{};
+document.getElementById('modalStatsGrid').innerHTML=invoiceStatisticsCards(s,false);
 var months=Object.entries(s.month_stats||{}).sort(),maxM=Money.max(months.map(function(e){return e[1].amount}));document.getElementById('monthChart').innerHTML=months.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Money.percent(e[1].amount,maxM)+'%"></div></div><div class="bar-value">\xA5'+Money.format(e[1].amount)+' ('+e[1].count+'张)</div></div>'}).join('');
-document.getElementById('statusChart').innerHTML=['未报销','正在报销','已报销'].map(function(st){var d=ss[st]||{count:0,amount:'0.00'},cls=st==='已报销'?'accent-green':st==='正在报销'?'accent-orange':'accent-red',pct=s.total_count?(d.count/s.total_count*100).toFixed(1):0;return '<div class="chart-bar '+cls+'"><div class="name">'+st+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Math.max(pct,2)+'%"></div></div><div class="bar-value">\xA5'+Money.format(d.amount)+' ('+d.count+'张)</div></div>'}).join('');
+document.getElementById('statusChart').innerHTML=invoiceStatuses.map(function([st,cls]){var d=ss[st]||{count:0,amount:'0.00'},pct=s.total_count?(d.count/s.total_count*100).toFixed(1):0;return '<div class="chart-bar '+cls+'"><div class="name">'+st+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Math.max(pct,2)+'%"></div></div><div class="bar-value">\xA5'+Money.format(d.amount)+' ('+d.count+'张)</div></div>'}).join('');
 var cats=Object.entries(s.category_stats||{}).sort(function(a,b){return Money.compare(b[1].amount,a[1].amount)}),maxC=Money.max(cats.map(function(e){return e[1].amount}));document.getElementById('categoryChart').innerHTML=cats.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Money.percent(e[1].amount,maxC)+'%"></div></div><div class="bar-value">\xA5'+Money.format(e[1].amount)+' ('+e[1].count+'张)</div></div>'}).join('');
 var subs=Object.entries(s.submitter_stats||{}).sort(function(a,b){return Money.compare(b[1].amount,a[1].amount)}),maxS=Money.max(subs.map(function(e){return e[1].amount}));document.getElementById('submitterChart').innerHTML=subs.length===0?'<div style="color:#aaa;text-align:center;padding:20px">暂无提交人数据</div>':subs.map(function(e){return '<div class="chart-bar"><div class="name">'+escHtml(e[0])+'</div><div class="bar-wrap"><div class="bar-fill" style="width:'+Money.percent(e[1].amount,maxS)+'%"></div></div><div class="bar-value">\xA5'+Money.format(e[1].amount)+' ('+e[1].count+'张)</div></div>'}).join('');
 openInvoiceDialog('statsModal')},close:function(){closeInvoiceDialog('statsModal')}};
@@ -585,11 +603,23 @@ DelDupModal.confirm = BusinessUI.guard(DelDupModal.confirm, 'invoice-delete-dups
 organizeFiles = BusinessUI.guard(organizeFiles, 'invoice-organize', '[onclick="organizeFiles()"]', invoiceError);
 refreshPDF = BusinessUI.guard(refreshPDF, 'invoice-refresh-pdf', '#refreshBtn', invoiceError);
 scanDuplicates = BusinessUI.guard(scanDuplicates, 'invoice-scan-dups', '[onclick="scanDuplicates()"]', invoiceError);
-if(!window.IS_FINANCE){document.body.classList.add('member');document.querySelectorAll('#detailModal input,#detailModal select,#detailModal textarea').forEach(function(el){el.disabled=true});}
+if (!INVOICE_ALL_VIEW) {
+  document.body.classList.add('member');
+  const options = invoiceStatuses.map(([status]) => '<option value="'+status+'">'+status+'</option>').join('');
+  document.getElementById('filterStatus').innerHTML = '<option value="">全部状态</option>'+options;
+  document.getElementById('detStatus').innerHTML = options;
+  document.querySelectorAll('#detailModal input,#detailModal select,#detailModal textarea').forEach(el => { el.disabled=true; });
+}
+const activeInvoiceView = document.getElementById(INVOICE_ALL_VIEW ? 'showAllInvoices' : 'showMyInvoices');
+if (activeInvoiceView) {
+  activeInvoiceView.classList.add('btn-accent');
+  activeInvoiceView.setAttribute('aria-pressed', 'true');
+  document.getElementById(INVOICE_ALL_VIEW ? 'showMyInvoices' : 'showAllInvoices').setAttribute('aria-pressed', 'false');
+}
 syncInvoiceSortControls();
 bindInvoiceTable();
 loadStats().then(function(){loadInvoices()});
-if(window.IS_FINANCE)InvoiceJobs.load();
+if(INVOICE_ALL_VIEW)InvoiceJobs.load();
 document.addEventListener('visibilitychange',()=>InvoiceJobs.monitor?.sync());
 window.addEventListener('offline',()=>InvoiceJobs.monitor?.sync());
 window.addEventListener('online',()=>InvoiceJobs.monitor?.sync());
@@ -604,7 +634,7 @@ function invoiceOwnerOptions(selected, placeholder, allowUnassigned){
 }
 async function loadInvoiceOwners(){
   if(!App.owners){
-    if(IS_FINANCE){
+    if(INVOICE_ALL_VIEW){
       var response=await BusinessUI.fetch('/invoices/api/owners');
       var data=await response.json();
       if(!response.ok||!Array.isArray(data.members))throw new Error(data.error||'提交人加载失败');

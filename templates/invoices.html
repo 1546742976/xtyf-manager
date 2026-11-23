@@ -24,6 +24,10 @@
 <div class="page-head">
 <div><p class="ux-eyebrow">FINANCE / INVOICES</p><h1>{{ '发票中心' if is_finance else '我的发票' }}</h1><p class="ux-head-sub">上传、查重、整理与追踪每张发票的报销进度。</p></div>
 <div class="actions">
+{% if is_finance %}
+<button type="button" id="showMyInvoices" onclick="changeInvoiceView(true)">我的发票</button>
+<button type="button" id="showAllInvoices" onclick="changeInvoiceView(false)">全部发票</button>
+{% endif %}
 <button class="btn-primary" onclick="StatsModal.show()">统计</button>
 <button class="finance-only" onclick="exportCSV()">导出发票 CSV</button>
 <button class="finance-only" onclick="exportZip()">导出压缩包</button>
@@ -35,6 +39,9 @@
 
 <div class="container">
 
+<p id="invoice-snapshot-status" role="status" aria-live="polite" hidden></p>
+<div class="stats-grid" id="statsGrid"></div>
+
 <div class="dropzone" id="dropZone" role="button" tabindex="0" aria-label="选择 PDF 发票文件" onclick="document.getElementById('fileInput').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('fileInput').click()}">
 <div class="dz-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/></svg></div>
 <div class="dz-text">拖入一个或多个PDF发票到此处，或<strong>点击选择文件</strong><br>
@@ -42,11 +49,8 @@
 </div>
 <input type="file" id="fileInput" accept=".pdf" multiple style="display:none" onchange="handleFiles(this.files)">
 
-<p id="invoice-snapshot-status" role="status" aria-live="polite" hidden></p>
-<div class="stats-grid" id="statsGrid"></div>
-
 {% if is_finance %}
-<section class="invoice-jobs" aria-labelledby="invoiceJobsTitle">
+<section class="invoice-jobs finance-only" aria-labelledby="invoiceJobsTitle">
 <div class="invoice-jobs-head"><h2 id="invoiceJobsTitle">后台任务</h2><button type="button" onclick="InvoiceJobs.load()">刷新任务</button></div>
 <p>显示最近 30 项任务。关闭页面后仍会执行，可随时回来查看进度和结果。</p>
 <div id="invoiceJobsList" aria-live="polite">正在加载任务…</div>
@@ -65,7 +69,7 @@
 <select id="filterStatus" aria-label="筛选状态" onchange="applyFilters()"><option value="">全部状态</option><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select>
 <select id="filterMonth" aria-label="筛选月份" onchange="applyFilters()"><option value="">全部月份</option></select>
 <select id="filterCategory" aria-label="筛选分类" onchange="applyFilters()"><option value="">全部分类</option></select>
-<select id="filterSubmitter" aria-label="筛选提交人" onchange="applyFilters()"><option value="">全部提交人</option></select>
+<select id="filterSubmitter" class="finance-only" aria-label="筛选提交人" onchange="applyFilters()"><option value="">全部提交人</option></select>
 <label class="finance-only"><input type="checkbox" id="filterOwnership" onchange="applyFilters()"> 归属待确认</label>
 <div class="sep"></div>
 <input type="date" id="filterDateFrom" aria-label="开始日期" onchange="applyFilters()" title="开始日期" style="width:125px">
@@ -117,7 +121,7 @@
 <div class="modal-header"><h2 id="statsModalTitle">发票统计</h2><button class="modal-close" type="button" aria-label="关闭" onclick="StatsModal.close()">&times;</button></div>
 <div class="stats-grid" id="modalStatsGrid"></div>
 <div class="chart-row three"><div class="chart-box"><h3>状态分布</h3><div id="statusChart"></div></div><div class="chart-box"><h3>按月份</h3><div id="monthChart"></div></div><div class="chart-box"><h3>按类别</h3><div id="categoryChart"></div></div></div>
-<div class="chart-row"><div class="chart-box"><h3>按提交人</h3><div id="submitterChart"></div></div></div>
+<div class="chart-row finance-only"><div class="chart-box"><h3>按提交人</h3><div id="submitterChart"></div></div></div>
 </div></dialog>
 
 <!-- 详情弹窗 -->
@@ -169,7 +173,7 @@
 <div class="modal-header"><h2 id="delDupModalTitle">删除重复发票</h2><button class="modal-close" type="button" aria-label="关闭" onclick="DelDupModal.close()">&times;</button></div>
 <div class="dup-warning">
 <div class="dup-title" style="font-size:14px">发现 <span id="delDupCount">0</span> 个重复项</div>
-<div style="color:#888;margin-top:6px;font-size:12px">每组重复将保留较早的一个文件，删除其余副本<br>此操作<b>不可恢复</b>，建议先确认后再执行</div>
+<div style="color:#888;margin-top:6px;font-size:12px">每组保留较早的文件和已用于个人报销的文件，其余副本将被删除<br>此操作<b>不可恢复</b>，建议先确认后再执行</div>
 </div>
 <div style="max-height:200px;overflow-y:auto;margin-bottom:14px;font-size:11px;color:#666" id="delDupList"></div>
 <div class="detail-actions">

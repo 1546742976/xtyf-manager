@@ -121,7 +121,7 @@ class TestClientAPI(unittest.TestCase):
         data = self.bootstrap().get_json()
         self.assertFalse(data["user"]["must_change_password"])
         self.assertEqual(self.client.get("/api/data", headers=NATIVE).status_code, 200)
-        self.assertFalse(data["permissions"]["access_funds"])
+        self.assertTrue(data["permissions"]["access_funds"])
         self.assertFalse(data["permissions"]["manage_security"])
 
     def test_permissions_match_roles_and_independent_finance_grants(self):
@@ -139,7 +139,7 @@ class TestClientAPI(unittest.TestCase):
                 manager = role in ("manager", "admin")
                 self.assertEqual(data["permissions"]["manage_tasks"], manager)
                 self.assertEqual(data["permissions"]["manage_members"], manager)
-                self.assertEqual(data["permissions"]["access_funds"], manager)
+                self.assertTrue(data["permissions"]["access_funds"])
                 self.assertEqual(data["can_review_funds"], manager)
                 self.assertEqual(data["can_review"], manager)
                 self.assertTrue(data["is_finance"])

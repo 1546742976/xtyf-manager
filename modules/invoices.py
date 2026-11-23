@@ -35,6 +35,7 @@ import time
 import threading
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 from functools import wraps
@@ -64,6 +65,7 @@ UPLOAD_DIR = os.path.join(BASE_DIR, '.uploads')
 bp = Blueprint('invoices', __name__)
 
 STATUS_NAMES = ['未报销', '正在报销', '已报销']
+PERSONAL_STATUS_NAMES = ['未个人报销', '已个人报销']
 MONTH_PATTERN = re.compile(r'^(\d{4}\.\d{1,2})$')
 SKIP_DIRS = {'__pycache__', '.uploads'}
 
@@ -1094,11 +1096,12 @@ def _publish_invoice_snapshot(records=None):
         return False
 
 
-def _read_invoice_snapshot(user):
+def _read_invoice_snapshot(user, *, include_personal_key=False):
     """Never scans PDFs or writes cache files on the read path."""
     snapshot = load_json(SNAPSHOT_FILE)
     state = load_json(SNAPSHOT_STATE_FILE).get('state', 'updating')
     g.invoice_snapshot_state = state
+    g.invoice_snapshot_generation = snapshot.get('generation')
     g.invoice_snapshot_updated_at = snapshot.get('updated_at', '')
     if 'records' not in snapshot:
         return None
@@ -1116,8 +1119,65 @@ def _read_invoice_snapshot(user):
         item['submitter_original'] = owner.get('submitter', item.get('submitter', ''))
         item['submitter'] = names.get(item['submitter_id'], item['submitter_original'])
         item['amount'] = decimal_amount(item['amount'])
+        if include_personal_key:
+            item['personal_invoice_key'] = owner.get('personal_invoice_key')
         result.append(item)
     return result
+
+
+@contextmanager
+def personal_invoice_catalog(user):
+    """Read a completed catalog while holding the lock shared with invoice moves."""
+    start_invoice_worker()
+    if not _invoice_lock.acquire(timeout=5):
+        raise TimeoutError('发票正在处理中')
+    try:
+        records = _read_invoice_snapshot(user, include_personal_key=True)
+        if records is None or g.invoice_snapshot_state != 'current' or not g.invoice_snapshot_generation:
+            raise RuntimeError('发票目录尚未更新完成')
+        yield g.invoice_snapshot_generation, records
+    finally:
+        _invoice_lock.release()
+
+
+def ensure_personal_invoice_keys(invoice_ids):
+    """Store identities that follow these files when normal invoice operations move them."""
+    meta = load_meta()
+    keys = []
+    changed = False
+    for invoice_id in invoice_ids:
+        path = _safe_join(invoice_id) if _is_safe_rel(invoice_id) else None
+        invoice = meta.get(invoice_id)
+        if invoice is None or not path or not os.path.isfile(path):
+            return None
+        key = invoice.get('personal_invoice_key')
+        if not key:
+            key = invoice['personal_invoice_key'] = uuid.uuid4().hex
+            changed = True
+        keys.append(key)
+    if changed:
+        save_meta(meta)
+    return keys
+
+
+def _personal_view():
+    return request.args.get('scope') == 'mine'
+
+
+def _scoped_invoice_records(user):
+    records = g.invoice_snapshot_records
+    if not _personal_view():
+        return records
+    from modules.funds import personal_invoice_payments
+
+    mine = [invoice for invoice in records if _belongs_to_user(invoice, user)]
+    payments = personal_invoice_payments() if any(row['personal_invoice_key'] for row in mine) else {}
+    for invoice in mine:
+        owner_id, paid_at = payments.get(invoice.pop('personal_invoice_key'), (None, None))
+        paid = owner_id == user['id'] and bool(paid_at)
+        invoice['status'] = PERSONAL_STATUS_NAMES[paid]
+        invoice['reimbursed_date'] = paid_at[:10] if paid else ''
+    return mine
 
 
 # ---- 单文件 → 发票字典（合并元数据字段，ID 使用正斜杠相对路径）----
@@ -1207,7 +1267,8 @@ def _invoice_sort_value(invoice, field):
     if field == 'amount':
         return to_cents(value)
     if field == 'status':
-        return STATUS_NAMES.index(value) if value in STATUS_NAMES else None
+        statuses = STATUS_NAMES + PERSONAL_STATUS_NAMES
+        return statuses.index(value) if value in statuses else None
     text = str(value).strip()
     if not text:
         return None
@@ -1233,9 +1294,9 @@ def sort_invoices(invoices, sort_by='date', sort_order='desc'):
 # ===================== 统计 =====================
 
 # ---- 统计聚合：总数/总额/状态/提交人/类别/月份 ----
-def get_stats(invoices):
+def get_stats(invoices, statuses=STATUS_NAMES):
     total_cents = 0
-    groups = {'status_stats': {status: {'count': 0, 'cents': 0} for status in STATUS_NAMES},
+    groups = {'status_stats': {status: {'count': 0, 'cents': 0} for status in statuses},
               'submitter_stats': {}, 'category_stats': {}, 'month_stats': {}}
     for invoice in invoices:
         cents = to_cents(invoice['amount'])
@@ -1269,11 +1330,7 @@ def index():
 @bp.route('/api/invoices')
 # ---- 列表：成员仅返回自己的（服务端过滤 submitter）----
 def api_invoices():
-    user = current_user()
-    invoices = g.invoice_snapshot_records
-    if not _is_finance(user):
-        invoices = [i for i in invoices if _belongs_to_user(i, user)]
-    result = invoices
+    result = _scoped_invoice_records(current_user())
     if request.args.get('ownership') == 'unresolved':
         result = [i for i in result if i['ownership_unresolved']]
     if request.args.get('submitter_id'):
@@ -1342,18 +1399,15 @@ def api_invoices():
 @bp.route('/api/stats')
 # ---- 统计：成员仅统计自己的 ----
 def api_stats():
-    user = current_user()
-    invoices = g.invoice_snapshot_records
-    if not _is_finance(user):
-        invoices = [i for i in invoices if _belongs_to_user(i, user)]
-    return jsonify(get_stats(invoices))
+    return jsonify(get_stats(_scoped_invoice_records(current_user()),
+                             PERSONAL_STATUS_NAMES if _personal_view() else STATUS_NAMES))
 
 
 @bp.route('/api/submitters')
 # ---- 提交人下拉：成员只返回自己（财务返回全部）----
 def api_submitters():
     user = current_user()
-    if not _is_finance(user):
+    if not _is_finance(user) or _personal_view():
         return jsonify([user['name']])
     subs = set()
     for v in g.invoice_snapshot_records:
@@ -1405,6 +1459,8 @@ def api_invoice_update():
     except ValueError as exc:
         return jsonify(success=False, error=str(exc)), 400
 
+    if owner is not None and owner[1] != existing.get('submitter_id') and _paid_invoice_keys((existing,)):
+        return jsonify(success=False, error='已个人报销的发票须保留原提交人'), 409
     updated = dict(existing)
     if owner is not None:
         updated.update(submitter=owner[0], submitter_id=owner[1], ownership_source='manual')
@@ -1490,6 +1546,10 @@ def api_invoice_batch():
         updates.update(submitter=name, submitter_id=owner_id, ownership_source='manual')
 
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
+    if 'submitter_id' in updates:
+        entries = [meta.get(inv_id.replace('\\', '/'), {}) for inv_id in ids if isinstance(inv_id, str)]
+        if _paid_invoice_keys(entry for entry in entries if entry.get('submitter_id') != updates['submitter_id']):
+            return jsonify(success=False, error='已个人报销的发票须保留原提交人'), 409
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     moved_count = 0
     for inv_id in ids:
@@ -1745,6 +1805,15 @@ def _do_refresh(jid):
     return {'total': total, 'pdf_extracted': pdf_count}
 
 
+def _paid_invoice_keys(entries):
+    keys = {entry['personal_invoice_key'] for entry in entries if entry.get('personal_invoice_key')}
+    if not keys:
+        return set()
+    from modules.funds import personal_invoice_payments
+
+    return keys.intersection(personal_invoice_payments())
+
+
 def _do_delete_dups(jid):
     """后台：删除重复发票（每对保留第一个，删除其余的）"""
     _update_job(jid, 5, '扫描重复发票...')
@@ -1754,6 +1823,7 @@ def _do_delete_dups(jid):
     deleted = []
     failed = []
     meta = load_meta()
+    protected = _paid_invoice_keys(meta.values())
     total_groups = len(dup_groups)
 
     _update_job(jid, 10, f'发现 {total_groups} 组重复，准备删除...')
@@ -1764,6 +1834,8 @@ def _do_delete_dups(jid):
 
         # 保留第一个，删除其余
         for dup_path in paths[1:]:
+            if meta.get(dup_path, {}).get('personal_invoice_key') in protected:
+                continue
             fp = os.path.join(BASE_DIR, dup_path)
             try:
                 if os.path.isfile(fp):
@@ -2380,7 +2452,9 @@ def _invoices_guard():
     start_invoice_worker()
     if request.endpoint in _SNAPSHOT_READ_ENDPOINTS:
         try:
-            records = _read_invoice_snapshot(user)
+            records = (_read_invoice_snapshot(user, include_personal_key=True)
+                       if _personal_view() and request.endpoint in {'invoices.api_invoices', 'invoices.api_stats'}
+                       else _read_invoice_snapshot(user))
         except (OSError, RuntimeError, ValueError) as exc:
             logging.warning('无法读取发票快照: %s', exc)
             records = None

@@ -41,10 +41,10 @@ class TestFeatureContracts(unittest.TestCase):
             "username": username, "password": "member-test-password",
         }).get_json()["ok"])
         for path in ("/api/data", "/api/account/profile",
-                     "/api/groups", "/api/projects", "/invoices/api/stats"):
+                     "/api/groups", "/api/projects", "/invoices/api/stats", "/funds/api/records"):
             with self.subTest(path=path):
                 self.assertEqual(member.get(path).status_code, 200)
-        for path in ("/funds/api/records", "/api/admin/permissions",
+        for path in ("/funds/api/export", "/funds/api/personal-invoices", "/api/admin/permissions",
                      "/api/admin/audit", "/invoices/api/owners"):
             with self.subTest(path=path):
                 self.assertEqual(member.get(path).status_code, 403)

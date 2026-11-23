@@ -112,6 +112,7 @@ document.addEventListener("DOMContentLoaded", () => {
     api_member_toggle: "调整成员状态", export_members_csv: "导出成员",
     "funds.create_record": "新增资金记录", "funds.update_record": "修改资金记录",
     "funds.delete_record": "删除资金记录", "funds.review_record": "审核资金记录",
+    "funds.confirm_personal_reimbursement": "登记或更正个人报销",
     "funds.export_csv": "导出资金台账",
     "security.permissions_set": "更改业务授权",
   };
