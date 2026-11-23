@@ -1176,7 +1176,7 @@ def _scoped_invoice_records(user):
         owner_id, paid_at = payments.get(invoice.pop('personal_invoice_key'), (None, None))
         paid = owner_id == user['id'] and bool(paid_at)
         invoice['status'] = PERSONAL_STATUS_NAMES[paid]
-        invoice['reimbursed_date'] = paid_at[:10] if paid else ''
+        invoice['reimbursed_date'] = ''
     return mine
 
 

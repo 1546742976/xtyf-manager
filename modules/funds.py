@@ -722,11 +722,18 @@ def payment_owner(record, member_id):
         if member_id is not None and parse_id(member_id, '申请人', False) != record['applicant_id']:
             raise ValueError('请使用记录的原申请人')
         return dict(applicant_id=record['applicant_id'], applicant=record['applicant'], self_funded=1)
-    member_id = parse_id(member_id, '申请人', False)
-    member = get_db().execute('SELECT name FROM members WHERE id=?', (member_id,)).fetchone()
-    if member is None:
-        raise ValueError('指定的申请人不存在')
-    return dict(applicant_id=member_id, applicant=member['name'], self_funded=1)
+    if member_id is None:
+        applicant = (record['applicant'] or '').strip()
+        matches = get_db().execute('SELECT id,name FROM members WHERE name=? LIMIT 2', (applicant,)).fetchall()
+        if not applicant or len(matches) != 1:
+            raise ValueError('台账申请人无法唯一匹配，请选择成员账号')
+        member = matches[0]
+    else:
+        member_id = parse_id(member_id, '申请人', False)
+        member = get_db().execute('SELECT id,name FROM members WHERE id=?', (member_id,)).fetchone()
+        if member is None:
+            raise ValueError('指定的申请人不存在')
+    return dict(applicant_id=member['id'], applicant=member['name'], self_funded=1)
 
 
 @funds_bp.get('/api/records/<int:rid>/personal-invoices')
@@ -789,11 +796,6 @@ def confirm_personal_reimbursement(rid):
         reason = clean_text(data.get('reason'), '操作原因', 500, required=operation != 'confirm')
     except ValueError as exc:
         return jsonify(code=1, msg=str(exc)), 400
-    paid_at = now_str() if operation == 'confirm' else data.get('paid_date')
-    if operation in ('backfill', 'correct') and (
-        not valid_record_date(paid_at) or paid_at > now_str()[:10]
-    ):
-        return jsonify(code=1, msg='请填写有效的实际付款日期，最晚为今天'), 400
     invoice_ids = data.get('invoice_ids', [data.get('invoice_id')])
     if operation != 'revoke':
         if (not isinstance(invoice_ids, list) or not 1 <= len(invoice_ids) <= 100
@@ -842,11 +844,11 @@ def confirm_personal_reimbursement(rid):
                 linked = {item['invoice_key']: item['record_id'] for item in funds_reimbursements.paid_invoices(conn)}
                 if len(set(keys)) != len(keys) or any(key in linked and linked[key] != rid for key in keys):
                     return jsonify(code=1, msg='发票重复或已用于另一笔个人报销'), 409
-                if (operation == 'correct' and paid_at == row['personal_paid_at'][:10]
-                        and set(keys) == {key for key, record_id in linked.items() if record_id == rid}):
-                    return jsonify(code=1, msg='发票和付款日期未变更'), 409
+                if operation == 'correct' and set(keys) == {key for key, record_id in linked.items() if record_id == rid}:
+                    return jsonify(code=1, msg='关联发票未变更'), 409
                 allocations = [(key, amount, item['invoice_number'] or item['filename'])
                                for key, amount, item in zip(keys, cents, selected)]
+                paid_at = row['personal_paid_at'] if operation == 'correct' else now_str()
                 funds_reimbursements.apply_payment(conn, row, user, operation, reason, paid_at, owner, allocations)
     except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
         current_app.logger.warning('个人报销登记暂不可用: %s', type(exc).__name__)

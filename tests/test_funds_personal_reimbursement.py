@@ -47,6 +47,17 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         return response.get_json()
 
+    def historical_expense(self, applicant, amount):
+        response = self.admin.post('/funds/api/records', json={
+            'request_id': uuid4().hex, 'record_type': '出', 'amount': amount,
+            'applicant': applicant, 'handler': '经手测试', 'source_dest': '旧账材料',
+            'record_date': '2026-11-20', 'invoice_count': 1,
+        })
+        self.assertEqual(response.status_code, 200, response.get_json())
+        path = f"/funds/api/records/{response.get_json()['id']}"
+        self.assertEqual(self.admin.post(path+'/review', json={'version': 1}).status_code, 200)
+        return path
+
     def invoice(self, owner, amount, status='未报销'):
         token = uuid4().hex
         upload = self.admin.post('/invoices/api/upload', data={
@@ -120,7 +131,9 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertEqual(self.reviewer.post(f'/funds/api/records/{another}/personal-reimbursement',
                                             json=payment).status_code, 409)
 
-        move = self.admin.post('/invoices/api/invoice/update', json={'id': selected, 'status': '正在报销'}).get_json()
+        move = self.admin.post('/invoices/api/invoice/update', json={
+            'id': selected, 'status': '正在报销', 'reimbursed_date': '2026-11-23',
+        }).get_json()
         self.assertTrue(move['moved'], move)
         self.assertEqual(self.admin.post('/invoices/api/invoice/update', json={
             'id': move['id'], 'submitter_id': self.other_id,
@@ -129,10 +142,12 @@ class TestPersonalReimbursement(unittest.TestCase):
         mine = self.applicant.get('/invoices/api/invoices', query_string=filter_args).get_json()['data']
         self.assertEqual([(invoice['id'], invoice['status']) for invoice in mine], [(move['id'], '已个人报销')])
         self.assertNotIn('personal_invoice_key', mine[0])
+        self.assertEqual(mine[0]['reimbursed_date'], '')
         after = self.applicant.get('/invoices/api/stats?scope=mine').get_json()
         self.assertEqual(after['status_stats']['已个人报销']['count'], 1)
         all_invoices = self.admin.get('/invoices/api/invoices', query_string={'id': move['id']}).get_json()['data']
         self.assertEqual(all_invoices[0]['status'], '正在报销')
+        self.assertEqual(all_invoices[0]['reimbursed_date'], '2026-11-23')
         self.assertEqual(self.other.get('/invoices/api/invoices', query_string=filter_args).get_json()['total'], 0)
 
     def test_multiple_invoices_are_validated_and_corrections_release_old_links(self):
@@ -178,9 +193,13 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertNotIn(first, {item['id'] for item in self.reviewer.get(other_path+'/personal-invoices').get_json()['data']})
         self.assertEqual(self.reviewer.post(other_path+'/personal-reimbursement', json=decision).status_code, 409)
 
-        correction = {**decision, 'operation': 'correct', 'version': 3, 'paid_date': '2026-11-22',
-                      'invoice_ids': [first, replacement], 'reason': '补交正确的票据'}
-        result = self.reviewer.post(payment, json=correction)
+        correction = {**decision, 'operation': 'correct', 'version': 3, 'reason': '补交正确的票据'}
+        unchanged = self.reviewer.post(payment, json=correction)
+        self.assertEqual(unchanged.status_code, 409)
+        self.assertEqual(unchanged.get_json()['msg'], '关联发票未变更')
+        correction['invoice_ids'] = [first, replacement]
+        with patch.object(funds, 'now_str', return_value='2026-11-24 08:00:00'):
+            result = self.reviewer.post(payment, json=correction)
         self.assertEqual(result.status_code, 200, result.get_json())
         states = {item['id']: item['status'] for item in self.applicant.get(
             '/invoices/api/invoices?scope=mine').get_json()['data']}
@@ -189,52 +208,65 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertEqual([event['operation'] for event in history], ['correct', 'confirm'])
         self.assertEqual(history[0]['actor_id'], self.reviewer_id)
         self.assertEqual(history[0]['reason'], correction['reason'])
-        self.assertEqual(history[0]['after']['paid_at'], correction['paid_date'])
+        self.assertEqual(history[0]['after']['paid_at'], history[1]['after']['paid_at'])
         self.assertNotEqual(history[0]['before']['invoices'], history[0]['after']['invoices'])
         options = self.reviewer.get(other_path+'/personal-invoices').get_json()['data']
         self.assertEqual([item['id'] for item in options], [second])
 
-    def test_historical_backfill_requires_an_explicit_owner_date_and_reason(self):
+    def test_historical_backfill_defaults_to_the_ledger_applicant_without_a_date(self):
         amount = '56.78'
-        legacy = self.admin.post('/funds/api/records', json={
-            'request_id': uuid4().hex, 'record_type': '出', 'amount': amount,
-            'applicant': '旧账中的姓名', 'handler': '经手测试', 'source_dest': '旧账材料',
-            'record_date': '2026-11-20', 'invoice_count': 1,
-        }).get_json()
-        path = f"/funds/api/records/{legacy['id']}"
+        name = '旧账申请人'
+        applicant, applicant_id = self.member(name)
+        path = self.historical_expense(name, amount)
         payment = path+'/personal-reimbursement'
-        self.assertEqual(self.admin.post(path+'/review', json={'version': 1}).status_code, 200)
-        balance = self.applicant.get('/funds/api/stats').get_json()['data']['balance']
-        invoice = self.invoice(self.applicant_id, amount)
+        balance = applicant.get('/funds/api/stats').get_json()['data']['balance']
+        invoice = self.invoice(applicant_id, amount)
         self.invoice(self.other_id, amount)
-        self.assertEqual(self.reviewer.get(path+'/personal-invoices').status_code, 400)
-        result = self.reviewer.get(path+'/personal-invoices', query_string={'applicant_id': self.applicant_id}).get_json()
+        choices = self.reviewer.get(path+'/personal-invoices')
+        self.assertEqual(choices.status_code, 200)
+        result = choices.get_json()
         self.assertEqual([item['id'] for item in result['data']], [invoice])
         entry = {'operation': 'backfill', 'version': 2, 'generation': result['generation'],
-                 'paid_date': '2026-11-20', 'invoice_ids': [invoice], 'applicant_id': self.applicant_id,
-                 'reason': '按旧付款凭证补录'}
-        for invalid in ({'reason': ''}, {'paid_date': '2099-01-01'}, {'applicant_id': None}):
-            self.assertEqual(self.reviewer.post(payment, json={**entry, **invalid}).status_code, 400)
+                 'invoice_ids': [invoice], 'reason': '按旧付款凭证补录'}
+        self.assertEqual(self.reviewer.post(payment, json={**entry, 'reason': ''}).status_code, 400)
         self.assertEqual(self.admin.post(payment, json=entry).status_code, 403)
-        self.assertEqual(self.reviewer.post(payment, json=entry).status_code, 200)
-        reimbursed = self.applicant.get(path).get_json()['data']
-        self.assertEqual(reimbursed['applicant_id'], self.applicant_id)
-        self.assertEqual(reimbursed['personal_paid_at'], '2026-11-20')
-        self.assertEqual(self.applicant.get(payment+'/history').status_code, 403)
-        self.assertEqual(self.applicant.get('/funds/api/stats').get_json()['data']['balance'], balance)
+        recorded_at = '2026-11-23 08:00:00'
+        with patch.object(funds, 'now_str', return_value=recorded_at):
+            self.assertEqual(self.reviewer.post(payment, json=entry).status_code, 200)
+        reimbursed = applicant.get(path).get_json()['data']
+        self.assertEqual(reimbursed['applicant_id'], applicant_id)
+        self.assertEqual(reimbursed['personal_paid_at'], recorded_at)
+        self.assertEqual(applicant.get(payment+'/history').status_code, 403)
+        self.assertEqual(applicant.get('/funds/api/stats').get_json()['data']['balance'], balance)
 
         revoke = {'operation': 'revoke', 'version': 3, 'reason': '旧付款凭证需复核'}
         self.assertEqual(self.reviewer.post(payment, json={**revoke, 'reason': ' '}).status_code, 400)
         self.assertEqual(self.reviewer.post(payment, json=revoke).status_code, 200)
-        restored = self.applicant.get(path).get_json()['data']
+        restored = applicant.get(path).get_json()['data']
         self.assertEqual((restored['applicant_id'], restored['applicant'], restored['self_funded']),
-                         (None, '旧账中的姓名', 0))
+                         (None, name, 0))
         events = self.reviewer.get(payment+'/history').get_json()['data']
         self.assertEqual([event['operation'] for event in events], ['revoke', 'backfill'])
         self.assertEqual(events[0]['before']['invoices'][0]['amount'], amount)
         self.assertEqual(events[0]['after']['invoices'], [])
-        self.assertEqual(self.applicant.get('/invoices/api/invoices?scope=mine').get_json()['data'][0]['status'],
+        self.assertEqual(applicant.get('/invoices/api/invoices?scope=mine').get_json()['data'][0]['status'],
                          '未个人报销')
+
+    def test_historical_backfill_requests_a_member_when_name_cannot_be_resolved(self):
+        for name, amount in [('同名申请人', '11.01'), ('无对应成员', '11.02')]:
+            with self.subTest(name=name):
+                path = self.historical_expense(name, amount)
+                invoice = self.invoice(self.applicant_id, amount)
+                choices_url = path+'/personal-invoices'
+                payment = path+'/personal-reimbursement'
+                self.assertEqual(self.reviewer.get(choices_url).status_code, 400)
+                result = self.reviewer.get(choices_url, query_string={'applicant_id': self.applicant_id}).get_json()
+                self.assertEqual([item['id'] for item in result['data']], [invoice])
+                entry = {'operation': 'backfill', 'version': 2, 'generation': result['generation'],
+                         'invoice_ids': [invoice], 'reason': '按旧付款凭证补录'}
+                self.assertEqual(self.reviewer.post(payment, json=entry).status_code, 400)
+                entry['applicant_id'] = self.applicant_id
+                self.assertEqual(self.reviewer.post(payment, json=entry).status_code, 200)
 
     def test_migration_keeps_existing_single_invoice_allocations(self):
         with closing(sqlite3.connect(':memory:')) as conn:

@@ -6,7 +6,6 @@
   const form = byId('personalPaymentForm');
   const owner = byId('personalPaymentOwner');
   const reason = byId('personalPaymentReason');
-  const date = byId('personalPaymentDate');
   const choices = byId('personalPaymentChoices');
   const save = byId('personalPaymentSave');
   const revoke = byId('personalPaymentRevoke');
@@ -100,7 +99,7 @@
     const person = state.applicant_id ? state.applicant+' #'+state.applicant_id : state.applicant || '未绑定申请人';
     if (!state.paid_at) return person+' · 未个人报销';
     const invoices = state.invoices.map(invoice => (invoice.label || '原关联发票')+' ¥'+Money.format(invoice.amount));
-    return [person, state.paid_at.slice(0,10), ...invoices].join(' · ');
+    return [person, '已个人报销', ...invoices].join(' · ');
   }
 
   async function open(button) {
@@ -115,8 +114,8 @@
     byId('personalPaymentHistory').open = false;
     byId('personalPaymentEvents').replaceChildren();
     byId('personalPaymentOwnerField').hidden = true;
-    byId('personalPaymentReasonField').hidden = byId('personalPaymentDateField').hidden = operation === 'confirm';
-    reason.required = date.required = operation !== 'confirm';
+    byId('personalPaymentReasonField').hidden = operation === 'confirm';
+    reason.required = operation !== 'confirm';
     byId('personalPaymentTitle').textContent = actions[operation];
     save.textContent = operation === 'confirm' ? '确认已付款' : '保存';
     byId('personalPaymentRecord').textContent = '正在读取支出记录…';
@@ -133,7 +132,6 @@
         save.hidden = true;
         byId('personalPaymentRecord').append(' · 审核通过后可登记付款');
       }
-      date.value = record.personal_paid_at?.slice(0,10) || '';
       revoke.disabled = false;
       refresh.disabled = false;
       const tasks = [request(session.path+'/personal-reimbursement/history').then(result => {
@@ -156,8 +154,11 @@
       if (!record.applicant_id) {
         tasks.push(request('/invoices/api/owners').then(result => {
           if (active !== session) return;
+          const applicant = (record.applicant || '').trim();
+          const matches = result.members.filter(member => applicant && member.name === applicant);
           owner.replaceChildren(new Option('请选择成员', ''), ...result.members.map(member =>
             new Option(member.name+' · '+member.username+' (#'+member.id+')', String(member.id))));
+          owner.value = matches.length === 1 ? String(matches[0].id) : '';
           byId('personalPaymentOwnerField').hidden = false;
         }));
       }
@@ -184,7 +185,7 @@
         method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
           operation, version:session.record.version, generation:session.generation,
           invoice_ids:[...choices.querySelectorAll('input:checked')].map(input => input.value),
-          applicant_id:session.record.applicant_id || owner.value, paid_date:date.value, reason:reason.value
+          applicant_id:session.record.applicant_id || owner.value, reason:reason.value
         })
       });
       fundsToast(result.msg, result.ledger_sync === 'failed' ? 'error' : 'success');

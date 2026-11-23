@@ -131,7 +131,7 @@
 <div class="field"><label for="detMonth">月份</label><input id="detMonth" placeholder="YYYY.M" inputmode="decimal" {{ 'readonly' if not is_finance else '' }}></div>
 <div class="field"><label for="detDate">开票日期</label><input type="date" id="detDate" {{ 'readonly' if not is_finance else '' }}></div>
 <div class="field"><label for="detStatus">状态</label><select id="detStatus"><option value="未报销">未报销</option><option value="正在报销">正在报销</option><option value="已报销">已报销</option></select></div>
-<div class="field"><label for="detReimbursedDate">报销日期</label><input type="date" id="detReimbursedDate"></div>
+<div class="field finance-only"><label for="detReimbursedDate">报销日期</label><input type="date" id="detReimbursedDate"></div>
 <div class="field"><label for="detSubmitter">提交人</label><select id="detSubmitter" aria-label="提交人"><option value="0">待确认 / 未指定</option></select></div>
 <div class="field"><label for="detCategory">类别</label><input id="detCategory" placeholder="类别"></div>
 <div class="field"><label for="detVendor">供应商</label><input id="detVendor" readonly></div>
