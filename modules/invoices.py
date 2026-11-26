@@ -1096,7 +1096,7 @@ def _publish_invoice_snapshot(records=None):
         return False
 
 
-def _read_invoice_snapshot(user, *, include_personal_key=False):
+def _read_invoice_snapshot(user, *, include_personal_key=False, internal_review=False):
     """Never scans PDFs or writes cache files on the read path."""
     snapshot = load_json(SNAPSHOT_FILE)
     state = load_json(SNAPSHOT_STATE_FILE).get('state', 'updating')
@@ -1112,7 +1112,7 @@ def _read_invoice_snapshot(user, *, include_personal_key=False):
     for original in snapshot['records']:
         item = dict(original)
         owner = meta.get(item['id'], {})
-        if not finance and not _belongs_to_user(owner, user):
+        if not internal_review and not finance and not _belongs_to_user(owner, user):
             continue
         item['submitter_id'] = owner.get('submitter_id')
         item['ownership_unresolved'] = not bool(item['submitter_id'])
@@ -1126,13 +1126,13 @@ def _read_invoice_snapshot(user, *, include_personal_key=False):
 
 
 @contextmanager
-def personal_invoice_catalog(user):
+def personal_invoice_catalog(user, *, internal_review=False):
     """Read a completed catalog while holding the lock shared with invoice moves."""
     start_invoice_worker()
     if not _invoice_lock.acquire(timeout=5):
         raise TimeoutError('发票正在处理中')
     try:
-        records = _read_invoice_snapshot(user, include_personal_key=True)
+        records = _read_invoice_snapshot(user, include_personal_key=True, internal_review=internal_review)
         if records is None or g.invoice_snapshot_state != 'current' or not g.invoice_snapshot_generation:
             raise RuntimeError('发票目录尚未更新完成')
         yield g.invoice_snapshot_generation, records
@@ -1168,12 +1168,16 @@ def _scoped_invoice_records(user):
     records = g.invoice_snapshot_records
     if not _personal_view():
         return records
-    from modules.funds import personal_invoice_payments
+    from modules.funds import personal_invoice_payments, personal_invoice_progress
 
     mine = [invoice for invoice in records if _belongs_to_user(invoice, user)]
     payments = personal_invoice_payments() if any(row['personal_invoice_key'] for row in mine) else {}
+    progress = personal_invoice_progress() if payments or any(row['personal_invoice_key'] for row in mine) else {}
     for invoice in mine:
-        owner_id, paid_at = payments.get(invoice.pop('personal_invoice_key'), (None, None))
+        key = invoice.pop('personal_invoice_key')
+        invoice['archive_status'] = invoice['status']
+        invoice['personal_progress'] = progress.get(key, '')
+        owner_id, paid_at = payments.get(key, (None, None))
         paid = owner_id == user['id'] and bool(paid_at)
         invoice['status'] = PERSONAL_STATUS_NAMES[paid]
         invoice['reimbursed_date'] = ''
@@ -1459,8 +1463,8 @@ def api_invoice_update():
     except ValueError as exc:
         return jsonify(success=False, error=str(exc)), 400
 
-    if owner is not None and owner[1] != existing.get('submitter_id') and _paid_invoice_keys((existing,)):
-        return jsonify(success=False, error='已个人报销的发票须保留原提交人'), 409
+    if owner is not None and owner[1] != existing.get('submitter_id') and _allocated_invoice_keys((existing,)):
+        return jsonify(success=False, error='已关联个人报销的发票须保留原提交人'), 409
     updated = dict(existing)
     if owner is not None:
         updated.update(submitter=owner[0], submitter_id=owner[1], ownership_source='manual')
@@ -1548,8 +1552,8 @@ def api_invoice_batch():
     meta = {k.replace('\\', '/'): v for k, v in load_meta().items()}
     if 'submitter_id' in updates:
         entries = [meta.get(inv_id.replace('\\', '/'), {}) for inv_id in ids if isinstance(inv_id, str)]
-        if _paid_invoice_keys(entry for entry in entries if entry.get('submitter_id') != updates['submitter_id']):
-            return jsonify(success=False, error='已个人报销的发票须保留原提交人'), 409
+        if _allocated_invoice_keys(entry for entry in entries if entry.get('submitter_id') != updates['submitter_id']):
+            return jsonify(success=False, error='已关联个人报销的发票须保留原提交人'), 409
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     moved_count = 0
     for inv_id in ids:
@@ -1805,13 +1809,13 @@ def _do_refresh(jid):
     return {'total': total, 'pdf_extracted': pdf_count}
 
 
-def _paid_invoice_keys(entries):
+def _allocated_invoice_keys(entries):
     keys = {entry['personal_invoice_key'] for entry in entries if entry.get('personal_invoice_key')}
     if not keys:
         return set()
-    from modules.funds import personal_invoice_payments
+    from modules.funds import allocated_personal_invoice_keys
 
-    return keys.intersection(personal_invoice_payments())
+    return keys.intersection(allocated_personal_invoice_keys())
 
 
 def _do_delete_dups(jid):
@@ -1823,7 +1827,7 @@ def _do_delete_dups(jid):
     deleted = []
     failed = []
     meta = load_meta()
-    protected = _paid_invoice_keys(meta.values())
+    protected = _allocated_invoice_keys(meta.values())
     total_groups = len(dup_groups)
 
     _update_job(jid, 10, f'发现 {total_groups} 组重复，准备删除...')
@@ -2102,6 +2106,7 @@ def api_upload_confirm():
         return jsonify(success=False, code='UPLOAD_COMMIT_FAILED', error=str(exc)), 503
 
     return jsonify({'success': True, 'rel_path': rel_path, 'message': f'已入库: {os.path.basename(new_path)}',
+                    'submitter_id': submitter_id,
                     **money_fields(to_cents(amount))})
 
 
@@ -2223,7 +2228,7 @@ def api_upload_confirm_batch():
                 dedupe_hashes[os.path.normcase(os.path.abspath(new_path))] = new_digest
             if invoice_number:
                 dedupe_index.setdefault(invoice_number, []).append(rel_path)
-            results.append({'file': original_name, 'status': 'ok', 'path': rel_path,
+            results.append({'file': original_name, 'status': 'ok', 'path': rel_path, 'submitter_id': submitter_id,
                             **money_fields(to_cents(amount))})
         except Exception as e:
             results.append({'file': original_name, 'status': 'error', 'reason': str(e)})

@@ -51,6 +51,7 @@
         <span id="personalInvoiceFeedback" class="small" role="status">按金额查找自费支出的候选发票</span>
       </div>
       {% endif %}
+      <p id="application-transfer-notice" role="status" hidden></p>
       <div class="filter-bar">
         <div class="row g-2 align-items-end">
           <div class="col-lg-2 col-md-4 col-6">
@@ -127,6 +128,12 @@
               </div>
               <div class="mb-2"><label class="form-label" for="aNotes">备注</label>
                 <textarea class="form-control" id="aNotes" maxlength="2000" data-count-text rows="2" placeholder="补充说明..."></textarea></div>
+              <fieldset id="new-application-invoices" class="border rounded p-2 mt-3" hidden>
+                <legend class="float-none w-auto px-1 fs-6">本次报销的发票</legend>
+                <button type="button" class="btn btn-outline-primary btn-sm" id="new-application-pick">选择本人发票</button>
+                <p id="new-application-summary" class="mb-1" role="status"></p>
+                <p class="mb-0 small">票未齐也可以先登记。个人 Token 费用不受理。台账备注可选填。</p>
+              </fieldset>
               <div class="d-flex gap-2">
                 <button type="submit" class="btn btn-primary px-4">提交</button>
                 <button type="button" class="btn btn-outline-secondary" onclick="clearF()">清空</button></div>
@@ -162,6 +169,15 @@
 
 </main>
 </div>
+<dialog id="application-invoice-dialog" class="border rounded p-3" aria-labelledby="application-invoice-title">
+  <h2 class="h5" id="application-invoice-title">申请发票</h2>
+  <div id="application-invoice-choices" class="overflow-auto mb-2" style="max-height:50vh"></div>
+  <p id="application-invoice-summary" role="status"></p>
+  <p id="application-invoice-error" role="alert"></p>
+  <button class="btn btn-primary btn-sm" type="button" id="application-invoice-save">保存发票</button>
+  <button class="btn btn-secondary btn-sm" type="button" id="application-invoice-close">关闭</button>
+</dialog>
+
 <div class="modal fade" id="editMd">
   <div class="modal-dialog modal-lg"><div class="modal-content">
     <div class="modal-header"><h5 class="modal-title">编辑记录</h5><button class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="关闭编辑记录"></button></div>
@@ -237,7 +253,9 @@ window.XTYF_USER = {
   username: {{ me.username | tojson }},
   canReview: {{ can_review | tojson }},
   personalReviewer: {{ (personal_reviewer or false) | tojson }},
-  canManageRecords: {{ can_manage_records | tojson }}
+  canManageRecords: {{ can_manage_records | tojson }},
+  canMatchPersonalInvoices: {% if can_match_personal_invoices %}true{% else %}false{% endif %},
+  memberId: {{ me.id | tojson }}
 };
 </script>
 <script src="{{ url_for('static', filename='workspace.js') }}"></script>

@@ -9,11 +9,11 @@
       const data = await response.json();
       if (!response.ok || data?.code !== 0 || data.create_idempotency !== 1 || !Number.isSafeInteger(data.member_id) || data.member_id < 1)
         throw Error('服务端尚未支持安全新增或当前登录已失效，请核对登录并升级服务端；其他既有操作仍可使用。');
-      return data.member_id;
+      return data;
     }
     async function connect() {
       scope = null;
-      const address = server(), member = await capability();
+      const address = server(), {member_id:member} = await capability();
       if (address !== server()) throw Error('服务器已切换，请重新打开资金页面。');
       scope = {server:address, member};
       return pending();
@@ -47,7 +47,12 @@
         if (!scope || scope.server !== server()) throw Error('服务器已切换，请回到原服务器核对。');
         const key = prefix()+entry.body.request_id;
         if (storage.getItem(key) !== JSON.stringify(entry)) throw Error('原请求记录已变化，请刷新核对。');
-        if (await capability() !== scope.member || scope.server !== server()) throw Error('账号或服务器已变化，请使用原账号核对。');
+        const capabilities = await capability();
+        if (capabilities.member_id !== scope.member || scope.server !== server()) throw Error('账号或服务器已变化，请使用原账号核对。');
+        if (Array.isArray(entry.body.invoice_ids) && capabilities.invoice_selection !== 1) {
+          storage.removeItem(key);
+          return {state:'rejected', receipt:{msg:'服务端尚未支持个人报销选票，请升级后提交。'}};
+        }
         const response = await fetch('/funds/api/records', {
           method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(entry.body)
         });

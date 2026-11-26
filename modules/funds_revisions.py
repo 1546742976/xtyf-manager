@@ -37,6 +37,9 @@ def migrate(conn):
             )""")
             conn.execute('CREATE INDEX funds_personal_events_record ON funds_personal_events(record_id,id DESC)')
             conn.execute('INSERT INTO funds_revision_migrations VALUES(3)')
+        if not conn.execute('SELECT 1 FROM funds_revision_migrations WHERE version=4').fetchone():
+            conn.execute('ALTER TABLE records ADD COLUMN invoice_selection INTEGER NOT NULL DEFAULT 0')
+            conn.execute('INSERT INTO funds_revision_migrations VALUES(4)')
         conn.commit()
     except BaseException:
         conn.rollback()

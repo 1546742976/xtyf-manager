@@ -42,6 +42,26 @@
 <p id="invoice-snapshot-status" role="status" aria-live="polite" hidden></p>
 <div class="stats-grid" id="statsGrid"></div>
 
+<details class="invoice-jobs">
+  <summary>开票信息</summary>
+  <dl id="invoice-billing-info">
+    <dt>单位名称</dt><dd>南京航空航天大学</dd>
+    <dt>抬头类型</dt><dd>企业</dd>
+    <dt>纳税人识别号</dt><dd>12100000466006826U</dd>
+    <dt>地址、电话</dt><dd>江苏省南京市御道街 29 号 025-84896065</dd>
+    <dt>开户行及账号</dt><dd>交通银行南京御道街支行 320006639010149000354</dd>
+    <dt>开票代码</dt><dd>4BQ5AN</dd>
+  </dl>
+  <p>请让商家将发票备注留空。个人报销单张发票不得超过 500 元。</p>
+  <button type="button" id="invoice-copy-billing">复制开票信息</button>
+  <span id="invoice-copy-feedback" role="status"></span>
+</details>
+<div id="invoice-upload-next" class="invoice-jobs" hidden>
+  <p id="invoice-upload-next-status" role="status"></p>
+  <button type="button" data-invoice-transfer="new">用这些发票申请报销</button>
+  <button type="button" data-invoice-transfer="existing">补到已有申请</button>
+</div>
+
 <div class="dropzone" id="dropZone" role="button" tabindex="0" aria-label="选择 PDF 发票文件" onclick="document.getElementById('fileInput').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('fileInput').click()}">
 <div class="dz-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/></svg></div>
 <div class="dz-text">拖入一个或多个PDF发票到此处，或<strong>点击选择文件</strong><br>

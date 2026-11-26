@@ -68,7 +68,11 @@ function validateInvoiceAmounts(focus=false) {
     input.setAttribute('aria-invalid',String(!valid));
     input.setCustomValidity(valid?'':'请先人工补录金额，按分四舍五入后必须大于 0');
     input.closest('tr').classList.toggle('amount-required',!valid);
-    const note=input.parentElement.querySelector('.amount-help');if(note)note.hidden=valid;
+    const note=input.parentElement.querySelector('.amount-help');if(note){
+      const over=valid && Money.inputCents(input.value)>50000n;
+      note.hidden=valid && !over;
+      note.textContent=over?'超出个人报销限额，可继续归档':'请先人工补录金额';
+    }
     if(!valid&&!first)first=input;
   });
   if(first&&focus){first.focus();first.reportValidity();}
@@ -156,6 +160,7 @@ tb.innerHTML=data.data.map(function(inv){
 var sc=App.selected[inv.id]?' row-selected':'';
 if(dupPaths.length&&dupPaths.indexOf(inv.rel_path)>=0)sc+=' row-dup';
 var ah=Money.compare(inv.amount,'0.00')>0?'\xA5'+Money.format(inv.amount):'<span class="amount-col missing">\xA50.00</span>';
+if(Money.compare(inv.amount,'500.00')>0)ah+='<small class="d-block">超出个人报销限额</small>';
 var st=inv.source==='人工确认'?'<span class="badge tag-filename">人工确认</span>':inv.source==='PDF'?'<span class="badge tag-pdf">PDF</span>':inv.source==='PDF(\u7f13\u5b58)'?'<span class="badge tag-pdf">PDF\u7f13\u5b58</span>':inv.source==='文件名'?'<span class="badge tag-filename">文件名</span>':'<span class="badge tag-unknown">待识别</span>';
 var eid = escHtml(inv.id);
 var erp = escHtml(inv.rel_path||'');
@@ -170,7 +175,7 @@ return '<tr class="'+sc+'" data-id="'+escHtml(inv.id)+'">'+
 '<td class="col-check"><input aria-label="选择发票 '+eid+'" type="checkbox" '+(App.selected[inv.id]?'checked':'')+' data-invoice-select="'+eid+'"></td>'+
 '<td><span class="month-label">'+escHtml(inv.month)+'</span></td>'+
 '<td>'+escHtml(inv.date||'-')+'</td>'+
-'<td>'+(INVOICE_ALL_VIEW?'<select aria-label="发票状态" class="inline-select" data-invoice-status="'+eid+'" data-saved-status="'+escHtml(inv.status)+'" style="background:'+scol+'"><option value="\u672a\u62a5\u9500"'+unsel+'>\u672a\u62a5\u9500</option><option value="\u6b63\u5728\u62a5\u9500"'+insel+'>\u6b63\u5728\u62a5\u9500</option><option value="\u5df2\u62a5\u9500"'+resel+'>\u5df2\u62a5\u9500</option></select>':'<span class="badge" style="background:'+scol+'">'+escHtml(inv.status)+'</span>')+'</td>'+
+'<td>'+(INVOICE_ALL_VIEW?'<select aria-label="发票状态" class="inline-select" data-invoice-status="'+eid+'" data-saved-status="'+escHtml(inv.status)+'" style="background:'+scol+'"><option value="\u672a\u62a5\u9500"'+unsel+'>\u672a\u62a5\u9500</option><option value="\u6b63\u5728\u62a5\u9500"'+insel+'>\u6b63\u5728\u62a5\u9500</option><option value="\u5df2\u62a5\u9500"'+resel+'>\u5df2\u62a5\u9500</option></select>':'<span class="badge" style="background:'+scol+'">'+escHtml(inv.status)+'</span>')+(inv.personal_progress && inv.personal_progress!==inv.status ? '<small class="d-block">'+escHtml(inv.personal_progress)+'</small>' : '')+(inv.archive_status ? '<small class="d-block">归档：'+escHtml(inv.archive_status)+'</small>' : '')+'</td>'+
 '<td>'+subHtml+'</td>'+
 '<td>'+escHtml(inv.category||'-')+'</td>'+
 '<td><span class="clickable" data-invoice-file="'+erp+'">'+escHtml(inv.vendor)+'</span></td>'+
@@ -292,7 +297,7 @@ async function quickConfirm(d){
 if(INVOICE_ALL_VIEW){await BUModal.open([d]);return}
 var body={tmp_path:d.tmp_path,original_name:d.original_name,month:d.info.month||'未归类',status:'未报销',submitter_id:Number(ME_ID),category:d.info.category||'',notes:'',amount:d.info.amount||'0.00',vendor:d.info.vendor||'',date:d.info.date||'',invoice_number:d.info.invoice_number||'',allow_duplicate:duplicateOverride(d,'该发票')};
 Progress.show('正在入库...');
-try{var r=await BusinessUI.fetch('/invoices/api/upload/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var dd=await r.json();Progress.hide();if(dd.success){showToast(dd.message,'success');App.stats=null;loadStats();loadInvoices(1)}else if(dd.code==='DUPLICATE'){showToast('存在重复发票，已拦截','error');cleanupTmp([d.tmp_path])}else{throw new Error(dd.error||'入库失败')}}
+try{var r=await BusinessUI.fetch('/invoices/api/upload/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});var dd=await r.json();Progress.hide();if(dd.success){showInvoiceUploadActions([{...dd,path:dd.rel_path,status:'ok'}]);showToast(dd.message,'success');App.stats=null;loadStats();loadInvoices(1)}else if(dd.code==='DUPLICATE'){showToast('存在重复发票，已拦截','error');cleanupTmp([d.tmp_path])}else{throw new Error(dd.error||'入库失败')}}
 catch(e){Progress.hide();await BUModal.open([d]);showToast('入库结果未确认，请先核对列表；确认信息已保留：'+e.message,'error')}
 }
 
@@ -360,6 +365,7 @@ var r2=await BusinessUI.fetch('/invoices/api/upload/confirm/batch',{method:'POST
 var d2=await r2.json();
 Progress.hide();
 if(d2.success){
+showInvoiceUploadActions(d2.results||[]);
 var failed=new Set((d2.results||[]).filter(function(item){return item.status==='error'}).map(function(item){return item.tmp_path}));
 if(failed.size){var remaining=BUModal._data.filter(function(item){return failed.has(item.tmp_path)}).map(function(item){var edited=items.find(x=>x.tmp_path===item.tmp_path);return {...item,submitter_id:edited.submitter_id,info:{...item.info,...edited}}});await BUModal.open(remaining);showToast(d2.message+'；失败条目及已填内容已保留，请修改后重试','error')}else{BUModal._saving=false;BUModal.close();showToast(d2.message,'success')}
 App.stats=null;loadStats();loadInvoices(1)}
@@ -663,3 +669,53 @@ Object.entries(invoiceDialogClosers).forEach(([id,close])=>{
 });
 document.querySelector('[data-close-invoice-job]')?.addEventListener('click',()=>closeInvoiceDialog('invoiceJobModal'));
 document.addEventListener('click',event=>{invoiceClickedTrigger=event.target.closest('button,[data-invoice-detail],#dropZone');},true);
+
+let invoiceUploadSelection = [];
+function showInvoiceUploadActions(results) {
+  invoiceUploadSelection = results.filter(item => item.status === 'ok' && item.path &&
+    Number(item.submitter_id) === Number(ME_ID) && BigInt(item.amount_cents) > 0n &&
+    BigInt(item.amount_cents) <= 50000n).map(item => item.path);
+  const panel = document.getElementById('invoice-upload-next');
+  panel.hidden = !invoiceUploadSelection.length;
+  document.getElementById('invoice-upload-next-status').textContent =
+    '本次有 '+invoiceUploadSelection.length+' 张本人发票可用于个人报销。';
+}
+document.getElementById('invoice-upload-next').addEventListener('click', event => {
+  const link = event.target.closest('[data-invoice-transfer]');
+  if (!link) return;
+  try {
+    sessionStorage.setItem('xtyf:invoice-transfer', JSON.stringify({
+      mode:link.dataset.invoiceTransfer, member:Number(ME_ID), ids:invoiceUploadSelection,
+      server:window.XTYF ? (parent.XTYF || window.XTYF).config.serverUrl : location.origin
+    }));
+  } catch {
+    showToast('无法带入发票，请在资金台账手动选择','error');
+    return;
+  }
+  location.assign('/funds/');
+});
+document.getElementById('invoice-copy-billing').addEventListener('click', async () => {
+  const fields = [...document.querySelectorAll('#invoice-billing-info dt')];
+  const text = fields.map(field => field.textContent+'：'+field.nextElementSibling.textContent).join('\n')+
+    '\n请将发票备注留空。';
+  const feedback = document.getElementById('invoice-copy-feedback');
+  try {
+    await navigator.clipboard.writeText(text);
+    feedback.textContent = '已复制开票信息';
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('invoice-billing-info'));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const copyBuffer = document.createElement('textarea');
+    copyBuffer.value = text;
+    document.body.append(copyBuffer);
+    copyBuffer.select();
+    if (document.execCommand('copy')) feedback.textContent = '已复制开票信息';
+    else feedback.textContent = '已选中开票信息，请手动复制';
+    copyBuffer.remove();
+    selection.removeAllRanges();
+    if (feedback.textContent.startsWith('已选中')) selection.addRange(range);
+  }
+});

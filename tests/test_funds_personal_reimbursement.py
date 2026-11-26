@@ -38,14 +38,18 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertTrue(created['ok'], created)
         return self.login(username, password), created['id']
 
-    def expense(self, amount):
+    def legacy_expense(self, amount):
         response = self.applicant.post('/funds/api/records', json={
             'request_id': uuid4().hex, 'record_type': '出', 'self_funded': True,
             'amount': amount, 'source_dest': '购买测试材料', 'record_date': '2026-11-23',
             'applicant_id': self.other_id, 'applicant': '其他人', 'invoice_count': 0,
         })
         self.assertEqual(response.status_code, 200, response.get_json())
-        return response.get_json()
+        result = response.get_json()
+        # Records migrated from before applicant-side selection have the default flag.
+        with closing(funds.get_funds_db()) as conn, conn:
+            conn.execute('UPDATE records SET invoice_selection=0 WHERE id=?', (result['id'],))
+        return result
 
     def historical_expense(self, applicant, amount):
         response = self.admin.post('/funds/api/records', json={
@@ -70,10 +74,100 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         return response.get_json()['rel_path']
 
+    def selected_expense(self, amount, selected, client=None):
+        return (client or self.applicant).post('/funds/api/records', json={
+            'request_id': uuid4().hex, 'record_type': '出', 'self_funded': True,
+            'amount': amount, 'source_dest': '选票回归', 'record_date': '2026-11-23',
+            'invoice_ids': selected, 'invoice_count': 99,
+        })
+
+    def test_selected_application_locks_invoices_until_delete_or_payment(self):
+        first = self.invoice(self.applicant_id, '500.00')
+        second = self.invoice(self.applicant_id, '180.00')
+        oversize = self.invoice(self.applicant_id, '680.00')
+        other = self.invoice(self.other_id, '180.00')
+        choices = self.applicant.get('/funds/api/application-invoices').get_json()['data']
+        self.assertEqual({item['id'] for item in choices}, {first, second})
+        for invalid in (oversize, other):
+            self.assertEqual(self.selected_expense('680.00', [invalid]).status_code, 400)
+        self.assertEqual(self.selected_expense('100.00', [second]).status_code, 400)
+        created = self.selected_expense('680.00', [first])
+        self.assertEqual(created.status_code, 200, created.get_json())
+        path = f"/funds/api/records/{created.get_json()['id']}"
+        pending = self.applicant.get(path).get_json()['data']
+        self.assertEqual((pending['invoice_count'], pending['personal_status'], pending['invoice_difference_cents']),
+                         (1, '待补票', '18000'))
+        self.assertEqual(self.reviewer.post(path+'/review', json={'version': 1}).status_code, 409)
+        self.assertEqual(self.selected_expense('500.00', [first]).status_code, 400)
+        self.assertEqual(self.other.get(path+'/application-invoices').status_code, 403)
+
+        supplement = {'version': 1, 'invoice_ids': [first, second]}
+        self.assertEqual(self.other.put(path+'/application-invoices', json=supplement).status_code, 403)
+        self.assertEqual(self.applicant.put(path+'/application-invoices', json=supplement).status_code, 200)
+        self.assertEqual(self.applicant.put(path+'/application-invoices', json=supplement).status_code, 409)
+        self.assertEqual(self.applicant.get(path).get_json()['data']['personal_status'], '待审核')
+        approved = self.reviewer.post(path+'/review', json={'version': 2})
+        self.assertEqual(approved.status_code, 200, approved.get_json())
+        self.assertEqual(self.applicant.get(path).get_json()['data']['personal_status'], '待付款')
+
+        alternate = self.invoice(self.applicant_id, '180.00')
+        choices = self.reviewer.get(path+'/personal-invoices').get_json()
+        self.assertEqual({item['id'] for item in choices['data'] if item['selected']}, {first, second})
+        payment = {'version': 3, 'generation': choices['generation'], 'invoice_ids': [first, second]}
+        self.assertEqual(self.reviewer.post(path+'/personal-reimbursement', json={
+            **payment, 'invoice_ids': [first, alternate]}).status_code, 409)
+        self.assertEqual(self.reviewer.post(path+'/personal-reimbursement', json=payment).status_code, 200)
+        mine = self.applicant.get('/invoices/api/invoices?scope=mine').get_json()['data']
+        self.assertEqual({item['id'] for item in mine if item['personal_progress'] == '已个人报销'}, {first, second})
+        self.assertEqual(self.applicant.get(path).get_json()['data']['personal_status'], '已个人报销')
+        corrected = self.reviewer.post(path+'/personal-reimbursement', json={
+            **payment, 'version': 4, 'operation': 'correct', 'reason': '换票', 'invoice_ids': [first, alternate],
+        })
+        self.assertEqual(corrected.status_code, 200, corrected.get_json())
+
+        reused = self.selected_expense('180.00', [second])
+        self.assertEqual(reused.status_code, 200, reused.get_json())
+        reused_path = f"/funds/api/records/{reused.get_json()['id']}"
+        self.assertEqual(self.admin.delete(reused_path+'?version=1').status_code, 200)
+        self.assertEqual(self.selected_expense('180.00', [second]).status_code, 200)
+
+    def test_managed_amount_change_and_competing_claims(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        without_selection = self.applicant.post('/funds/api/records', json={
+            'request_id': uuid4().hex, 'record_type': '出', 'self_funded': True,
+            'amount': '350.00', 'source_dest': '未选票', 'record_date': '2026-11-23',
+        }).get_json()
+        empty_path = f"/funds/api/records/{without_selection['id']}"
+        self.assertEqual(self.applicant.get(empty_path).get_json()['data']['personal_status'], '待补票')
+        self.assertEqual(self.reviewer.post(empty_path+'/review', json={'version': 1}).status_code, 409)
+
+        invoice = self.invoice(self.applicant_id, '350.00')
+        # Two already-authenticated browser sessions for the same applicant.
+        browser = app_module.app.test_client()
+        cookie = self.applicant.get_cookie('session')
+        browser.set_cookie('session', cookie.value)
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            requests = [workers.submit(self.selected_expense, '350.00', [invoice], client)
+                        for client in (self.applicant, browser)]
+            responses = [task.result() for task in requests]
+        self.assertEqual(sorted(response.status_code for response in responses), [200, 400])
+        created = next(response.get_json() for response in responses if response.status_code == 200)
+        path = f"/funds/api/records/{created['id']}"
+        self.assertEqual(self.reviewer.post(path+'/review', json={'version': 1}).status_code, 200)
+        self.assertEqual(self.admin.put(path, json={'version': 2, 'amount': '400.00'}).status_code, 200)
+        row = self.applicant.get(path).get_json()['data']
+        self.assertEqual((row['review_status'], row['personal_status']), ('待审核', '待补票'))
+        replacement = self.invoice(self.applicant_id, '400.00')
+        response = self.applicant.put(path+'/application-invoices', json={'version': 3, 'invoice_ids': [replacement]})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(self.selected_expense('350.00', [invoice]).status_code, 200)
+        self.assertEqual(self.reviewer.post(path+'/review', json={'version': 4}).status_code, 200)
+
     def test_member_application_review_payment_and_invoice_move(self):
         amount = '61799.27'
         baseline = self.other.get('/funds/api/stats').get_json()['data']
-        created = self.expense(amount)
+        created = self.legacy_expense(amount)
         record_url = f"/funds/api/records/{created['id']}"
         pending = self.other.get(record_url).get_json()['data']
         self.assertEqual(pending['applicant_id'], self.applicant_id)
@@ -126,7 +220,7 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertEqual(self.other.get(record_url).get_json()['data']['personal_status'], '已个人报销')
         self.assertEqual(self.admin.delete(record_url, query_string={'version': paid.get_json()['version']}).status_code, 409)
         self.assertEqual(self.reviewer.post(record_url+'/personal-reimbursement', json=payment).status_code, 409)
-        another = self.expense(amount)['id']
+        another = self.legacy_expense(amount)['id']
         self.assertEqual(self.reviewer.post(f'/funds/api/records/{another}/review', json={'version': 1}).status_code, 200)
         self.assertEqual(self.reviewer.post(f'/funds/api/records/{another}/personal-reimbursement',
                                             json=payment).status_code, 409)
@@ -151,7 +245,7 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertEqual(self.other.get('/invoices/api/invoices', query_string=filter_args).get_json()['total'], 0)
 
     def test_multiple_invoices_are_validated_and_corrections_release_old_links(self):
-        row = self.expense('0.30')
+        row = self.legacy_expense('0.30')
         path = f"/funds/api/records/{row['id']}"
         payment = path+'/personal-reimbursement'
         first = self.invoice(self.applicant_id, '0.10')
@@ -187,7 +281,7 @@ class TestPersonalReimbursement(unittest.TestCase):
         self.assertEqual(result.status_code, 200, result.get_json())
         selected = self.reviewer.get(path+'/personal-invoices').get_json()['data']
         self.assertEqual({item['id'] for item in selected if item['selected']}, {first, second})
-        other_application = self.expense('0.30')
+        other_application = self.legacy_expense('0.30')
         other_path = f"/funds/api/records/{other_application['id']}"
         self.assertEqual(self.reviewer.post(other_path+'/review', json={'version': 1}).status_code, 200)
         self.assertNotIn(first, {item['id'] for item in self.reviewer.get(other_path+'/personal-invoices').get_json()['data']})

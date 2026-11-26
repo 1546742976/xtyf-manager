@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', function(){
   if (CAN_REVIEW) { loadPending(); setInterval(loadPending, 30000); }
   reload(); loadStats();
   initializeFundsCreate();
+  initializeApplicationInvoices();
   document.getElementById('mainTab').addEventListener('shown.bs.tab', function(e){
     if (e.target.dataset.bsTarget === '#t-charts' && (!ct || chartDirty)) {
       loadChart(ct || 'monthly', document.querySelector('#t-charts .btn-group .active'));
@@ -134,11 +135,15 @@ function toggleF(){
     document.getElementById(label).classList.toggle('required', required);
   }
   var invoiceCount = document.getElementById('aInvCnt');
+  document.getElementById('new-application-invoices').hidden = !personal;
+  invoiceCount.readOnly = !!personal;
+  if (personal) updateApplicationSummary();
   invoiceCount.min = personal ? '0' : '1';
   if (isExp && !personal && !Number(invoiceCount.value)) invoiceCount.value = '1';
 }
 function clearF(){
   document.getElementById('addF').reset();
+  newApplicationInvoices = [];
   document.getElementById('aDt').value = new Date().toISOString().slice(0,10);
   document.getElementById('aApplicant').value = ME_NAME;
   toggleF();
@@ -188,7 +193,7 @@ function reload(){
         '<td>'+(r.invoice_count||0)+'</td>'+
         '<td>'+escText(r.handler||'-')+'</td>'+
         '<td>'+r.record_date+'</td>'+
-        '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">未审核</span> '+(CAN_REVIEW && (!r.self_funded || PERSONAL_REVIEWER)?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>'+(r.reviewed_by?'<small class="d-block text-muted">审核人：'+escText(r.reviewed_by)+'</small>':''))+'</td>'+
+        '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">'+(r.personal_status==='待补票'?'待补票':'未审核')+'</span> '+(r.personal_status!=='待补票' && CAN_REVIEW && (!r.self_funded || PERSONAL_REVIEWER)?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>'+(r.reviewed_by?'<small class="d-block text-muted">审核人：'+escText(r.reviewed_by)+'</small>':''))+'</td>'+
         '<td>'+renderPersonalReimbursement(r)+'</td>'+
         '<td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+(r.notes||'').replace(/"/g,'&quot;')+'">'+escText(r.notes||'-')+'</td>'+
         (CAN_MANAGE ? '<td>'+(r.personal_paid_at ? '—' : '<button class="btn btn-outline-secondary btn-sm" aria-label="编辑第 '+r.id+' 条记录" title="编辑记录" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" aria-label="删除第 '+r.id+' 条记录" title="删除记录" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button>')+'</td>' : '')+
@@ -205,6 +210,14 @@ function renderPersonalReimbursement(record) {
     ? '<span class="'+(record.personal_paid_at ? 'badge-ok' : 'badge-pending')+'">'+escText(record.personal_status)+'</span>'
     : '—';
   var actions = window.FundsReimbursement?.actions(record) || '';
+  if (record.invoice_selection) {
+    const owner = record.applicant_id === window.XTYF_USER.memberId;
+    const button = owner || window.XTYF_USER.canMatchPersonalInvoices
+      ? '<button type="button" class="btn btn-outline-secondary btn-sm" data-application-invoices="'+record.id+'">'+
+        (owner && !record.personal_paid_at ? '补票或换票' : '查看申请发票')+'</button>' : '';
+    const difference = BigInt(record.invoice_difference_cents || 0);
+    return badge + (difference ? '<small class="d-block">'+applicationDifference(difference)+'</small>' : '') + button + actions;
+  }
   if (!personalCatalog || !record.self_funded || record.personal_paid_at) return badge + actions;
   var candidates = personalCatalog.matches[record.amount_cents] || [];
   if (!candidates.length) return badge + '<small class="d-block">暂无同金额发票</small>' + actions;
@@ -275,7 +288,10 @@ async function handleAdd(e){
   };
   d.applicant = document.getElementById('aApplicant').value.trim() || ME_NAME;
   if(d.record_type==='出'){
-    if (!CAN_MANAGE || document.getElementById('aSelfFunded')?.checked) d.self_funded = true;
+    if (!CAN_MANAGE || document.getElementById('aSelfFunded')?.checked) {
+      d.self_funded = true;
+      d.invoice_ids = newApplicationInvoices.map(invoice => invoice.id);
+    }
     d.invoice_count = parseInt(document.getElementById('aInvCnt').value)||0;
     d.handler = document.getElementById('aHandler').value.trim();
   }
@@ -436,3 +452,184 @@ saveE = BusinessUI.guard(saveE, 'funds-save', '#editMd button', text=>fundsToast
 delR = BusinessUI.guard(delR, id=>'funds-delete:'+id, id=>document.querySelectorAll(`#tbody button[onclick^="delR(${id},"]`), text=>fundsToast(text,'error'));
 reviewRecord = BusinessUI.guard(reviewRecord, id=>'funds-review:'+id, id=>document.querySelectorAll(`#tbody button[onclick^="reviewRecord(${id},"]`), text=>fundsToast(text,'error'));
 edR = BusinessUI.guard(edR, id=>'funds-edit:'+id, id=>document.querySelectorAll(`#tbody button[onclick="edR(${id})"]`), text=>fundsToast(text,'error'));
+
+let newApplicationInvoices = [];
+let invoiceTransfer = null;
+let applicationDialog;
+let applicationRequest = 0;
+
+function applicationMoney(cents) {
+  return Money.format((cents / 100n)+'.'+String(cents % 100n).padStart(2,'0'));
+}
+
+function applicationDifference(cents) {
+  return cents >= 0n ? '还差 ¥'+applicationMoney(cents) : '超出 ¥'+applicationMoney(-cents);
+}
+
+function applicationTotal(invoices) {
+  return invoices.reduce((sum, invoice) => sum + BigInt(invoice.amount_cents), 0n);
+}
+
+function applicationFormAmount() {
+  try {
+    const cents = Money.inputCents(document.getElementById('aAmt').value);
+    return cents > 0n ? cents : null;
+  } catch { return null; }
+}
+
+function applicationSummary(invoices, target) {
+  const total = applicationTotal(invoices);
+  return '已选 '+invoices.length+' 张 · 票面合计 ¥'+applicationMoney(total)+
+    (target === null ? ' · 请填写实际垫付金额' : total === target ? ' · 与垫付金额一致' :
+      ' · '+applicationDifference(target-total));
+}
+
+function updateApplicationSummary() {
+  document.getElementById('aInvCnt').value = newApplicationInvoices.length;
+  document.getElementById('new-application-summary').textContent =
+    applicationSummary(newApplicationInvoices, applicationFormAmount());
+}
+
+async function applicationApi(path, options) {
+  const response = await BusinessUI.fetch(path, options);
+  const data = await response.json();
+  if (!response.ok || data.code !== 0) throw Error(data.msg || '无法读取申请发票');
+  return data;
+}
+
+async function openApplicationInvoices(recordId, preselected = []) {
+  const dialog = document.getElementById('application-invoice-dialog');
+  const list = document.getElementById('application-invoice-choices');
+  const summary = document.getElementById('application-invoice-summary');
+  const error = document.getElementById('application-invoice-error');
+  const save = document.getElementById('application-invoice-save');
+  const request = ++applicationRequest;
+  const path = recordId ? API+'/'+recordId+'/application-invoices' : '/funds/api/application-invoices';
+  list.textContent = '正在加载发票…';
+  summary.textContent = error.textContent = '';
+  save.disabled = true;
+  save.hidden = false;
+  applicationDialog = null;
+  if (!dialog.open) dialog.showModal();
+  try {
+    const result = await applicationApi(path);
+    if (request !== applicationRequest || !dialog.open) return;
+    if (!recordId && preselected.length && preselected.length <= 100) {
+      newApplicationInvoices = result.data.filter(item => preselected.includes(item.id));
+      updateApplicationSummary();
+      if (newApplicationInvoices.length === preselected.length) {
+        dialog.close();
+        return;
+      }
+    }
+    const editable = !recordId || result.editable;
+    const target = recordId ? BigInt(result.amount_cents) : applicationFormAmount();
+    const chosen = new Set(recordId ? preselected : [...preselected, ...newApplicationInvoices.map(item => item.id)]);
+    const visible = editable ? result.data : result.data.filter(item => item.selected);
+    const inputs = [];
+    list.replaceChildren();
+    if (!visible.length) list.textContent = '暂无可用发票。可先登记垫付，上传后再补票。';
+    for (const invoice of visible) {
+      const line = document.createElement('div');
+      line.className = 'd-flex align-items-center gap-2 py-1';
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.className = 'form-check-input me-2';
+      input.checked = invoice.selected || (editable && chosen.has(invoice.id));
+      input.disabled = !editable;
+      label.append(input, ['¥'+applicationMoney(BigInt(invoice.amount_cents)), invoice.date, invoice.vendor,
+        invoice.invoice_number || invoice.filename].filter(Boolean).join(' · '));
+      const preview = document.createElement('a');
+      preview.href = '/invoices/file/'+invoice.id.split('/').map(encodeURIComponent).join('/');
+      preview.target = '_blank';
+      preview.rel = 'noopener';
+      preview.textContent = '查看原件';
+      line.append(label, preview);
+      list.append(line);
+      inputs.push({input, invoice});
+    }
+    const selected = () => inputs.filter(item => item.input.checked).map(item => item.invoice);
+    const update = () => {
+      const invoices = selected();
+      summary.textContent = applicationSummary(invoices, target);
+      save.disabled = invoices.length > 100 || (target !== null && applicationTotal(invoices) > target);
+    };
+    list.onchange = update;
+    save.hidden = !editable;
+    update();
+    if (preselected.some(id => !visible.some(item => item.id === id))) error.textContent = '部分发票已移走、被占用或超限，请核对。';
+    applicationDialog = {path, recordId, version:result.version, selected, update};
+  } catch (failure) {
+    if (request !== applicationRequest || !dialog.open) return;
+    list.replaceChildren();
+    error.textContent = failure.message+'。请关闭后重试。';
+  }
+}
+
+async function saveApplicationInvoices() {
+  const active = applicationDialog;
+  if (!active) return;
+  const invoices = active.selected();
+  const dialog = document.getElementById('application-invoice-dialog');
+  const save = document.getElementById('application-invoice-save');
+  const close = document.getElementById('application-invoice-close');
+  save.disabled = close.disabled = true;
+  active.saving = true;
+  try {
+    if (active.recordId) {
+      const result = await applicationApi(active.path, {method:'PUT', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({version:active.version, invoice_ids:invoices.map(invoice => invoice.id)})});
+      invoiceTransfer = null;
+      document.getElementById('application-transfer-notice').hidden = true;
+      fundsToast(result.msg, result.ledger_sync === 'failed' ? 'error' : 'success');
+      reload();
+      if (CAN_REVIEW) loadPending();
+    } else {
+      newApplicationInvoices = invoices;
+      updateApplicationSummary();
+    }
+    dialog.close();
+  } catch (error) {
+    document.getElementById('application-invoice-error').textContent = error.message;
+  } finally {
+    active.saving = false;
+    close.disabled = false;
+    active.update();
+  }
+}
+
+function initializeApplicationInvoices() {
+  const dialog = document.getElementById('application-invoice-dialog');
+  document.getElementById('aAmt').addEventListener('input', () => {
+    if (!document.getElementById('new-application-invoices').hidden) updateApplicationSummary();
+  });
+  document.getElementById('new-application-pick').addEventListener('click', () => openApplicationInvoices(null));
+  document.getElementById('application-invoice-save').addEventListener('click', saveApplicationInvoices);
+  document.getElementById('application-invoice-close').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('cancel', event => {if(applicationDialog?.saving) event.preventDefault();});
+  document.getElementById('tbody').addEventListener('click', event => {
+    const button = event.target.closest('[data-application-invoices]');
+    if (button) openApplicationInvoices(button.dataset.applicationInvoices, invoiceTransfer?.ids || []);
+  });
+  try {
+    const transfer = JSON.parse(sessionStorage.getItem('xtyf:invoice-transfer'));
+    sessionStorage.removeItem('xtyf:invoice-transfer');
+    const server = window.XTYF ? (parent.XTYF || window.XTYF).config.serverUrl : location.origin;
+    if (transfer?.server === server && transfer.member === window.XTYF_USER.memberId && Array.isArray(transfer.ids))
+      invoiceTransfer = transfer;
+  } catch { return; }
+  if (invoiceTransfer?.mode === 'new') {
+    document.getElementById('aT').value = '出';
+    const selfFunded = document.getElementById('aSelfFunded');
+    if (selfFunded) selfFunded.checked = true;
+    toggleF();
+    document.querySelector('[data-bs-target="#t-add"]').click();
+    openApplicationInvoices(null, invoiceTransfer.ids);
+    invoiceTransfer = null;
+  } else if (invoiceTransfer?.mode === 'existing') {
+    const notice = document.getElementById('application-transfer-notice');
+    notice.textContent = '请选择本人申请旁的「补票或换票」。';
+    notice.hidden = false;
+  }
+}

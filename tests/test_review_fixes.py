@@ -152,7 +152,7 @@ class TestReviewFixes(unittest.TestCase):
                 db.commit()
                 migrate_revisions(db); migrate_revisions(db)
                 self.assertEqual(db.execute('SELECT * FROM records').fetchone(),
-                                 (7, 123, '已审核', 1, 0, None, None, None))
+                                 (7, 123, '已审核', 1, 0, None, None, None, 0))
             finally:
                 db.close()
 

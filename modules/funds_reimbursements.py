@@ -6,9 +6,19 @@ from common import now_str
 from modules.money import format_cents
 
 
-def paid_invoices(conn):
+def allocated_invoices(conn):
     return conn.execute("""SELECT i.invoice_key, i.record_id, r.applicant_id, r.personal_paid_at
                            FROM funds_personal_invoices i JOIN records r ON r.id=i.record_id""")
+
+
+def paid_invoices(conn):
+    return (row for row in allocated_invoices(conn) if row['personal_paid_at'])
+
+
+def replace_allocations(conn, rid, allocations):
+    conn.execute('DELETE FROM funds_personal_invoices WHERE record_id=?', (rid,))
+    conn.executemany('INSERT INTO funds_personal_invoices VALUES(?,?,?,?)',
+                     [(key, rid, cents, label) for key, cents, label in allocations])
 
 
 def payment_state(conn, record):
@@ -28,9 +38,12 @@ def apply_payment(conn, record, user, operation, reason, paid_at, owner, allocat
     """The caller holds the ledger transaction and has validated the allocations."""
     rid = record['id']
     before = payment_state(conn, record)
-    conn.execute('DELETE FROM funds_personal_invoices WHERE record_id=?', (rid,))
-    conn.executemany('INSERT INTO funds_personal_invoices VALUES(?,?,?,?)',
-                     [(key, rid, cents, label) for key, cents, label in allocations])
+    replace_allocations(conn, rid, allocations)
+    if record['invoice_selection']:
+        conn.execute('UPDATE records SET invoice_count=? WHERE id=?', (len(allocations), rid))
+        if operation == 'revoke':
+            conn.execute("""UPDATE records SET review_status='待审核',reviewed_by='',reviewed_at=''
+                            WHERE id=?""", (rid,))
     conn.execute("""UPDATE records SET applicant_id=?, applicant=?, self_funded=?,
                       personal_invoice_key=NULL, personal_paid_at=?, version=version+1 WHERE id=?""",
                  (owner['applicant_id'], owner['applicant'], owner['self_funded'], paid_at, rid))

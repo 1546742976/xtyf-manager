@@ -26,6 +26,8 @@
     if (record.record_type !== '出') return '';
     const button = (operation, label) => '<button type="button" class="btn btn-outline-primary btn-sm mt-1" '+
       'data-payment-record="'+record.id+'" data-payment-operation="'+operation+'">'+label+'</button>';
+    if (record.invoice_selection && record.review_status === '待审核') return '';
+    if (record.invoice_selection && !record.personal_paid_at) return '<div>'+button('confirm','登记报销')+'</div>';
     if (record.review_status === '待审核') return record.self_funded ? '<div>'+button('confirm','核对发票')+'</div>' : '';
     if (record.personal_paid_at) return '<div>'+button('correct','更正或撤销')+'</div>';
     if (!record.self_funded) return '<div>'+button('backfill','历史补录')+'</div>';
@@ -66,6 +68,7 @@
       choices.replaceChildren();
       if (!data.data.length) choices.textContent = '暂无可用发票';
       for (const invoice of data.data) {
+        if (session.record.invoice_selection && session.operation === 'confirm' && !invoice.selected) continue;
         const line = document.createElement('div');
         line.className = 'd-flex align-items-center gap-2 py-1';
         const label = document.createElement('label');
@@ -75,6 +78,7 @@
         checkbox.className = 'form-check-input mt-0';
         checkbox.value = invoice.id;
         checkbox.checked = invoice.selected;
+        checkbox.disabled = session.record.invoice_selection && session.operation === 'confirm';
         checkbox.dataset.cents = invoice.amount_cents;
         label.append(checkbox, ['¥'+formatCents(BigInt(invoice.amount_cents)), invoice.date,
           invoice.vendor, invoice.invoice_number || invoice.filename].filter(Boolean).join(' · '));
