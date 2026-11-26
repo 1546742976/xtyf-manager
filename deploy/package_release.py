@@ -11,7 +11,18 @@ import sys
 import tarfile
 import tempfile
 
+if __package__:
+    from .site_updates_snapshot import create_snapshot
+else:
+    from site_updates_snapshot import create_snapshot
+
 ROOT = Path(__file__).resolve().parents[1]
+PWA_REQUIRED_FILES = (
+    'modules/pwa.py', 'templates/_pwa_head.html', 'templates/_pwa_install.html',
+    'static/pwa.js', 'static/pwa.css', 'static/pwa/sw.js', 'static/pwa/offline.html',
+    'static/pwa/icon-192.png', 'static/pwa/icon-512.png',
+    'static/pwa/maskable-512.png', 'static/pwa/apple-touch-icon.png',
+)
 
 
 def archive_head(commit):
@@ -36,8 +47,24 @@ def build_ui_from_head(files, commit, private_key, installers=None):
         if installers:
             command.extend(['--installers', str(installers.resolve())])
         subprocess.run(command, cwd=source, check=True)
-        return {path.relative_to(source).as_posix(): path.read_bytes()
-                for path in (source / 'client-ui-release').rglob('*') if path.is_file()}
+        generated = {path.relative_to(source).as_posix(): path.read_bytes()
+                     for path in (source / 'client-ui-release').rglob('*') if path.is_file()}
+        # The website serves the same pinned PDF.js resources as the local UI.
+        # Copy only entries in HEAD's lock, not the build environment or cache.
+        lock = source / 'clients/frontend/vendor-lock.json'
+        if lock.is_file():
+            vendor = source / 'clients/frontend/vendor'
+            for name, digest in json.loads(lock.read_text(encoding='utf-8'))['files'].items():
+                if not name.startswith('pdfjs/'):
+                    continue
+                resource = (vendor / name).resolve()
+                if not resource.is_relative_to((vendor / 'pdfjs').resolve()) or not resource.is_file():
+                    raise RuntimeError('Missing or unsafe PDF resource: ' + name)
+                content = resource.read_bytes()
+                if hashlib.sha256(content).hexdigest() != digest:
+                    raise RuntimeError('Invalid PDF resource checksum: ' + name)
+                generated['clients/frontend/vendor/' + name] = content
+        return generated
 
 
 def main():
@@ -57,14 +84,16 @@ def main():
             if not item.isfile():
                 raise RuntimeError('Release cannot contain links: ' + item.name)
             parts = Path(item.name).parts
-            if any(p in ('data', 'venv', '.venv', '.local-test-data', 'backups', 'dist', 'signing', 'client-ui-release') for p in parts) or Path(item.name).name in ('secret.key', 'initial-admin-password.txt', '.env', 'release-manifest.json') or Path(item.name).name.startswith('.env.') or item.name.lower().endswith(('.db', '.db-wal', '.db-shm', '.db-journal', '.sqlite', '.sqlite3')):
+            if any(p in ('data', 'venv', '.venv', '.local-test-data', 'backups', 'dist', 'signing', 'client-ui-release') for p in parts) or Path(item.name).name in ('secret.key', 'initial-admin-password.txt', '.env', 'release-manifest.json', 'site-release.json') or Path(item.name).name.startswith('.env.') or item.name.lower().endswith(('.db', '.db-wal', '.db-shm', '.db-journal', '.sqlite', '.sqlite3')):
                 raise RuntimeError('Runtime data or reserved name tracked by Git: ' + item.name)
             files[item.name] = source.extractfile(item).read()
     required = ('deploy/update_release.py', 'deploy/consistent_snapshot.py', 'app.py', 'requirements.txt',
-                'clients/ui_release.py', 'clients/update-public-key.pem')
+                'clients/ui_release.py', 'clients/update-public-key.pem') + PWA_REQUIRED_FILES
     if any(name not in files for name in required):
         raise RuntimeError('HEAD does not contain the release scripts yet. Commit them before packaging.')
     files.update(build_ui_from_head(files, commit, args.ui_signing_key, args.installers))
+    # Snapshot Git log on the packaging machine: production needs no .git or GitHub.
+    files['site-release.json'] = create_snapshot(ROOT, commit)
     manifest = {'format': 1, 'commit': commit,
                 'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
     output = ROOT / 'dist'

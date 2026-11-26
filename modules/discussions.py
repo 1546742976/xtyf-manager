@@ -14,6 +14,8 @@ from time import time as epoch_now
 from flask import Blueprint, current_app, jsonify, render_template, request, send_file
 
 from common import ROLE_NAMES, current_user, get_db, login_required
+from modules.input_validation import clean_text, parse_int_text
+from modules import collaboration_storage
 from modules.collaboration_storage import (
     UploadError, attachment_path, cleanup_staged, finalize_staged, stage_uploads,
 )
@@ -40,11 +42,10 @@ def root():
 
 
 def integer(value, label, minimum=1, maximum=MAX_ID):
-    if isinstance(value, bool) or not isinstance(value, (int, str)):
-        raise UploadError(label + '不合法')
-    if isinstance(value, str) and (len(value) > 19 or not value.isascii() or not value.isdecimal()):
-        raise UploadError(label + '不合法')
-    value = int(value)
+    try:
+        value = parse_int_text(value, label)
+    except ValueError as exc:
+        raise UploadError(str(exc)) from exc
     if not minimum <= value <= maximum:
         raise UploadError(label + '不合法')
     return value
@@ -124,8 +125,13 @@ def _attachments_by_message(db, message_ids):
 
 def message_payload(db, row, topic, user, now, attachments=None):
     withdrawn = bool(row['withdrawn_at'] or topic['withdrawn_at'])
+    # Retracted replies remain in the author's history, but other members,
+    # including non-author administrators, must never receive their original data.
+    # A whole-topic withdrawal still hides the entire thread for everyone.
+    show_original = not topic['withdrawn_at'] and (
+        not row['withdrawn_at'] or row['author_id'] == user['id'])
     files = []
-    if not withdrawn:
+    if show_original:
         rows = (attachments.get(int(row['id']), []) if attachments is not None
                 else db.execute('SELECT * FROM collaboration_attachments WHERE message_id=? ORDER BY id', (row['id'],)))
         files = [dict(id=a['id'], name=a['original_name'], size=a['size_bytes'],
@@ -133,7 +139,7 @@ def message_payload(db, row, topic, user, now, attachments=None):
                       thumbnail_url=f'/discussions/api/attachments/{a["id"]}/thumbnail' if a['thumbnail_name'] else None)
                  for a in rows]
     return dict(id=row['id'], topic_id=row['topic_id'], author_id=row['author_id'], author_name=row['author_name'],
-                created_at=row['created_at'], body='' if withdrawn else row['body'], withdrawn=withdrawn,
+                created_at=row['created_at'], body=row['body'] if show_original else '', withdrawn=withdrawn,
                 can_withdraw=not withdrawn and can_withdraw(row, user, now), attachments=files)
 
 
@@ -212,8 +218,10 @@ def submission_fields(new_topic):
     title = title.strip()
     if new_topic and not 1 <= len(title) <= 120:
         raise UploadError('话题标题须为 1–120 个字符')
-    if len(text) > 5000:
-        raise UploadError('正文不能超过 5000 个字符')
+    try:
+        clean_text(text, '正文', 20000, required=False)
+    except ValueError as exc:
+        raise UploadError(str(exc)) from exc
     if not text.strip() and not uploads:
         raise UploadError('请填写正文或添加文件')
     return sid, title, text, uploads
@@ -241,6 +249,10 @@ def post_message(tid=None):
             result = committed_payload(db, prior['topic_id'], prior['message_id'], user, now, duplicate=True)
             db.commit(); cleanup_staged(staged)
             return jsonify(result)
+        quota = collaboration_storage.MEMBER_QUOTA_BYTES
+        used = db.execute('SELECT COALESCE(SUM(a.size_bytes),0) FROM collaboration_attachments a JOIN collaboration_messages m ON m.id=a.message_id WHERE m.author_id=?', (user['id'],)).fetchone()[0]
+        if staged and used + sum(item.size_bytes for item in staged) > quota:
+            raise UploadError('附件总量已超过成员配额，请联系管理员处理', 413)
         when = stamp(now)
         if tid is None:
             tid = db.execute('INSERT INTO collaboration_topics(title,author_id,author_name,created_at,created_epoch,last_activity_at) VALUES(?,?,?,?,?,?)',
@@ -431,7 +443,9 @@ def attachment(aid, thumbnail=False):
     integer(aid, '附件 ID')
     row = get_db().execute('''SELECT a.* FROM collaboration_attachments a
       JOIN collaboration_messages m ON m.id=a.message_id JOIN collaboration_topics t ON t.id=m.topic_id
-      WHERE a.id=? AND m.withdrawn_at IS NULL AND t.withdrawn_at IS NULL''', (aid,)).fetchone()
+      WHERE a.id=? AND t.withdrawn_at IS NULL
+        AND (m.withdrawn_at IS NULL OR m.author_id=?)''',
+        (aid, current_user()['id'])).fetchone()
     if not row or (thumbnail and not row['thumbnail_name']):
         return fail('附件不存在或已撤回', 404)
     path = attachment_path(root(), row['thumbnail_name'] if thumbnail else row['stored_name'])

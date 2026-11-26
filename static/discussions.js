@@ -7,6 +7,9 @@
     if(files.reduce((sum,file)=>sum+file.size,0)>180*MiB)return '附件合计不能超过 180 MiB。';
     return '';
   }
+  function messageVisibleTo(message,memberId) {
+    return !message.withdrawn || Number(message.author_id)===Number(memberId);
+  }
   function readThrough(messages,seen,readId,hasEarlier,memberId,loadedBefore) {
     const ordered=[...messages].sort((a,b)=>a.id-b.id);
     if(hasEarlier&&(!Number.isInteger(loadedBefore)||loadedBefore>readId))return readId;
@@ -24,7 +27,7 @@
     if(!draft.attempt)draft.attempt={id:uuid(),body:draft.body,title:draft.title,files:[...draft.files],uncertain:false};
     return draft.attempt;
   }
-  const helpers={filesError,readThrough,makeAttempt};
+  const helpers={filesError,readThrough,makeAttempt,messageVisibleTo};
   if(typeof module!=='undefined'&&module.exports)module.exports=helpers;
   if(typeof document==='undefined')return;
   const hub=document.getElementById('collab-hub');if(!hub)return;
@@ -119,17 +122,19 @@
   }
   function messageNode(message) {
     const article=document.createElement('article');article.tabIndex=-1;article._signature=JSON.stringify(message);article.className='collab-message'+(message.author_id===memberId?' is-own':'')+(message.withdrawn?' is-withdrawn':'');article.dataset.messageId=message.id;
-    const attachments=message.withdrawn?[]:message.attachments||[];
-    article.innerHTML=`<div class="collab-message-head" data-read-marker="${message.id}"><strong>${safe(message.author_name)}</strong><time datetime="${safe(message.created_at)}">${safe(date(message.created_at))}</time>${message.can_withdraw&&!message.withdrawn?`<button class="btn" type="button" data-withdraw-message="${message.id}">撤回</button>`:''}</div><p class="collab-message-body">${message.withdrawn?'这条消息已撤回':safe(message.body||'')}</p>${attachments.length?'<div class="collab-attachments">'+attachments.map(file=>{
+    const attachments=message.attachments||[];
+    article.innerHTML=`<div class="collab-message-head" data-read-marker="${message.id}"><strong>${safe(message.author_name)}</strong><time datetime="${safe(message.created_at)}">${safe(date(message.created_at))}</time>${message.withdrawn?'<span class="collab-withdrawn-label">已撤回 · 仅自己可见</span>':''}${message.can_withdraw&&!message.withdrawn?`<button class="btn" type="button" data-withdraw-message="${message.id}">撤回</button>`:''}</div><p class="collab-message-body">${safe(message.body||'')}</p>${attachments.length?'<div class="collab-attachments">'+attachments.map(file=>{
       const url=attachmentURL(file.download_url),thumbnail=file.thumbnail_url?attachmentURL(file.thumbnail_url):'';
-      return url?`<a class="collab-attachment" href="${safe(url)}" download="${safe(file.name)}">${thumbnail?`<img src="${safe(thumbnail)}" alt="${safe(file.name)}的缩略图" loading="lazy">`:''}<span>${safe(file.name)}<small>${size(Number(file.size))} · 下载附件</small></span></a>`:'';
+      const preview = !!thumbnail || /\.(?:png|jpe?g|webp|gif|bmp|avif)$/i.test(file.name || '');
+      return url?`<a class="collab-attachment" href="${safe(url)}" download="${safe(file.name)}"${preview?` data-image-preview data-image-name="${safe(file.name)}"`:''}>${thumbnail?`<img src="${safe(thumbnail)}" alt="${safe(file.name)}的缩略图" loading="lazy">`:''}<span>${safe(file.name)}<small>${size(Number(file.size))} · ${preview?'查看图片':'下载附件'}</small></span></a>`:'';
     }).join('')+'</div>':''}`;
     return article;
   }
   function renderMessages(item,{prepend=false,scrollToStart=false}={}) {
     const oldTop=scroll.scrollTop,oldHeight=scroll.scrollHeight,focused=document.activeElement;
     const focusedMessage=focused?.closest('[data-message-id]')?.dataset.messageId;
-    const ordered=[...item.messages.values()].sort((a,b)=>a.id-b.id),ids=new Set(ordered.map(message=>String(message.id)));
+    const ordered=[...item.messages.values()].filter(message=>messageVisibleTo(message,memberId)).sort((a,b)=>a.id-b.id),
+      ids=new Set(ordered.map(message=>String(message.id)));
     let previous=null;
     for(const message of ordered) {
       let node=messagesBox.querySelector(`[data-message-id="${message.id}"]`);
@@ -178,7 +183,7 @@
   function mounted(form,item){return form===topicForm||current()?.draft===item;}
   function mountDraft(form,draftState) {
     if(!mounted(form,draftState))return;
-    form.elements.body.value=draftState.body;if(form.elements.title)form.elements.title.value=draftState.title;
+    form.elements.body.value=draftState.body;window.FormControls?.refresh(form.elements.body);if(form.elements.title)form.elements.title.value=draftState.title;
     renderDraft(form,draftState);
   }
   function renderDraft(form,item) {
@@ -288,9 +293,18 @@
   bindComposer(topicForm,()=>newDraft,()=>null);bindComposer(reply,()=>current()?.draft,()=>state.selected);
   async function withdraw(kind,id) {
     const key=kind+id,item=current();if(!item||withdrawPending.has(key))return;
-    if(!confirm(kind==='topics'?'撤回整个话题？正文和附件将不可再查看，不能继续回复。':'撤回这条消息？正文和附件将不可再查看。'))return;
+    if(!confirm(kind==='topics'?'撤回整个话题？正文和附件将不可再查看，不能继续回复。':'撤回这条消息？撤回后只有原发送者可查看原文与附件。'))return;
     withdrawPending.add(key);const button=kind==='topics'?$('collab-withdraw-topic'):messagesBox.querySelector(`[data-withdraw-message="${id}"]`);if(button)button.disabled=true;
-    try {await request(`/${kind}/${id}/withdraw`,{});status($('collab-thread-status'),'撤回已受理，正在同步…');await poll();unreadChanged();}
+    try {
+      await request(`/${kind}/${id}/withdraw`,{});
+      if(kind==='messages' && item.messages.has(id)) {
+        const previous=item.messages.get(id),visible=Number(previous.author_id)===memberId;
+        item.messages.set(id,{...previous,withdrawn:true,can_withdraw:false,
+          body:visible?previous.body:'',attachments:visible?previous.attachments:[]});
+        renderMessages(item);
+      }
+      status($('collab-thread-status'),'撤回已受理，正在同步…');await poll();unreadChanged();
+    }
     catch(error){if(state.selected===item.id)status($('collab-thread-status'),error.message+' 当前内容未替换，请刷新核对后重试。');}
     finally {withdrawPending.delete(key);if(button?.isConnected)button.disabled=false;}
   }

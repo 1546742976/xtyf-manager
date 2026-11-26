@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-资金管理模块（Flask Blueprint，路径前缀 /funds，仅管理员/项管可访问）
+资金管理模块（Flask Blueprint，路径前缀 /funds）
 
 功能：
   - 资金记录：增删改查、筛选排序、CSV 导出
-  - 审核流：未获审核授权的人添加 → 待审核；审核人添加 → 自动已审核；导航角标提醒待审数量
+  - 审核流：所有新记录均待审核；审核人明确点击通过后记录审核人和时间；导航角标提醒待审数量
   - 统计图表：matplotlib 生成 PNG（月度收支/支出类别/队员排名/来源分布）
   - 台账同步：每次变更自动生成 资金管理记录.txt（含"审核"列）
 
@@ -13,21 +13,26 @@
 import base64
 import csv
 import io
+import json
 import os
+from contextlib import closing, contextmanager, nullcontext
+from modules.input_validation import clean_text
 import sqlite3
 import tempfile
 from datetime import datetime
 
-from flask import Blueprint, g, jsonify, redirect, render_template, request, send_file
+from flask import current_app, Blueprint, g, jsonify, redirect, render_template, request, send_file
 
-from common import current_user
+from common import current_user, get_db, now_str
 from modules.security import has_permission
 from modules.money import to_cents, format_cents, money_fields, money_json
 from modules.csv_security import safe_csv_cell
 from modules.funds_migrations import migrate as migrate_funds_money
 from modules.funds_revisions import migrate as migrate_funds_revisions
+from modules.funds_requests import migrate as migrate_funds_requests, valid_request_id, fingerprint
 from modules.task_validation import InvalidIdError, parse_id
 from modules.invoice_storage import InvoiceFileLock
+from modules import funds_ledger, funds_reimbursements
 
 # ---- 数据目录：默认 <项目>/data/funds，可用环境变量 FUNDS_DIR 覆盖 ----
 FUNDS_DIR = os.environ.get(
@@ -92,6 +97,20 @@ def can_review(user=None):
     return bool(user and user.get("role") in ("admin", "manager") and has_permission("funds.review", user))
 
 
+def is_personal_reviewer(user):
+    if not can_review(user):
+        return False
+    configured_id = os.environ.get('FUNDS_PERSONAL_REVIEWER_ID')
+    if configured_id is not None:
+        return configured_id == str(user['id'])
+    reviewer = get_db().execute('SELECT member_id FROM funds_personal_reviewer WHERE id=1').fetchone()
+    return bool(reviewer and reviewer['member_id'] == user['id'])
+
+
+def can_match_personal_invoices(user):
+    return is_personal_reviewer(user) and has_permission('invoices.manage', user)
+
+
 def _validated_count(value):
     """Accept only non-negative integral invoice counts; do not silently truncate."""
     if isinstance(value, bool):
@@ -112,8 +131,14 @@ def _validated_count(value):
 
 
 def _valid_text_fields(data):
-    return all(isinstance(data.get(field, ""), str) for field in
-               ("category", "source_dest", "applicant", "handler", "notes"))
+    for field, limit in {'category':64,'source_dest':200,'applicant':64,'handler':64,'notes':2000}.items():
+        if not isinstance(data.get(field, ''), str):
+            return False
+        try:
+            clean_text(data.get(field, ''), field, limit, required=False)
+        except ValueError:
+            return False
+    return True
 
 
 def valid_record_date(value):
@@ -133,7 +158,8 @@ def get_funds_db():
 
 def summarize_records(records):
     """One snapshot and Python integer sums for every total, grouping and chart."""
-    stats = {'total_in': 0, 'total_out': 0, 'record_count': len(records)}
+    stats = {'total_in': 0, 'total_out': 0, 'approved_out': 0, 'unapproved_out': 0,
+             'record_count': len(records)}
     groups = {key: {} for key in ('category_stats', 'monthly_stats', 'applicant_stats', 'source_stats', 'handler_stats')}
     def add(key, label, value, name):
         bucket = groups[key].setdefault(label, {name: label, 'total': 0, 'cnt': 0})
@@ -149,10 +175,12 @@ def summarize_records(records):
         if income:
             add('source_stats', row['source_dest'] or '', amount, 'source')
         else:
+            # Records from before review was introduced were already treated as approved.
+            stats['unapproved_out' if row['review_status'] == '待审核' else 'approved_out'] += amount
             add('category_stats', row['category'] or '', amount, 'category')
             for group, column in [('applicant_stats', 'applicant'), ('handler_stats', 'handler')]:
                 add(group, row[column] or '', amount, column)
-    stats['balance'] = stats['total_in'] - stats['total_out']
+    stats['balance'] = stats['total_in'] - stats['approved_out']
     for key, values in groups.items():
         stats[key] = (sorted(values.values(), key=lambda row: row['month']) if key == 'monthly_stats'
                       else sorted(values.values(), key=lambda row: -row['total']))
@@ -161,13 +189,27 @@ def summarize_records(records):
 
 def record_payload(row):
     result = dict(row)
+    result.pop('personal_invoice_key')
+    result['personal_status'] = personal_status(row)
     result.update(money_fields(row['amount_cents']))
     return result
 
 
+def personal_status(row):
+    if row['self_funded']:
+        return '已个人报销' if row['personal_paid_at'] else '未个人报销'
+    return ''
+
+
+def personal_invoice_payments():
+    with closing(get_funds_db()) as conn:
+        return {row['invoice_key']: (row['applicant_id'], row['personal_paid_at'])
+                for row in funds_reimbursements.paid_invoices(conn)}
+
+
 def stats_payload(stats):
     result = {'record_count': stats['record_count']}
-    for key in ('total_in', 'total_out', 'balance'):
+    for key in ('total_in', 'total_out', 'approved_out', 'unapproved_out', 'balance'):
         result.update(money_fields(stats[key], key))
     for key in ('category_stats', 'monthly_stats', 'applicant_stats', 'source_stats', 'handler_stats'):
         result[key] = []
@@ -181,10 +223,22 @@ def stats_payload(stats):
 
 
 # ---- 台账同步：与 API 共用整数分统计，串行快照、原子替换 ----
+@contextmanager
+def ledger_access():
+    if not _ledger_lock.acquire(timeout=5):
+        raise TimeoutError('资金台账同步等待超时')
+    try:
+        yield
+    finally:
+        _ledger_lock.release()
+
+
 def sync_txt():
-    with _ledger_lock:
+    with ledger_access():
         conn = get_funds_db()
         try:
+            conn.execute('BEGIN')
+            revision = funds_ledger.status(conn)['revision']
             records = conn.execute('SELECT * FROM records ORDER BY record_date DESC,id DESC').fetchall()
         finally:
             conn.close()
@@ -193,13 +247,15 @@ def sync_txt():
                  f'  更新时间: {datetime.now():%Y-%m-%d %H:%M:%S}',
                  f"  总进账:   ￥{format_cents(stats['total_in']):>12}",
                  f"  总支出:   ￥{format_cents(stats['total_out']):>12}",
+                 f"  已审核通过总支出: ￥{format_cents(stats['approved_out']):>12}",
+                 f"  未审核通过总支出: ￥{format_cents(stats['unapproved_out']):>12}",
                  f"  结余:     ￥{format_cents(stats['balance']):>12}", '=' * 70, '',
-                 f'{"ID":>4}  {"类型":4}  {"金额":>10}  {"类别":8}  {"来源/去向":20}  {"申请人":8}  {"发票":4}  {"处理人":8}  {"日期":12}  {"审核":4}  备注', '-' * 70]
+                 f'{"ID":>4}  {"类型":4}  {"金额":>10}  {"类别":8}  {"来源/去向":20}  {"申请人":8}  {"发票":4}  {"处理人":8}  {"日期":12}  {"审核":4}  个人报销  备注', '-' * 70]
         for row in records:
             rt = '进账' if row['record_type'] == '进' else '支出'
             amount = '￥' + format_cents(row['amount_cents'], grouping=True)
             review = '待审' if row['review_status'] == '待审核' else '已审'
-            lines.append(f"{row['id']:>4}  {rt:4}  {amount:>10}  {row['category'] or '-':8}  {row['source_dest'] or '-':20}  {row['applicant'] or '-':8}  {str(row['invoice_count']):>4}  {row['handler'] or '-':8}  {row['record_date']:12}  {review:4}  {row['notes'] or ''}")
+            lines.append(f"{row['id']:>4}  {rt:4}  {amount:>10}  {row['category'] or '-':8}  {row['source_dest'] or '-':20}  {row['applicant'] or '-':8}  {str(row['invoice_count']):>4}  {row['handler'] or '-':8}  {row['record_date']:12}  {review:4}  {personal_status(row) or '-'}  {row['notes'] or ''}")
         lines.extend(['-' * 70, f'  共 {len(records)} 条记录', '=' * 70, ''])
         fd, temporary = tempfile.mkstemp(prefix='.ledger-', suffix='.tmp', dir=FUNDS_DIR)
         try:
@@ -208,6 +264,11 @@ def sync_txt():
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, FUNDS_TXT)
+            conn = get_funds_db()
+            try:
+                funds_ledger.synced(conn, revision)
+            finally:
+                conn.close()
         finally:
             if os.path.exists(temporary):
                 os.remove(temporary)
@@ -218,6 +279,8 @@ def init_funds_db():
     try:
         migrate_funds_money(conn)
         migrate_funds_revisions(conn)
+        migrate_funds_requests(conn)
+        funds_ledger.migrate(conn)
         # The review badge and the ledger list scan these columns on every page
         # load; without indexes both degrade to full table scans.
         conn.executescript("""
@@ -230,47 +293,53 @@ def init_funds_db():
     sync_txt()
 
 
-# ---- 支出必填校验：去向 / 申请人 / 处理人 / 发票数 >= 1 ----
-def validate_expense_fields(data):
+# ---- 自费申请可以先登记，随后补交发票 ----
+def validate_expense_fields(data, *, self_funded=False):
     missing = []
     if not data.get("source_dest", "").strip():
         missing.append("去向")
     if not data.get("applicant", "").strip():
         missing.append("申请人")
-    if not data.get("handler", "").strip():
-        missing.append("处理人")
-    try:
-        ic = int(data.get("invoice_count", 0))
-    except (TypeError, ValueError):
-        ic = 0
-    if ic <= 0:
-        missing.append("发票数目（必须 >= 1）")
+    if not self_funded:
+        if not data.get("handler", "").strip():
+            missing.append("处理人")
+        if int(data.get("invoice_count", 0)) <= 0:
+            missing.append("发票数目（必须 >= 1）")
     if missing:
         return False, f'支出时以下字段必填: {", ".join(missing)}'
     return True, ""
 
 
-# ---- 模块守卫：资金模块整体仅 admin/manager 可访问（API 返回 JSON 错误码）----
+# ---- 全员可查账和提交自费申请，其他写入和导出保留原权限 ----
 @funds_bp.before_request
 def _funds_guard():
+    if 'rid' in (request.view_args or {}):
+        try:
+            parse_id(request.view_args['rid'], '记录 ID', False)
+        except InvalidIdError as exc:
+            return jsonify(code=1, msg=str(exc)), 400
     user = current_user()
     if user is None:
         if "/api/" in request.path:
             return jsonify({"code": 401, "msg": "未登录"}), 401
         return redirect("/login")
-    if user["role"] not in ("admin", "manager"):
-        if "/api/" in request.path:
-            return jsonify({"code": 403, "msg": "无权限"}), 403
-        return redirect("/")
+    if user["role"] not in ("admin", "manager") and request.endpoint not in {
+        "funds.index", "funds.get_records", "funds.get_record", "funds.get_stats", "funds.get_chart",
+        "funds.capabilities", "funds.add_record",
+    }:
+        return jsonify(code=403, msg="无权限"), 403
     return None
 
 
 # ==================== 页面 ====================
 @funds_bp.route("/")
 def index():
-    return render_template("funds.html", me=current_user(), page="funds",
-                           role_names={"admin": "管理员", "manager": "项管", "member": "成员"},
-                           can_review=can_review())
+    user = current_user()
+    personal_reviewer = is_personal_reviewer(user)
+    return render_template("funds.html", me=user, page="funds",
+                           role_names={"admin": "超级管理员", "manager": "项管", "member": "成员"},
+                           can_review=can_review(user), personal_reviewer=personal_reviewer,
+                           can_match_personal_invoices=personal_reviewer and has_permission('invoices.manage', user))
 
 
 # ==================== 记录查询 API（筛选：类型/关键字/金额范围/日期；可排序）====================
@@ -306,6 +375,9 @@ def get_records():
     for f, col in [("date_from", "record_date"), ("date_to", "record_date")]:
         val = request.args.get(f, "").strip()
         if val:
+            if not valid_record_date(val):
+                conn.close()
+                return jsonify(code=1, msg='日期筛选条件无效（YYYY-MM-DD）'), 400
             op = ">=" if "from" in f else "<="
             q += f" AND {col} {op} ?"
             params.append(val)
@@ -337,58 +409,140 @@ def get_record(rid):
 
 
 @funds_bp.route("/api/records", methods=["POST"])
-# ---- 新增记录：申请人自动填当前登录人；未获审核授权的人添加 → 待审核（审核人自动已审核）----
+# ---- 新增记录：申请人自动填当前登录人；所有新记录均需单独审核 ----
 def add_record():
     data = money_json()
+    request_id = data.get('request_id')
+    if not valid_request_id(request_id):
+        message = '新增资金记录需要防重复提交标识，请刷新适配页面或升级客户端'
+        return jsonify(code=1, msg=message, error=message, reason='idempotency_required'), 400
+
+    def rejected(message):
+        return jsonify(code=1, msg=message, reason='validation_failed', request_id=request_id), 400
+
     rt = data.get("record_type", "")
     if rt not in ("进", "出"):
-        return jsonify({"code": 1, "msg": "类型必须为“进”或“出”"})
+        return rejected('类型必须为“进”或“出”')
 
     try:
         amount = to_cents(data.get("amount", 0), positive=True)
     except ValueError as exc:
-        return jsonify({"code": 1, "msg": str(exc)}), 400
+        return rejected(str(exc))
     try:
         invoice_count = _validated_count(data.get("invoice_count", 0))
     except (TypeError, ValueError):
-        return jsonify({"code": 1, "msg": "发票数目必须是非负整数"}), 400
+        return rejected('发票数目必须是非负整数')
     if not _valid_text_fields(data):
-        return jsonify({"code": 1, "msg": "资金文字字段必须是字符串"}), 400
+        return rejected('资金文字字段格式或长度不合法（分类64、来源200、申请人/经手人64、备注2000字）')
 
     rd = data.get("record_date", "")
     if not valid_record_date(rd):
-        return jsonify({"code": 1, "msg": "日期格式不正确（YYYY-MM-DD）"}), 400
+        return rejected('日期格式不正确（YYYY-MM-DD）')
 
     user = current_user()
-    applicant = (data.get("applicant") or "").strip() or user["name"]
+    self_funded = data.get('self_funded', False)
+    if type(self_funded) is not bool or (self_funded and rt != '出'):
+        return rejected('只有支出可以登记为自费')
+    if user['role'] not in ('admin', 'manager') and not self_funded:
+        return jsonify(code=403, msg='成员只能提交本人的自费支出'), 403
+    if 'expected_member_id' in data and (type(data['expected_member_id']) is not int
+                                        or data['expected_member_id'] != user['id']):
+        return jsonify(code=1, msg='账号已变化，请使用原账号核对待确认请求', reason='account_changed'), 403
+    payload_hash = fingerprint(data, amount)
+    applicant = user["name"] if self_funded else (data.get("applicant") or "").strip() or user["name"]
     data["applicant"] = applicant
 
     if rt == "出":
-        ok, err = validate_expense_fields(data)
+        ok, err = validate_expense_fields(data, self_funded=self_funded)
         if not ok:
-            return jsonify({"code": 1, "msg": err})
-
-    auto_review = can_review(user)
-    review_status = "已审核" if auto_review else "待审核"
-    reviewed_by = user["name"] if auto_review else ""
-    reviewed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if auto_review else ""
+            return rejected(err)
 
     conn = get_funds_db()
-    conn.execute('''INSERT INTO records
-        (record_type,amount_cents,category,source_dest,applicant,invoice_count,handler,record_date,notes,review_status,reviewed_by,reviewed_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''', (
-        rt, amount, data.get("category", ""),
-        data.get("source_dest", "") if rt == "进" else data.get("source_dest", "").strip(),
-        applicant, invoice_count,
-        data.get("handler", "").strip(), rd, data.get("notes", ""),
-        review_status, reviewed_by, reviewed_at,
-    ))
-    conn.commit()
-    rid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.close()
-    sync_txt()
-    return jsonify({"code": 0, "msg": "添加成功", "id": rid,
-                    "applicant": applicant, "review_status": review_status, "version": 1, **money_fields(amount)})
+    rid = None
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        receipt = conn.execute('SELECT payload_hash,result_json FROM funds_requests WHERE actor_id=? AND request_id=?',
+                               (user['id'], request_id)).fetchone()
+        if receipt:
+            if receipt['payload_hash'] != payload_hash:
+                conn.rollback()
+                message = '该提交标识已用于其他内容，请先核对原请求'
+                return jsonify(code=1, msg=message, error=message, reason='request_id_conflict'), 409
+            result = json.loads(receipt['result_json'])
+        else:
+            rid = conn.execute('''INSERT INTO records
+                (record_type,amount_cents,category,source_dest,applicant,invoice_count,handler,record_date,
+                 notes,review_status,reviewed_by,reviewed_at,self_funded,applicant_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''', (
+                rt, amount, data.get('category', ''),
+                data.get('source_dest', '') if rt == '进' else data.get('source_dest', '').strip(),
+                applicant, invoice_count, data.get('handler', '').strip(), rd, data.get('notes', ''),
+                "待审核", "", "", self_funded, user['id'] if self_funded else None,
+            )).lastrowid
+            result = dict(code=0, msg='添加成功', id=rid, applicant=applicant,
+                          review_status="待审核", version=1, request_id=request_id, **money_fields(amount))
+            conn.execute('INSERT INTO funds_requests VALUES(?,?,?,?,?)',
+                         (user['id'], request_id, payload_hash, json.dumps(result, ensure_ascii=False),
+                          datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        current_app.logger.error('资金提交失败 stage=database record_id=%s request_id=%s error_type=%s',
+                                 rid, request_id, type(exc).__name__)
+        raise
+    finally:
+        conn.close()
+    result['replayed'] = bool(receipt)
+    return committed_response(result, result['id'], request_id)
+
+
+@funds_bp.get('/api/capabilities')
+def capabilities():
+    return jsonify(code=0, create_idempotency=1, member_id=current_user()['id'])
+
+
+def committed_response(result, record_id, request_id=None):
+    """The database commit is final; projection failures cannot imply rollback."""
+    try:
+        sync_txt()
+        result['ledger_sync'] = 'ok'
+    except Exception as exc:
+        _record_sync_failure(exc)
+        result['ledger_sync'] = 'failed'
+        result['msg'] = ('记录已保存' if request_id else '操作已完成') + '，台账文件同步失败；请勿重复提交'
+        current_app.logger.error('资金同步失败 stage=ledger_sync record_id=%s request_id=%s error_type=%s',
+                                 record_id, request_id, type(exc).__name__)
+    return jsonify(result)
+
+
+def _record_sync_failure(exc):
+    try:
+        conn = get_funds_db()
+        try:
+            funds_ledger.failed(conn, exc)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        current_app.logger.exception('资金台账失败状态未能持久化；请核对数据库')
+
+
+@funds_bp.route('/api/ledger-sync', methods=['GET', 'POST'])
+def ledger_sync():
+    if request.method == 'POST':
+        if not can_review():
+            return jsonify(code=1, msg='重新同步台账需要资金审核管理权限'), 403
+        try:
+            sync_txt()
+        except Exception as exc:
+            _record_sync_failure(exc)
+            current_app.logger.error('资金主动同步失败 stage=ledger_sync error_type=%s', type(exc).__name__)
+            return jsonify(code=1, state='failed', msg='数据库记录不变，台账仍未同步；请检查目录权限及磁盘后重试'), 503
+    conn = get_funds_db()
+    try:
+        state = funds_ledger.status(conn)
+    finally:
+        conn.close()
+    return jsonify(code=0, can_sync=can_review(), **state)
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["PUT"])
@@ -403,6 +557,9 @@ def update_record(rid):
         conn.close()
         return jsonify({"code": 1, "msg": "记录不存在"}), 404
     original = dict(existing)
+    if original['personal_paid_at']:
+        conn.close()
+        return jsonify(code=1, msg='已个人报销的记录已锁定'), 409
     try:
         expected = parse_id(data.get('version'), 'version', False)
     except (InvalidIdError, ValueError):
@@ -417,9 +574,12 @@ def update_record(rid):
     for key in allowed:
         if key in data:
             candidate[key] = data[key]
+    if original['self_funded'] and (candidate['record_type'] != '出' or candidate['applicant'] != original['applicant']):
+        conn.close()
+        return jsonify(code=1, msg='自费支出须保留原申请人和记录类型'), 400
     if not _valid_text_fields(candidate):
         conn.close()
-        return jsonify({"code": 1, "msg": "资金文字字段必须是字符串"}), 400
+        return jsonify({"code": 1, "msg": "资金文字字段格式或长度不合法（分类64、来源200、申请人/经手人64、备注2000字）"}), 400
     if candidate["record_type"] not in ("进", "出"):
         conn.close()
         return jsonify({"code": 1, "msg": "资金类型不合法"}), 400
@@ -434,7 +594,7 @@ def update_record(rid):
         conn.close()
         return jsonify({"code": 1, "msg": "金额或发票数目不合法"}), 400
     if candidate["record_type"] == "出":
-        valid, error = validate_expense_fields(candidate)
+        valid, error = validate_expense_fields(candidate, self_funded=bool(original['self_funded']))
         if not valid:
             conn.close()
             return jsonify({"code": 1, "msg": error}), 400
@@ -454,9 +614,8 @@ def update_record(rid):
     conn.execute(f"UPDATE records SET {sets},version=version+1 WHERE id=?", [*changes.values(), rid])
     conn.commit()
     conn.close()
-    sync_txt()
-    return jsonify({"code": 0, "msg": "已更新", "version": original["version"] + 1,
-                    "review_required": "review_status" in changes, **money_fields(amount_cents)})
+    return committed_response({"code": 0, "msg": "已更新", "version": original["version"] + 1,
+                               "review_required": "review_status" in changes, **money_fields(amount_cents)}, rid)
 
 
 @funds_bp.route("/api/records/<int:rid>", methods=["DELETE"])
@@ -476,6 +635,9 @@ def delete_record(rid):
     if row["version"] != expected:
         conn.close()
         return jsonify({"code": 1, "msg": "记录已变更，请刷新后重试"}), 409
+    if row['personal_paid_at']:
+        conn.close()
+        return jsonify(code=1, msg='已个人报销的记录已锁定'), 409
     if row["review_status"] == "已审核" and not can_review(current_user()):
         conn.close()
         return jsonify({"code": 403, "msg": "已审核记录只能由资金审核人删除"}), 403
@@ -488,8 +650,7 @@ def delete_record(rid):
     conn.execute("DELETE FROM records WHERE id=? AND version=?", (rid, expected))
     conn.commit()
     conn.close()
-    sync_txt()
-    return jsonify({"code": 0, "msg": "已删除"})
+    return committed_response({"code": 0, "msg": "已删除"}, rid)
 
 
 @funds_bp.route("/api/records/<int:rid>/review", methods=["POST"])
@@ -506,10 +667,13 @@ def review_record(rid):
     conn = get_funds_db()
     # Serialize review with edits/deletes; a stale read must never approve a later edit.
     conn.execute("BEGIN IMMEDIATE")
-    row = conn.execute("SELECT id, review_status, version FROM records WHERE id=?", (rid,)).fetchone()
+    row = conn.execute("SELECT review_status, version, self_funded FROM records WHERE id=?", (rid,)).fetchone()
     if row is None:
         conn.close()
         return jsonify({"code": 1, "msg": "记录不存在"}), 404
+    if row['self_funded'] and not is_personal_reviewer(user):
+        conn.close()
+        return jsonify(code=403, msg='自费支出须由指定审核人审核'), 403
     if row['version'] != expected:
         conn.close()
         return jsonify(code=1, msg='记录已变更，请刷新并重新确认后审核'), 409
@@ -522,8 +686,176 @@ def review_record(rid):
     )
     conn.commit()
     conn.close()
-    sync_txt()
-    return jsonify({"code": 0, "msg": "已审核", "version": expected + 1})
+    return committed_response({"code": 0, "msg": "已审核", "version": expected + 1}, rid)
+
+
+@funds_bp.get('/api/personal-invoices')
+def refresh_personal_invoices():
+    from modules.invoices import personal_invoice_catalog
+
+    user = current_user()
+    if not can_match_personal_invoices(user):
+        return jsonify(code=403, msg='无权核对自费发票'), 403
+    with closing(get_funds_db()) as conn:
+        amounts = {str(row[0]) for row in conn.execute(
+            'SELECT DISTINCT amount_cents FROM records WHERE self_funded=1 AND personal_paid_at IS NULL')}
+    matches = {}
+    try:
+        with personal_invoice_catalog(user) as (generation, invoices):
+            payments = personal_invoice_payments()
+            for invoice in invoices:
+                cents = invoice['amount_cents']
+                if cents not in amounts:
+                    continue
+                item = {key: invoice[key] for key in ('id', 'submitter_id', 'submitter', 'date',
+                                                       'vendor', 'invoice_number', 'filename')}
+                item['paid'] = invoice['personal_invoice_key'] in payments
+                matches.setdefault(cents, []).append(item)
+    except (OSError, RuntimeError, ValueError) as exc:
+        current_app.logger.warning('自费发票查找暂不可用: %s', type(exc).__name__)
+        return jsonify(code=1, msg='发票数据暂不可用，请稍后刷新'), 503
+    return jsonify(code=0, generation=generation, matches=matches)
+
+
+def payment_owner(record, member_id):
+    if record['applicant_id'] is not None:
+        if member_id is not None and parse_id(member_id, '申请人', False) != record['applicant_id']:
+            raise ValueError('请使用记录的原申请人')
+        return dict(applicant_id=record['applicant_id'], applicant=record['applicant'], self_funded=1)
+    if member_id is None:
+        applicant = (record['applicant'] or '').strip()
+        matches = get_db().execute('SELECT id,name FROM members WHERE name=? LIMIT 2', (applicant,)).fetchall()
+        if not applicant or len(matches) != 1:
+            raise ValueError('台账申请人无法唯一匹配，请选择成员账号')
+        member = matches[0]
+    else:
+        member_id = parse_id(member_id, '申请人', False)
+        member = get_db().execute('SELECT id,name FROM members WHERE id=?', (member_id,)).fetchone()
+        if member is None:
+            raise ValueError('指定的申请人不存在')
+    return dict(applicant_id=member['id'], applicant=member['name'], self_funded=1)
+
+
+@funds_bp.get('/api/records/<int:rid>/personal-invoices')
+def personal_invoice_choices(rid):
+    from modules.invoices import personal_invoice_catalog
+
+    user = current_user()
+    if not can_match_personal_invoices(user):
+        return jsonify(code=403, msg='无权核对自费发票'), 403
+    try:
+        with personal_invoice_catalog(user) as (generation, invoices), closing(get_funds_db()) as conn:
+            conn.execute('BEGIN')
+            record = conn.execute('SELECT * FROM records WHERE id=? AND record_type=?', (rid, '出')).fetchone()
+            if record is None:
+                return jsonify(code=1, msg='支出记录不存在'), 404
+            try:
+                owner = payment_owner(record, request.args.get('applicant_id'))
+            except ValueError as exc:
+                return jsonify(code=1, msg=str(exc)), 400
+            linked = {row['invoice_key']: row['record_id'] for row in funds_reimbursements.paid_invoices(conn)}
+            choices = []
+            for invoice in invoices:
+                key = invoice['personal_invoice_key']
+                cents = int(invoice['amount_cents'])
+                if invoice['submitter_id'] != owner['applicant_id'] or not 0 < cents <= record['amount_cents']:
+                    continue
+                if key in linked and linked[key] != rid:
+                    continue
+                choice = {key: invoice[key] for key in ('id', 'amount_cents', 'date', 'vendor', 'invoice_number', 'filename')}
+                choice['selected'] = linked.get(key) == rid
+                choices.append(choice)
+            choices.sort(key=lambda item: (not item['selected'], -int(item['amount_cents'])))
+            return jsonify(code=0, generation=generation, version=record['version'], data=choices)
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        current_app.logger.warning('加载报销候选发票失败: %s', type(exc).__name__)
+        return jsonify(code=1, msg='发票数据暂不可用，请稍后刷新'), 503
+
+
+@funds_bp.get('/api/records/<int:rid>/personal-reimbursement/history')
+def personal_reimbursement_history(rid):
+    if not can_match_personal_invoices(current_user()):
+        return jsonify(code=403, msg='无权查看个人报销操作记录'), 403
+    with closing(get_funds_db()) as conn:
+        return jsonify(code=0, data=funds_reimbursements.payment_history(conn, rid))
+
+
+@funds_bp.post('/api/records/<int:rid>/personal-reimbursement')
+def confirm_personal_reimbursement(rid):
+    from modules.invoices import personal_invoice_catalog, ensure_personal_invoice_keys
+
+    user = current_user()
+    if not can_match_personal_invoices(user):
+        return jsonify(code=403, msg='无权确认个人报销'), 403
+    data = request.get_json(silent=True) or {}
+    operation = data.get('operation', 'confirm')
+    if operation not in ('confirm', 'backfill', 'correct', 'revoke'):
+        return jsonify(code=1, msg='未知的个人报销操作'), 400
+    try:
+        expected = parse_id(data.get('version'), 'version', False)
+        reason = clean_text(data.get('reason'), '操作原因', 500, required=operation != 'confirm')
+    except ValueError as exc:
+        return jsonify(code=1, msg=str(exc)), 400
+    invoice_ids = data.get('invoice_ids', [data.get('invoice_id')])
+    if operation != 'revoke':
+        if (not isinstance(invoice_ids, list) or not 1 <= len(invoice_ids) <= 100
+                or any(not isinstance(value, str) or not value or len(value) > 4096 for value in invoice_ids)
+                or len(set(invoice_ids)) != len(invoice_ids)
+                or not isinstance(data.get('generation'), str)):
+            return jsonify(code=1, msg='请刷新并选择 1 至 100 张不同的发票'), 400
+
+    messages = {'confirm': '已登记个人报销', 'backfill': '已补录历史报销',
+                'correct': '已更正个人报销', 'revoke': '已撤销报销登记'}
+    try:
+        # Lock order is invoices then funds. The payment has one authoritative
+        # commit. Revocation only releases existing allocations in the ledger.
+        catalog = nullcontext((None, [])) if operation == 'revoke' else personal_invoice_catalog(user)
+        with catalog as (generation, invoices), closing(get_funds_db()) as conn, conn:
+            if operation != 'revoke' and generation != data['generation']:
+                return jsonify(code=1, msg='发票数据已更新，请刷新核对'), 409
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute('SELECT * FROM records WHERE id=?', (rid,)).fetchone()
+            if row is None:
+                return jsonify(code=1, msg='记录不存在'), 404
+            if row['version'] != expected or bool(row['personal_paid_at']) != (operation in ('correct', 'revoke')):
+                return jsonify(code=1, msg='资金记录或报销状态已变更，请刷新核对'), 409
+            if row['record_type'] != '出' or row['review_status'] not in ('已审核', '', None):
+                return jsonify(code=1, msg='请先审核通过这笔支出'), 409
+            if operation == 'confirm' and not row['self_funded']:
+                return jsonify(code=1, msg='历史支出请使用历史报销补录'), 409
+            if operation == 'revoke':
+                owner = funds_reimbursements.owner_after_revocation(conn, row)
+                funds_reimbursements.apply_payment(conn, row, user, operation, reason, None, owner, [])
+            else:
+                try:
+                    owner = payment_owner(row, data.get('applicant_id'))
+                except ValueError as exc:
+                    return jsonify(code=1, msg=str(exc)), 400
+                catalog_by_id = {item['id']: item for item in invoices}
+                selected = [catalog_by_id.get(invoice_id) for invoice_id in invoice_ids]
+                if any(item is None or item['submitter_id'] != owner['applicant_id'] for item in selected):
+                    return jsonify(code=1, msg='所选发票须属于同一申请人'), 409
+                cents = [int(item['amount_cents']) for item in selected]
+                if any(amount <= 0 for amount in cents) or sum(cents) != row['amount_cents']:
+                    return jsonify(code=1, msg='所选发票金额合计须等于该笔支出'), 409
+                keys = ensure_personal_invoice_keys(invoice_ids)
+                if keys is None:
+                    return jsonify(code=1, msg='发票文件已变更，请刷新核对'), 409
+                linked = {item['invoice_key']: item['record_id'] for item in funds_reimbursements.paid_invoices(conn)}
+                if len(set(keys)) != len(keys) or any(key in linked and linked[key] != rid for key in keys):
+                    return jsonify(code=1, msg='发票重复或已用于另一笔个人报销'), 409
+                if operation == 'correct' and set(keys) == {key for key, record_id in linked.items() if record_id == rid}:
+                    return jsonify(code=1, msg='关联发票未变更'), 409
+                allocations = [(key, amount, item['invoice_number'] or item['filename'])
+                               for key, amount, item in zip(keys, cents, selected)]
+                paid_at = row['personal_paid_at'] if operation == 'correct' else now_str()
+                funds_reimbursements.apply_payment(conn, row, user, operation, reason, paid_at, owner, allocations)
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        current_app.logger.warning('个人报销登记暂不可用: %s', type(exc).__name__)
+        return jsonify(code=1, msg='当前无法登记个人报销，请刷新台账后重试'), 503
+    if hasattr(g, 'audit_details'):
+        g.audit_details['reimbursement'] = {'record_id': rid, 'operation': operation}
+    return committed_response(dict(code=0, msg=messages[operation], version=expected + 1), rid)
 
 
 @funds_bp.route("/api/pending_review")
@@ -532,7 +864,8 @@ def pending_review():
     if not can_review():
         return jsonify({"code": 403, "msg": "无权查看待审核数量"}), 403
     conn = get_funds_db()
-    count = conn.execute("SELECT COUNT(*) FROM records WHERE review_status='待审核'").fetchone()[0]
+    count = conn.execute("SELECT COUNT(*) FROM records WHERE review_status='待审核' AND (self_funded=0 OR ?)",
+                         (is_personal_reviewer(current_user()),)).fetchone()[0]
     conn.close()
     return jsonify({"code": 0, "count": count})
 
@@ -556,14 +889,14 @@ def export_csv():
 
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(["ID", "类型", "金额", "类别", "来源/去向", "申请人", "发票数", "处理人", "日期", "审核状态", "备注", "录入时间"])
+    w.writerow(["ID", "类型", "金额", "类别", "来源/去向", "申请人", "发票数", "处理人", "日期", "审核状态", "备注", "录入时间", "个人报销"])
     for r in rows:
         d = dict(r)
         review = "待审核" if (d.get("review_status") or "") == "待审核" else "已审核"
         w.writerow([safe_csv_cell(value) for value in
                     (d["id"], d["record_type"], format_cents(d["amount_cents"]), d["category"],
                      d["source_dest"], d["applicant"], d["invoice_count"],
-                     d["handler"], d["record_date"], review, d["notes"], d["created_at"])])
+                     d["handler"], d["record_date"], review, d["notes"], d["created_at"], personal_status(r))])
     out.seek(0)
     buf = io.BytesIO()
     buf.write(out.getvalue().encode("utf-8-sig"))
@@ -602,13 +935,13 @@ def get_chart():
             inc, exp = [r['income'] / 100 for r in rows], [r['expense'] / 100 for r in rows]
             fig, ax = plt.subplots(figsize=(10, 5))
             x, w = range(len(labels)), 0.35
-            b1 = ax.bar([i - w / 2 for i in x], inc, w, label='Income', color=colors['income'])
-            b2 = ax.bar([i + w / 2 for i in x], exp, w, label='Expense', color=colors['expense'])
+            b1 = ax.bar([i - w / 2 for i in x], inc, w, label='收入', color=colors['income'])
+            b2 = ax.bar([i + w / 2 for i in x], exp, w, label='支出', color=colors['expense'])
             ax.set_xticks(list(x))
             ax.set_xticklabels(labels, rotation=45, ha='right')
             ax.legend()
-            ax.set_ylabel('Amount (CNY)')
-            ax.set_title('Monthly Income vs Expense')
+            ax.set_ylabel('金额（元）')
+            ax.set_title('月度收支')
             for bars, field in [(b1, 'income'), (b2, 'expense')]:
                 for bar, row in zip(bars, rows):
                     if row[field]:
@@ -616,38 +949,38 @@ def get_chart():
                                 format_cents(row[field]), ha='center', va='bottom', fontsize=8)
         elif chart_type in ('category', 'applicant', 'source'):
             key, label, title = {
-                'category': ('category_stats', 'category', 'Expense by Category'),
-                'applicant': ('applicant_stats', 'applicant', 'Member Expense Ranking'),
-                'source': ('source_stats', 'source', 'Income Source Distribution'),
+                'category': ('category_stats', 'category', '支出分类'),
+                'applicant': ('applicant_stats', 'applicant', '成员支出排行'),
+                'source': ('source_stats', 'source', '收入来源分布'),
             }[chart_type]
             rows = stats[key][:15] if chart_type == 'applicant' else stats[key]
             fig, ax = plt.subplots(figsize=(8, 5))
             if chart_type == 'source':
                 if rows:
                     wedges, _, percentages = ax.pie([r['total'] / 100 for r in rows],
-                           labels=[(r[label] or 'Other') + ' · ' + format_cents(r['total']) for r in rows],
+                           labels=[(r[label] or '其他') + ' · ' + format_cents(r['total']) for r in rows],
                            colors=[colors['primary'], colors['expense'], colors['income']],
                            autopct='%1.1f%%', startangle=90)
                     pie_labels = list(zip(percentages, wedges))
                 else:
-                    ax.text(0.5, 0.5, 'No data', ha='center', va='center')
+                    ax.text(0.5, 0.5, '暂无数据', ha='center', va='center')
             elif chart_type == 'applicant':
                 rows = rows[::-1]
-                bars = ax.barh([r[label] or 'Unspecified' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
-                ax.set_xlabel('Amount (CNY)')
+                bars = ax.barh([r[label] or '未指定' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
+                ax.set_xlabel('金额（元）')
                 for bar, row in zip(bars, rows):
                     ax.text(bar.get_width(), bar.get_y() + bar.get_height() / 2,
                             format_cents(row['total']), ha='left', va='center', fontsize=9)
             else:
-                bars = ax.bar([r[label] or 'Other' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
-                ax.set_ylabel('Amount (CNY)')
+                bars = ax.bar([r[label] or '其他' for r in rows], [r['total'] / 100 for r in rows], color=colors['primary'])
+                ax.set_ylabel('金额（元）')
                 plt.xticks(rotation=45, ha='right')
                 for bar, row in zip(bars, rows):
                     ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                             format_cents(row['total']), ha='center', va='bottom', fontsize=9)
             ax.set_title(title)
         else:
-            return jsonify({'code': 1, 'msg': 'Unknown chart type'})
+            return jsonify({'code': 1, 'msg': '未知图表类型'}), 400
 
         # The browser supplies its resolved palette for follow-system mode.
         fig.patch.set_alpha(0)
@@ -671,9 +1004,10 @@ def get_chart():
         buf.seek(0)
         plt.close(fig)
         return jsonify({"code": 0, "palette": palette, "data": f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"})
-    except Exception as e:
+    except Exception:
+        current_app.logger.exception("资金图表生成失败")
         plt.close("all")
-        return jsonify({"code": 1, "msg": str(e)})
+        return jsonify({"code": 1, "msg": "图表生成失败，请稍后重试"}), 500
     finally:
         conn.close()
 

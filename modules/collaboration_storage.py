@@ -12,8 +12,9 @@ from pathlib import Path
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 MAX_FILES = 5
-MAX_FILE_BYTES = 100 * 1024 * 1024
-MAX_TOTAL_BYTES = 180 * 1024 * 1024
+MAX_FILE_BYTES = int(os.environ.get("COLLAB_MAX_FILE_BYTES", 25 * 1024 * 1024))
+MAX_TOTAL_BYTES = int(os.environ.get("COLLAB_MAX_TOTAL_BYTES", 60 * 1024 * 1024))
+MEMBER_QUOTA_BYTES = int(os.environ.get("COLLAB_MEMBER_QUOTA_BYTES", 512 * 1024 * 1024))
 MAX_PIXELS = 20_000_000
 MAX_SIDE = 10_000
 CHUNK_BYTES = 1024 * 1024
@@ -94,9 +95,9 @@ def stage_uploads(root, uploads):
                     item.size_bytes += len(block)
                     total += len(block)
                     if item.size_bytes > MAX_FILE_BYTES:
-                        raise UploadError('单个文件不能超过 100 MiB', 413)
+                        raise UploadError(f'单个文件不能超过 {MAX_FILE_BYTES / 1024 / 1024:g} MiB', 413)
                     if total > MAX_TOTAL_BYTES:
-                        raise UploadError('每次上传文件合计不能超过 180 MiB', 413)
+                        raise UploadError(f'每次上传文件合计不能超过 {MAX_TOTAL_BYTES / 1024 / 1024:g} MiB', 413)
                     output.write(block)
                     digest.update(block)
             item.sha256 = digest.hexdigest()

@@ -36,7 +36,7 @@ class TestInvoiceLockTimeout(unittest.TestCase):
 
     def test_api_request_answers_503_when_the_lock_is_saturated(self):
         started = time.monotonic()
-        response = self.client.get('/invoices/api/invoices')
+        response = self.client.get('/invoices/api/organize/preview')
         elapsed = time.monotonic() - started
         self.assertEqual(response.status_code, 503, response.get_data(as_text=True))
         payload = response.get_json()
@@ -46,14 +46,28 @@ class TestInvoiceLockTimeout(unittest.TestCase):
         self.assertLess(elapsed, 5, 'request waited far beyond the configured lock timeout')
 
     def test_requests_succeed_again_after_the_holder_releases(self):
-        self.assertEqual(self.client.get('/invoices/api/invoices').status_code, 503)
+        self.assertEqual(self.client.get('/invoices/api/organize/preview').status_code, 503)
         self._release.set()
         self._holder.join(15)
-        response = self.client.get('/invoices/api/invoices')
+        response = self.client.get('/invoices/api/organize/preview')
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         payload = response.get_json()
-        self.assertIn('data', payload)
-        self.assertEqual(payload['total'], 0)
+        self.assertIn('files', payload)
+
+    def test_zip_and_file_downloads_keep_bounded_lock_wait(self):
+        for path in ('/invoices/api/export_zip', '/invoices/file/2026.10/未报销/missing.pdf'):
+            with self.subTest(path=path):
+                started = time.monotonic()
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 503)
+                self.assertEqual(response.headers['Retry-After'], '5')
+                self.assertLess(time.monotonic() - started, 3)
+
+    def test_enqueue_remains_available_while_invoice_writer_is_active(self):
+        started = time.monotonic()
+        response = self.client.post('/invoices/api/job/start', json={'type': 'refresh'})
+        self.assertEqual(response.status_code, 202)
+        self.assertLess(time.monotonic() - started, 3)
 
 
 if __name__ == '__main__':

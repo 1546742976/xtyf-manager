@@ -7,6 +7,7 @@
   <symbol id="ws-invoice" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3zM9 8h6M9 12h6"/></symbol>
   <symbol id="ws-discussions" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5z"/><path d="M8 9h8M8 12h5"/></symbol>
   <symbol id="ws-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9 7 7m10 10 2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></symbol>
+  <symbol id="ws-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2"/></symbol>
   <symbol id="ws-exit" viewBox="0 0 24 24"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5m4-4 4-4-4-4m-9 4h13"/></symbol>
 </svg>
 <aside class="workspace-sidebar" id="workspace-sidebar" aria-label="主导航">
@@ -21,6 +22,7 @@
     </div>
     <div class="ws-nav-group">
       <div class="ws-nav-caption">团队协作</div>
+      {% if assets_enabled %}<a href="/assets" class="ws-nav-link{% if page == 'assets' %} is-active{% endif %}"{% if page == 'assets' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-grid"/></svg>资产管理</a>{% endif %}
       <a href="{{ url_for('tasks') }}" class="ws-nav-link{% if page == 'tasks' %} is-active{% endif %}"{% if page == 'tasks' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-tasks"/></svg>任务中心</a>
       <a href="{{ url_for('discussions.index') }}" class="ws-nav-link{% if page == 'discussions' %} is-active{% endif %}"{% if page == 'discussions' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-discussions"/></svg>协作<span id="collab-unread" class="nav-badge" style="display:none" hidden aria-label="协作未读消息">0</span></a>
       {% if me.role in ('admin', 'manager') %}
@@ -30,14 +32,13 @@
     </div>
     <div class="ws-nav-group">
       <div class="ws-nav-caption">财务中心</div>
-      {% if me.role in ('admin', 'manager') %}
       <a href="/funds/" class="ws-nav-link{% if page == 'funds' %} is-active{% endif %}"{% if page == 'funds' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-money"/></svg>资金台账{% if can_review_funds %}<span class="nav-badge" id="fundsPendingBadge" style="display:none">0</span>{% endif %}</a>
-      {% endif %}
       <a href="/invoices/" class="ws-nav-link{% if page == 'invoices' %} is-active{% endif %}"{% if page == 'invoices' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-invoice"/></svg>{{ '发票中心' if can_manage_invoices else '我的发票' }}</a>
     </div>
     <div class="ws-nav-group">
       <div class="ws-nav-caption">个人中心</div>
       <a href="{{ url_for('account') }}" class="ws-nav-link{% if page == 'account' %} is-active{% endif %}"{% if page == 'account' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-settings"/></svg>账户设置</a>
+      <a href="{{ url_for('site_updates.timeline') }}" class="ws-nav-link{% if page == 'updates' %} is-active{% endif %}"{% if page == 'updates' %} aria-current="page"{% endif %}><svg aria-hidden="true"><use href="#ws-history"/></svg>更新日志</a>
       {% if me.role == 'admin' %}<a href="{{ url_for('security.security_page') }}" class="ws-nav-link{% if page == 'security' %} is-active{% endif %}"><svg aria-hidden="true"><use href="#ws-settings"/></svg>权限与审计</a>{% endif %}
     </div>
   </nav>

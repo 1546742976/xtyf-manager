@@ -1,0 +1,5 @@
+.pwa-install{grid-column:1/-1}
+.pwa-install p{max-width:76ch}
+.pwa-network-notice{position:fixed;z-index:10000;inset:auto 12px 12px;margin:auto;max-width:700px;padding:16px 20px;background:var(--card,#fff);color:var(--text,#1d1d1f);border:2px solid var(--primary,#0071e3);border-radius:12px;box-shadow:0 4px 24px #0003;font:14px/1.6 system-ui,sans-serif}
+.pwa-network-notice[hidden],#pwa-install[hidden]{display:none!important}
+@media print{.pwa-network-notice,.pwa-install{display:none!important}}

@@ -1,18 +1,43 @@
 {% extends "base.html" %}
 {% block title %}权限与审计{% endblock %}
 {% block content %}
-<div class="ux-page-head"><div><p class="ux-eyebrow">ADMIN / SECURITY</p><h1>权限与审计</h1><p>按成员授予财务权限，并查看业务操作记录。</p></div></div>
+<div class="ux-page-head"><div><p class="ux-eyebrow">ADMIN / SECURITY</p><h1>权限与审计</h1><p>按成员授予业务权限，并查看业务操作记录。</p></div></div>
 <section class="panel">
-  <h2>财务权限</h2>
-  <p class="ux-note">权限绑定成员 ID，修改姓名或登录用户名后仍然有效。资金审核需要管理员或项管角色；发票管理允许查看、归档、修改及导出全部发票，请按职责授权。停用账号的权限不生效。</p>
+  <h2>业务权限</h2>
+  <p class="ux-note">超级管理员自动拥有全部管理权限，不可单独撤销；调整角色后自动权限失效，独立授权仍按规则处理。权限绑定成员 ID，修改姓名或登录用户名后仍然有效。资金审核需要超级管理员或项管角色；发票管理允许查看、归档、修改及导出全部发票，请按职责授权。停用账号的权限不生效。</p>
   <label class="permission-member-filter">查找成员<input type="search" id="permission-search" placeholder="姓名、用户名或成员 ID"></label>
-  <div class="table-wrap"><table><thead><tr><th>成员</th><th>角色 / 状态</th><th>资金审核</th><th>发票管理</th><th>操作</th></tr></thead><tbody id="permission-members"></tbody></table></div>
+  <p class="ux-note">资产管理允许维护目录、调拨及纠错；超级管理员和项管默认拥有，其他成员按职责单独授予。所有登录成员均可借还、领用及调整数量，操作须登记原因。</p>
+  <div class="table-wrap"><table><thead><tr><th>成员</th><th>角色 / 状态</th><th>资金审核</th><th>发票管理</th><th>资产管理</th><th>操作</th></tr></thead><tbody id="permission-members"></tbody></table></div>
   <p id="permission-result" role="status" aria-live="polite"></p>
 </section>
 <section class="panel">
+  <h2>审计保留策略</h2>
+  <p class="ux-note">永久级别（资金与发票）固定永久保留，不可修改。其他级别可单独设置天数；0 表示不按时间或容量清理该级别。更改只影响以后人工执行的清理预览，不会立即删除历史记录。</p>
+  <form id="audit-retention-form">
+    <div class="toolbar">
+      <label>永久记录（不可修改）<input type="text" value="永久保留" readonly disabled></label>
+      <label>严重／安全（天）<input type="number" name="critical" min="0" max="36500" step="1" required></label>
+      <label>重要操作（天）<input type="number" name="important" min="0" max="36500" step="1" required></label>
+      <label>一般变更（天）<input type="number" name="normal" min="0" max="36500" step="1" required></label>
+      <label>低优先级（天）<input type="number" name="routine" min="0" max="36500" step="1" required></label>
+    </div>
+    <p class="ux-note" id="audit-retention-source">正在加载保留策略…</p>
+    <div class="toolbar">
+      <button type="submit" class="btn" id="audit-retention-save">保存保留时间</button>
+      <button type="button" class="btn" id="audit-retention-reset">恢复配置文件／环境变量设置</button>
+    </div>
+  </form>
+  <p class="ux-note" id="audit-retention-result" role="status" aria-live="polite"></p>
+</section>
+<section class="panel">
   <div class="toolbar"><h2>业务操作记录</h2><button type="button" class="btn" id="audit-refresh">刷新记录</button></div>
-  <p class="ux-note">记录操作者、目标、请求内容摘要及处理结果，不记录密码或文件内容。“未完成”表示执行中或执行中断，不能据此判定业务已完成；批量操作可能部分成功。</p>
-  <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>操作 / 目标</th><th>结果</th><th>摘要</th></tr></thead><tbody id="audit-events"></tbody></table></div>
+  <div class="toolbar" aria-label="审计筛选">
+    <label>业务分类<select id="audit-category"><option value="all">全部业务</option><option value="finance">资金与发票</option><option value="security">登录与权限</option><option value="assets">资产与物资</option><option value="members">成员与账号</option><option value="tasks">任务与项目</option><option value="collaboration">协作与通知</option><option value="settings">系统设置</option><option value="other">未分类</option></select></label>
+    <label>重要级别<select id="audit-level"><option value="priority">重点记录（默认）</option><option value="permanent">永久保留</option><option value="critical">严重 / 安全</option><option value="important">重要操作</option><option value="normal">一般变更</option><option value="routine">低优先级</option><option value="all">全部级别</option></select></label>
+    <label>处理结果<select id="audit-outcome"><option value="all">全部结果</option><option value="failure">失败</option><option value="partial">部分成功</option><option value="pending">未完成</option><option value="success">成功</option></select></label>
+  </div>
+  <p class="ux-note">各级保留时间以上方当前配置为准。仅人工执行备份后的维护命令才会清理到期记录。“未完成”不表示业务已成功。</p>
+  <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作者</th><th>业务 / 级别</th><th>操作 / 目标</th><th>结果</th><th>摘要</th></tr></thead><tbody id="audit-events"></tbody></table></div>
   <button type="button" class="btn" id="audit-more" hidden>加载更早记录</button>
   <p id="audit-result" role="status" aria-live="polite"></p>
 </section>

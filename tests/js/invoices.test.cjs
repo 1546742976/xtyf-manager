@@ -24,7 +24,7 @@ function invoicePage(invoice) {
     setTimeout() {}, clearTimeout() {},
     IS_FINANCE: false, ME_ID: 1, ME_NAME: "测试成员",
     Money: { compare() { return 1; }, format(value) { return value; } },
-    document: { getElementById: element, querySelectorAll() { return []; } },
+    document: { getElementById: element, querySelectorAll() { return []; }, querySelector() { return null; }, addEventListener() {} },
     fetch: async () => ({ ok: true, json: async () => ({
       data: [invoice], page: 1, total: 1, per_page: 50,
     }) }),

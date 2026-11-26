@@ -38,6 +38,12 @@ function taskGroupNames(task) {
 }
 function taskMatches(task) {
   const filter = state.filters;
+  if (filter.focus === "mine" &&
+      (isFinishedTask(task) || !state.me || !taskParticipants(task).includes(Number(state.me.id)))) return false;
+  if (filter.focus === "ongoing" && task.status !== "进行中") return false;
+  if (filter.focus === "due7" &&
+      (isFinishedTask(task) || !Number.isInteger(task.days_left) || task.days_left < 0 || task.days_left > 7)) return false;
+  if (filter.focus === "overdue" && !isOverdue(task)) return false;
   if (filter.project && Number(task.project_id) !== Number(filter.project) && taskProjectName(task) !== filter.project) return false;
   if (filter.status && task.status !== filter.status) return false;
   if (filter.mine && (!state.me || !taskParticipants(task).includes(Number(state.me.id)))) return false;
@@ -70,18 +76,25 @@ function renderStats() {
 function taskCard(task, extraClass = "", memberId = null) {
   const note = String(task.latest_note ?? task.latest_progress?.note ?? '').trim();
   const noteAuthor = task.latest_note != null ? task.latest_note_author : task.latest_progress?.actor_name;
+  const images = (Array.isArray(task.latest_progress?.image_ids) ? task.latest_progress.image_ids : [])
+    .map(Number).filter(id => Number.isSafeInteger(id) && id > 0).slice(0, 2);
   const lead = memberById(task.owner_id);
   const participants = taskParticipants(task).map((id) => memberById(id)?.name || `成员 #${id}`);
   const warnings = task.dependency_warnings || [];
   const meta = [taskProjectName(task), participants.join("、")].filter(Boolean);
-  return `<article class="task ${task.status === "阻塞" ? "is-blocked" : ""} ${isOverdue(task) ? "overdue" : ""} ${isDueSoon(task) ? "is-due-soon" : ""} ${warnings.length ? "has-warning" : ""} ${extraClass}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
-    <div class="task-head"><h3>${esc(task.title)}</h3>${badge(task.status, STATUS_CLASS[task.status] || "gray")}</div>
+  return `<article class="task ${taskHighlightClasses(task)} ${extraClass}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}">
+    <div class="task-head"><h3>${esc(task.title)}</h3>${badge(task.status, STATUS_CLASS[task.status] || "gray")}${taskAttentionBadge(task, true)}</div>
     <div class="task-meta">${memberId == null ? "" : badge(Number(task.owner_id) === Number(memberId) ? "总负责" : "参与任务", Number(task.owner_id) === Number(memberId) ? "blue" : "gray")}${badge(`${task.priority}优先`, PRIORITY_CLASS[task.priority] || "gray")}${meta.map((value) => `<span>${esc(value)}</span>`).join("")}</div>
     ${warnings.length ? `<p class="task-warning">依赖提醒：${esc(warnings.join("；"))}</p>` : ""}
     ${state.view === "specialty" ? `<p class="task-plan-dates">计划：${esc(task.start_date || "未设开始")} → ${esc(task.due_date || "未设截止")}</p>` : ""}
     <div class="task-progress-heading"><span>任务进度</span><strong>${Math.max(0, Math.min(100, Number(task.progress) || 0))}%</strong></div>
     <div class="progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(task.progress) || 0))}"><div class="progress-inner blue" style="width:${Math.max(0, Math.min(100, Number(task.progress) || 0))}%"></div></div>
-    ${note ? `<div class="task-note"><span>${esc(noteAuthor || "成员")}</span><p>${esc(note)}</p></div>` : ""}
+    ${note || images.length ? `<div class="task-note">
+      <span>${esc(noteAuthor || task.latest_progress?.actor_name || "成员")}</span>
+      ${note ? `<p>${esc(note)}</p>` : ""}
+      ${images.length ? `<div class="task-note-images">${images.map(id =>
+        `<img src="/api/task/${Number(task.id)}/attachments/${id}" alt="进度截图" loading="lazy">`).join("")}</div>` : ""}
+    </div>` : ""}
     <div class="task-foot"><span>${badge(daysLeftText(task), daysLeftClass(task))}</span><span>更新 ${esc(task.updated_at)}</span></div>
   </article>`;
 }
@@ -255,6 +268,16 @@ function renderBoard() {
 function bindBoard() {
   const target = document.getElementById("board");
   if (!target) return;
+  const focus = new URLSearchParams(location.search).get("focus");
+  const labels = {mine: "我的待办", ongoing: "进行中任务", due7: "7 天内到期", overdue: "逾期任务"};
+  if (Object.hasOwn(labels, focus)) {
+    state.filters.focus = focus;
+    const hint = document.getElementById("task-focus-summary");
+    if (hint) {
+      hint.hidden = false;
+      document.getElementById("task-focus-label").textContent = "工作台快捷筛选：" + labels[focus];
+    }
+  }
   [
     ["f-project", "project", "change"],
     ["f-status", "status", "change"],

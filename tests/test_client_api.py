@@ -1,7 +1,9 @@
 """Native-client protocol against the suite's temporary databases and real CSRF."""
 import json
+import os
 import sqlite3
 import unittest
+from contextlib import closing
 from uuid import uuid4
 
 from flask.testing import FlaskClient
@@ -16,9 +18,10 @@ class TestClientAPI(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
         login = self.admin.post("/login", json={
-            "username": "admin", "password": "123456",
+            "username": "admin", "password": "ci-test-password-only",
         })
         self.assertEqual(login.status_code, 200)
+        self.assertTrue(login.get_json().get('ok'), '合成管理员登录未成功')
         self.client = FlaskClient(app_module.app, use_cookies=True)
         self.username = "client_" + uuid4().hex[:12]
         self.password = "native-client-test-password"
@@ -27,6 +30,20 @@ class TestClientAPI(unittest.TestCase):
         })
         self.assertEqual(created.status_code, 200, created.get_json())
         self.member_id = created.get_json()["id"]
+
+    def permission_diagnostic(self, stage, response):
+        """Only synthetic IDs/versions/status: never passwords, cookies or tokens."""
+        with self.admin.session_transaction() as session:
+            actor = session.get('uid')
+            version = session.get('session_version')
+        with closing(sqlite3.connect(app_module.DB_PATH)) as db:
+            rows = db.execute('SELECT id,role,is_active,session_version,must_change_password FROM members WHERE id IN (?,?)',
+                              (actor, self.member_id)).fetchall()
+        result = {'test': self.id(), 'stage': stage, 'status': response.status_code,
+                  'actor_id': actor, 'session_version': version, 'accounts': rows}
+        if os.environ.get('XTYF_TEST_AUTH_TRACE') == '1':
+            print('SYNTHETIC_AUTH ' + json.dumps(result), flush=True)
+        return result
 
     def bootstrap(self, client=None):
         return (client or self.client).get("/api/client/bootstrap", headers=NATIVE)
@@ -67,6 +84,8 @@ class TestClientAPI(unittest.TestCase):
         self.assertEqual(data["role_names"], app_module.ROLE_NAMES)
         self.assertEqual(data["theme_preferences"], {
             "theme": "light", "mode": "light", "light_theme": "silver", "dark_theme": "space",
+            "light_custom": False, "dark_custom": False,
+            "light_accent": "#3266c7", "dark_accent": "#80aaff",
         })
         self.assertEqual(len(data["theme_options"]["light"]), 4)
         self.assertEqual(len(data["theme_options"]["dark"]), 4)
@@ -102,7 +121,7 @@ class TestClientAPI(unittest.TestCase):
         data = self.bootstrap().get_json()
         self.assertFalse(data["user"]["must_change_password"])
         self.assertEqual(self.client.get("/api/data", headers=NATIVE).status_code, 200)
-        self.assertFalse(data["permissions"]["access_funds"])
+        self.assertTrue(data["permissions"]["access_funds"])
         self.assertFalse(data["permissions"]["manage_security"])
 
     def test_permissions_match_roles_and_independent_finance_grants(self):
@@ -110,16 +129,17 @@ class TestClientAPI(unittest.TestCase):
         for role in ("member", "manager", "admin"):
             with self.subTest(role=role):
                 changed = self.admin.post(f"/api/member/{self.member_id}/profile", json={"role": role})
-                self.assertEqual(changed.status_code, 200)
-                self.login()
+                self.assertEqual(changed.status_code, 200, self.permission_diagnostic('profile-' + role, changed))
+                logged = self.login()
+                self.assertEqual(logged.status_code, 200, self.permission_diagnostic('login-' + role, logged))
                 permitted = ["invoices.manage"] + (["funds.review"] if role != "member" else [])
                 grant = self.admin.post(f"/api/admin/permissions/{self.member_id}", json={"permissions": permitted})
-                self.assertEqual(grant.status_code, 200)
+                self.assertEqual(grant.status_code, 409 if role == "admin" else 200)
                 data = self.bootstrap().get_json()
                 manager = role in ("manager", "admin")
                 self.assertEqual(data["permissions"]["manage_tasks"], manager)
                 self.assertEqual(data["permissions"]["manage_members"], manager)
-                self.assertEqual(data["permissions"]["access_funds"], manager)
+                self.assertTrue(data["permissions"]["access_funds"])
                 self.assertEqual(data["can_review_funds"], manager)
                 self.assertEqual(data["can_review"], manager)
                 self.assertTrue(data["is_finance"])
@@ -128,8 +148,8 @@ class TestClientAPI(unittest.TestCase):
                 self.assertEqual(data["permissions"]["manage_security"], role == "admin")
                 self.admin.post(f"/api/admin/permissions/{self.member_id}", json={"permissions": []})
                 revoked = self.bootstrap().get_json()
-                self.assertFalse(revoked["is_finance"])
-                self.assertFalse(revoked["can_review_funds"])
+                self.assertEqual(revoked["is_finance"], role == "admin")
+                self.assertEqual(revoked["can_review_funds"], role == "admin")
 
     def test_theme_preferences_are_live_and_account_scoped(self):
         self.onboard()
@@ -140,6 +160,8 @@ class TestClientAPI(unittest.TestCase):
         data = self.bootstrap().get_json()
         self.assertEqual(data["theme_preferences"], {
             "theme": "light", "mode": "system", "light_theme": "paw", "dark_theme": "xueli",
+            "light_custom": False, "dark_custom": False,
+            "light_accent": "#3266c7", "dark_accent": "#80aaff",
         })
         self.assertEqual(data["user"]["theme_mode"], "system")
         self.assertNotEqual(self.bootstrap(self.admin).get_json()["user"]["id"], data["user"]["id"])

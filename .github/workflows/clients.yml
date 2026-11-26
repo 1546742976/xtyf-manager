@@ -2,21 +2,65 @@ name: Client validation
 
 on:
   pull_request:
-    branches: [main, "split/pr31-04-account-ui", "split/pr31-05-client-final"]
+    branches: [main, 'codex/review-20261025-*']
+    paths:
+      - 'clients/**'
+      - '!clients/**/*.md'
+      - 'templates/*.html'
+      - 'static/**'
+      - '.github/workflows/clients.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      build_packages:
+        description: 'Also build unsigned test installers (slow; opt-in)'
+        type: boolean
+        required: false
+        default: false
+  workflow_call:
+    inputs:
+      build_packages:
+        description: Build installers for the official release
+        type: boolean
+        required: false
+        default: false
+      source_ref:
+        description: Git ref to package for stable release
+        type: string
+        required: false
+      release_version:
+        type: string
+        required: false
+      android_version_code:
+        type: string
+        required: false
+      signed_android:
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: clients-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   frontend:
-    runs-on: ubuntu-latest
+    # The pinned Playwright does not support the Ubuntu 26.04 runner.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -27,6 +71,7 @@ jobs:
       - run: python -m unittest discover -s clients/frontend -p test_frontend.py -v
       - run: node --test clients/frontend/test_bridge.cjs
       - run: python -m unittest discover -s clients -p 'test_*.py' -v
+      - run: python -m unittest discover -s tests -p 'test_collect_release_assets.py' -v
       - name: Install packaged-UI browser validation dependencies
         run: |
           python -m pip install playwright==1.56.0
@@ -54,6 +99,14 @@ jobs:
       NO_PROXY: 127.0.0.1,localhost
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -65,6 +118,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: npm
+          cache-dependency-path: clients/desktop/package-lock.json
+      - name: Use the same pinned Rust compiler as packaging
+        shell: bash
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop -> target
+          shared-key: xtyf-desktop-tests
       - name: Generate borderless icons for Tauri build
         run: |
           npm ci --prefix clients/desktop --no-audit --no-fund
@@ -77,6 +141,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -96,12 +168,13 @@ jobs:
       - name: Compile Android sources and run update tests without producing an APK
         run: python clients/android/test_ui_updates.py --jdk "$JAVA_HOME" --json-jar .build-tools/json.jar --android-jar "$ANDROID_HOME/platforms/android-36/android.jar" --fixture .build-tools/client-update-fixture
 
-  # These jobs produce installable CI *test* builds, not a formal signed release.
-  # No repository secrets are injected into PRs; Android gets a new temporary
-  # keystore on each run and cannot upgrade a release-signed installation.
+  # Full installers are opt-in for manual runs and required for Release.
+  # PR validation checks source compilation/tests, but does not build packages.
+  # Unsigned manual Android builds use a temporary test keystore.
   package-windows:
     name: Package Windows ${{ matrix.arch }} (NSIS)
-    needs: [frontend, desktop]
+    # Do not package for ordinary PR checks; release packaging runs alongside tests.
+    if: inputs.build_packages == true
     strategy:
       fail-fast: false
       matrix:
@@ -112,8 +185,19 @@ jobs:
             runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.1'
+      CARGO_TARGET_DIR: ${{ github.workspace }}/clients/desktop/target
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -123,6 +207,10 @@ jobs:
       - name: Install pinned Rust toolchain
         shell: pwsh
         run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop -> target
+          shared-key: xtyf-native-release
       - name: Build pinned frontend assets
         run: |
           python -m pip install jinja2
@@ -153,11 +241,19 @@ jobs:
 
   package-android:
     name: Package Android (APK)
-    needs: android
+    if: inputs.build_packages == true
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -174,16 +270,41 @@ jobs:
           python -m pip install jinja2
           python clients/build_frontend.py
           npm ci --prefix clients/desktop --no-audit --no-fund
-      - name: Build and verify APK with ephemeral CI-only signing key
+      - name: Restore fixed Android release keystore
+        if: inputs.signed_android == true
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          python clients/build_android.py --jdk "$JAVA_HOME" --sdk "$ANDROID_HOME" --skip-frontend-build --output-dir dist/clients/android
+          set -euo pipefail
+          if [[ -z "$ANDROID_KEYSTORE_B64" || -z "$ANDROID_KEYSTORE_PASSWORD" ]]; then
+            echo "::error::Configure ANDROID_KEYSTORE_B64 and ANDROID_KEYSTORE_PASSWORD before a stable release."
+            exit 1
+          fi
+          install -d -m 700 clients/signing
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > clients/signing/xtyf-manager.jks
+          printf '%s' "$ANDROID_KEYSTORE_PASSWORD" > clients/signing/android-password.txt
+          chmod 600 clients/signing/xtyf-manager.jks clients/signing/android-password.txt
+          export XTYF_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
+          keytool -list -keystore clients/signing/xtyf-manager.jks -storepass:env XTYF_KEY_PASSWORD -alias xtyf-manager
+
+      - name: Build and verify APK (temporary test or fixed stable key)
+        env:
+          SIGNED_ANDROID: ${{ inputs.signed_android }}
+        run: |
+          args=()
+          if [[ "$SIGNED_ANDROID" != "true" ]]; then
+            args+=(--test-signing)
+          fi
+          python clients/build_android.py --jdk "$JAVA_HOME" --sdk "$ANDROID_HOME" --skip-frontend-build --output-dir dist/clients/android "${args[@]}"
           cd dist/clients/android
           test "$(find . -maxdepth 1 -type f -name 'XTYF-Manager-*.apk' | wc -l)" -eq 1
           sha256sum XTYF-Manager-*.apk > SHA256SUMS.txt
       - name: Upload Android CI installer
         uses: actions/upload-artifact@v4
         with:
-          name: xtyf-client-android-test-signed
+          name: xtyf-client-android-apk
           path: |
             dist/clients/android/XTYF-Manager-*.apk
             dist/clients/android/SHA256SUMS.txt
@@ -192,7 +313,8 @@ jobs:
 
   package-linux:
     name: Package Linux ${{ matrix.arch }} (DEB + RPM)
-    needs: [frontend, desktop]
+    # Release packaging starts immediately in parallel with validation.
+    if: inputs.build_packages == true
     strategy:
       fail-fast: false
       matrix:
@@ -203,8 +325,18 @@ jobs:
             runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: '1.99.1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Inject release version into ephemeral build workspace
+        if: inputs.release_version != ''
+        env:
+          XTYF_VERSION: ${{ inputs.release_version }}
+          XTYF_CODE: ${{ inputs.android_version_code }}
+        run: python clients/versioning_ci.py apply
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -217,6 +349,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libxdo-dev librsvg2-dev libayatana-appindicator3-dev libssl-dev patchelf rpm libarchive-tools
           rustup toolchain install 1.99.1 --profile minimal
           python -m pip install jinja2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop -> target
+          shared-key: xtyf-native-release
       - name: Build pinned resources and native installers
         run: |
           python clients/build_frontend.py
@@ -234,3 +370,4 @@ jobs:
             dist/clients/linux/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
+

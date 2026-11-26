@@ -58,6 +58,10 @@ def run():
             if args['path']=='/__preview.pdf':return {'status':200,'headers':{'Content-Type':'application/pdf'},'body':base64.b64encode(pdf_bytes).decode(),'encoding':'base64'}
             headers={**args.get('headers',{}),'X-XTYF-Client-Protocol':'1'}
             response=client.open(args['path'],method=args.get('method','GET'),headers=headers,data=args.get('body'))
+            if args['path']=='/funds/api/records' and args.get('method')=='POST' and state.get('drop_funds_response'):
+                state['drop_funds_response']=False
+                assert response.status_code==200
+                return {'status':200,'headers':{'Content-Type':'text/html'},'body':'<html>synthetic lost receipt</html>','encoding':'text'}
             binary=not response.is_json and not response.mimetype.startswith('text/')
             return {'status':response.status_code,'headers':dict(response.headers),'body':base64.b64encode(response.data).decode() if binary else response.get_data(as_text=True),'encoding':'base64' if binary else 'text'}
         raise ValueError('unexpected native action '+action)
@@ -79,6 +83,14 @@ def run():
             if page.evaluate('()=>('+expression+')'):return
             page.wait_for_timeout(100)
         raise AssertionError('Condition timed out: '+expression)
+    def wait_theme_initialized(page):
+        # An iframe's heading can render before deferred theme.js binds its
+        # handlers. Clicking before DOMContentLoaded silently drops the action.
+        wait_until(page, """(
+            window.XTYF.route==='/account' &&
+            document.querySelector('#page-host iframe')?.contentDocument
+              ?.querySelector('[data-theme-toggle]')?.title?.startsWith('切换为')
+        )""")
     with sync_playwright() as p:
         print('Launching Chromium...',flush=True)
         browser=p.chromium.launch(headless=True)
@@ -109,27 +121,76 @@ def run():
                 text=frame.locator('body').inner_text()
                 assert label in text,(path,text[:200])
                 assert page.locator('#page-host iframe').get_attribute('srcdoc'),path
+                if path=='/funds/':
+                    frame.locator('[data-bs-target="#t-add"]').click()
+                    frame.locator('#aT').select_option('进')
+                    frame.locator('#aAmt').fill('12.34')
+                    frame.locator('#aNotes').fill('synthetic native funds recovery')
+                    state['drop_funds_response']=True
+                    frame.locator('#addF [type=submit]').click()
+                    frame.locator('#funds-create-status').filter(has_text='结果待确认').wait_for()
+                    page.evaluate("XTYF.navigate('/funds/',true)")
+                    frame.locator('[data-bs-target="#t-add"]').click()
+                    frame.locator('#funds-create-retry').wait_for()
+                    assert frame.locator('#aNotes').input_value()=='synthetic native funds recovery'
+                    frame.locator('#funds-create-retry').click()
+                    frame.locator('#funds-create-fields:enabled').wait_for()
+                    writes=[json.loads(args['body']) for action,args in state['calls']
+                            if action=='request' and args.get('path')=='/funds/api/records' and args.get('method')=='POST']
+                    assert len(writes)==2 and writes[0]==writes[1],writes
+                    records=client.get('/funds/api/records').get_json()['data']
+                    assert sum(r['notes']=='synthetic native funds recovery' for r in records)==1
+                    results.append('packaged funds creation recovers immutable receipts through authenticated native IPC')
                 if path=='/account':
                     assert frame.locator('#email-form').is_visible()
                     assert frame.locator('#email-code').get_attribute('pattern')=='[0-9]{6}'
                     results.append('account contains the current six-digit email verification controls')
+                if path=='/manage':
+                    frame.locator('#schedule-project:enabled').wait_for()
+                    frame.locator('#schedule-project').click()
+                    frame.locator('#schedule-project-choice [name=project]').select_option(index=1)
+                    frame.locator('#schedule-project-choice [type=submit]').click()
+                    frame.locator('#schedule-summary').filter(has_text='参与').wait_for()
+                    frame.locator('[data-schedule-close]').click()
+                    results.append('local schedule chooser loads preview through authenticated native transport')
                 results.append('local route '+path)
                 print(results[-1],flush=True)
+            page.evaluate("XTYF.navigate('/discussions/')")
+            frame.locator('#intro-edit').click()
+            frame.locator('#intro-form [name=bio]').fill('合成客户端简介')
+            frame.locator('#intro-add-profile').click()
+            frame.locator('#intro-profile-links [data-link-url]').fill('www.github.com/example-client')
+            frame.locator('#intro-add-repository').click()
+            frame.locator('#intro-repository-links [data-link-url]').fill('github.com/example-client/robot')
+            frame.locator('#intro-repository-links [data-link-description]').fill('合成仓库介绍')
+            frame.locator('#intro-save').click()
+            frame.locator('#intro-save-result').filter(has_text='简介已保存').wait_for()
+            frame.locator('#intro-close').click()
+            page.evaluate("XTYF.navigate('/account')")
+            frame.locator('#intro-edit').click()
+            frame.locator('#intro-dialog[open]').wait_for()
+            assert frame.locator('#intro-form [name=bio]').input_value()=='合成客户端简介'
+            assert frame.locator('#intro-profile-links [data-link-url]').input_value()=='www.github.com/example-client'
+            frame.locator('#intro-close').click()
+            assert frame.locator('#intro-preview a').count()==2
+            assert '合成仓库介绍' in frame.locator('#intro-preview').inner_text()
+            results.append('shared introduction editor and link preview persist through authenticated native transport')
             page.evaluate("XTYF.navigate('/account/email/verify#token=test')")
             page.get_by_role('heading',name='本地页面不存在').wait_for()
             results.append('removed legacy email-link template uses the local unavailable-page message')
             page.evaluate("XTYF.navigate('/account')")
-            frame.locator('h1').first.wait_for()
+            wait_theme_initialized(page)
             frame.locator('[data-theme-toggle]').first.click()
             wait_until(page,"window.XTYF.bootstrap.me.theme_mode==='dark'")
+            assert frame.locator('html').get_attribute('data-theme')=='dark'
             page.evaluate("XTYF.navigate('/tasks')")
             frame.locator('h1').first.wait_for()
             assert frame.locator('html').get_attribute('data-theme')=='dark'
             assert page.evaluate('()=>XTYFClient.back()')
-            wait_until(page,"window.XTYF.route==='/account'")
-            frame.locator('h1').first.wait_for()
+            wait_theme_initialized(page)
             frame.locator('[data-theme-toggle]').first.click()
             wait_until(page,"window.XTYF.bootstrap.me.theme_mode==='light'")
+            assert frame.locator('html').get_attribute('data-theme')=='light'
             results.append('theme persists across local routes and native back restores previous page')
             page.evaluate("XTYF.navigate('/invoices/')")
             frame.locator('#fileInput').wait_for(state='attached')

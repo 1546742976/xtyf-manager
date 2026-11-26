@@ -16,13 +16,27 @@ var API = '/funds/api/records', sort = {by:'record_date',order:'DESC'}, edM, ct=
 var chartRequest = 0, chartAbort = null, chartPalette = '', chartDirty = false;
 var ME_NAME = window.XTYF_USER.name, ME_USERNAME = window.XTYF_USER.username;
 var CAN_REVIEW = window.XTYF_USER.canReview;
+var CAN_MANAGE = window.XTYF_USER.canManageRecords !== false;
+var PERSONAL_REVIEWER = window.XTYF_USER.personalReviewer;
+var personalCatalog = null;
+var fundsCreate = null, fundsCreateBusy = false, fundsFormRequest = null;
+var recordsRequest = 0, recordsAbort = null, recordsInactive = false;
+window.addEventListener('pagehide', function(){
+  recordsInactive = true; recordsRequest++;
+  if(recordsAbort)recordsAbort.abort();
+});
+window.addEventListener('pageshow', function(event){
+  if(event.persisted && recordsInactive){recordsInactive=false;reload();}
+});
 
 document.addEventListener('DOMContentLoaded', function(){
   edM = new bootstrap.Modal('#editMd');
   document.getElementById('aDt').value = new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,10);
   document.getElementById('aApplicant').value = ME_NAME;
+  toggleF();
   if (CAN_REVIEW) { loadPending(); setInterval(loadPending, 30000); }
   reload(); loadStats();
+  initializeFundsCreate();
   document.getElementById('mainTab').addEventListener('shown.bs.tab', function(e){
     if (e.target.dataset.bsTarget === '#t-charts' && (!ct || chartDirty)) {
       loadChart(ct || 'monthly', document.querySelector('#t-charts .btn-group .active'));
@@ -30,6 +44,65 @@ document.addEventListener('DOMContentLoaded', function(){
     }
   });
 });
+
+function renderFundsCreate(message) {
+  var entries = fundsCreate.pending();
+  document.getElementById('funds-create-fields').disabled = fundsCreateBusy || entries.length > 0;
+  var retry = document.getElementById('funds-create-retry');
+  retry.hidden = !entries.length; retry.disabled = fundsCreateBusy;
+  document.getElementById('funds-create-status').textContent = message || (entries.length
+    ? '结果待确认：' + entries.length + ' 笔原请求已保留，已暂停新增。当前请求：' + entries[0].body.record_type + ' ' + entries[0].body.amount + ' 元，请核对后重试原请求。'
+    : '新增就绪。提交结果不明时，可刷新后重试原请求。');
+}
+
+async function initializeFundsCreate() {
+  try {
+    fundsCreate = FundsCreate.create({storage:localStorage, fetch:BusinessUI.fetch,
+      server:()=>window.XTYF ? (parent.XTYF || window.XTYF).config.serverUrl : location.origin,
+      uuid:()=>Array.from(crypto.getRandomValues(new Uint8Array(16)), x=>x.toString(16).padStart(2,'0')).join('')});
+    var entries = await fundsCreate.connect();
+    if (entries.length) {
+      var body = entries[0].body;
+      var fields = {aT:'record_type',aAmt:'amount',aCat:'category',aSD:'source_dest',aDt:'record_date',
+        aNotes:'notes',aApplicant:'applicant',aInvCnt:'invoice_count',aHandler:'handler'};
+      Object.keys(fields).forEach(id=>{document.getElementById(id).value=body[fields[id]] ?? '';});
+      var selfFunded = document.getElementById('aSelfFunded');
+      if (selfFunded) selfFunded.checked = !!body.self_funded;
+      toggleF(); fundsFormRequest = body.request_id;window.FormControls?.refresh(document.getElementById('addF'));
+    }
+    renderFundsCreate();
+    document.getElementById('funds-create-retry').onclick = ()=>submitFundsCreate(fundsCreate.pending()[0]);
+    window.addEventListener('storage',()=>{try{renderFundsCreate();}catch(error){fundsToast(error.message,'error');}});
+  } catch(error) {
+    document.getElementById('funds-create-fields').disabled = true;
+    document.getElementById('funds-create-status').textContent = '已暂停新增：' + error.message;
+  }
+}
+
+async function submitFundsCreate(entry) {
+  if (fundsCreateBusy || !entry) return;
+  fundsCreateBusy = true;
+  try {
+    renderFundsCreate('正在核对原请求并提交…');
+    var result = await fundsCreate.send(entry);
+    if (result.state === 'confirmed') {
+      var j = result.receipt;
+      var message = j.ledger_sync === 'failed' ? j.msg : '该创建请求已处理（记录 ' + j.id + '）。最新状态已重新读取。';
+      if (fundsFormRequest === entry.body.request_id) { clearF(); fundsFormRequest = null; }
+      reload(); loadStats(); if(CAN_REVIEW)loadPending();
+      fundsToast(message, j.ledger_sync === 'failed' ? 'error' : 'success');
+      renderFundsCreate(message);
+    } else if (result.state === 'rejected') {
+      renderFundsCreate(result.receipt.msg); fundsToast(result.receipt.msg,'error');
+    } else { renderFundsCreate(result.message); fundsToast(result.message,'error'); }
+  } catch(error) {
+    document.getElementById('funds-create-status').textContent = '请求已保留，请刷新核对：' + error.message;
+  } finally {
+    fundsCreateBusy = false;
+    try { renderFundsCreate(document.getElementById('funds-create-status').textContent); }
+    catch(error) { document.getElementById('funds-create-fields').disabled = true; }
+  }
+}
 
 document.addEventListener('workspace-theme-change', function(){
   if (!ct || chartPalette === document.documentElement.dataset.palette) return;
@@ -45,41 +118,63 @@ document.addEventListener('workspace-theme-change', function(){
 
 function toggleF(){
   var t = document.getElementById('aT').value, isExp = (t==='出');
+  var personal = isExp && (!CAN_MANAGE || document.getElementById('aSelfFunded')?.checked);
   document.getElementById('expF').style.display = isExp?'block':'none';
   document.getElementById('lSD').textContent = isExp?'去向':(t==='进'?'来源':'来源 / 去向');
   document.getElementById('aSD').placeholder = isExp?'例如：淘宝采购电机':(t==='进'?'例如：学校拨款':'');
   document.getElementById('lSD').className = isExp?'form-label required':'form-label';
   document.getElementById('aSD').required = isExp;
-  document.getElementById('aApplicant').required = isExp;
-  document.getElementById('aInvCnt').required = isExp;
-  document.getElementById('aHandler').required = isExp;
-  if(isExp) document.getElementById('aInvCnt').value = document.getElementById('aInvCnt').value || 1;
+  var applicant = document.getElementById('aApplicant');
+  applicant.required = isExp;
+  applicant.readOnly = !!personal;
+  if (personal) applicant.value = ME_NAME;
+  for (var [id, label] of [['aInvCnt', 'lInv'], ['aHandler', 'lHdl']]) {
+    var required = isExp && !personal;
+    document.getElementById(id).required = required;
+    document.getElementById(label).classList.toggle('required', required);
+  }
+  var invoiceCount = document.getElementById('aInvCnt');
+  invoiceCount.min = personal ? '0' : '1';
+  if (isExp && !personal && !Number(invoiceCount.value)) invoiceCount.value = '1';
 }
 function clearF(){
   document.getElementById('addF').reset();
   document.getElementById('aDt').value = new Date().toISOString().slice(0,10);
-  document.getElementById('expF').style.display = 'none';
-  document.getElementById('lSD').textContent='来源 / 去向';
-  document.getElementById('lSD').className = 'form-label';
-  document.getElementById('aSD').required = false;
-  document.getElementById('aApplicant').required = false;
-  document.getElementById('aInvCnt').required = false;
-  document.getElementById('aHandler').required = false;
-  document.getElementById('aInvCnt').value = '1';
   document.getElementById('aApplicant').value = ME_NAME;
+  toggleF();
 }
 function resetF(){ document.querySelectorAll('#ft,#fkw,#famin,#famax,#fdf,#fdt').forEach(function(e){e.value=''}); reload(); }
 function setSort(f){ sort.order=(sort.by===f?(sort.order==='ASC'?'DESC':'ASC'):'DESC'); sort.by=f; reload(); }
 
+function fundsListState(state, message){
+  document.getElementById('funds-list-loading').hidden = state !== 'loading';
+  document.getElementById('funds-list-error').hidden = state !== 'error';
+  document.getElementById('funds-list-error-message').textContent = message || '';
+  document.getElementById('funds-records').setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+  if(state !== 'ready'){
+    document.getElementById('tbody').innerHTML = '';
+    document.getElementById('rcnt').textContent = '';
+    document.getElementById('empty').style.display = 'none';
+  }
+}
+
 function reload(){
+  if(recordsInactive)return Promise.resolve();
+  var own = ++recordsRequest;
+  if(recordsAbort)recordsAbort.abort();
+  var controller = new AbortController(); recordsAbort = controller;
+  fundsListState('loading');
+  loadLedgerStatus();
   var p = new URLSearchParams();
   [{id:'ft',key:'record_type'},{id:'fkw',key:'keyword'},{id:'famin',key:'amount_min'},{id:'famax',key:'amount_max'},{id:'fdf',key:'date_from'},{id:'fdt',key:'date_to'}].forEach(function(x){
     var v = document.getElementById(x.id).value.trim(); if(v) p.append(x.key,v);
   });
   p.append('sort_by',sort.by); p.append('sort_order',sort.order);
-  BusinessUI.fetch(API+'?'+p).then(function(r){return r.json()}).then(function(j){
-    if (!j || j.code !== 0) throw new Error((j && j.msg) || '服务端响应异常');
-    var rows = j.data||[];
+  return BusinessUI.fetch(API+'?'+p,{signal:controller.signal}).then(function(r){return r.json()}).then(function(j){
+    if(recordsInactive || own !== recordsRequest)return;
+    if (!j || j.code !== 0 || !Array.isArray(j.data)) throw new Error((j && j.msg) || '服务端响应异常');
+    fundsListState('ready');
+    var rows = j.data;
     document.getElementById('rcnt').textContent = rows.length + ' 条记录';
     document.getElementById('empty').style.display = rows.length?'none':'block';
     document.getElementById('tbody').innerHTML = rows.length ? rows.map(function(r){
@@ -93,12 +188,79 @@ function reload(){
         '<td>'+(r.invoice_count||0)+'</td>'+
         '<td>'+escText(r.handler||'-')+'</td>'+
         '<td>'+r.record_date+'</td>'+
-        '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">待审核</span> '+(CAN_REVIEW?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>')+'</td>'+
+        '<td>'+((r.review_status==='待审核')?'<span class="badge-pending">未审核</span> '+(CAN_REVIEW && (!r.self_funded || PERSONAL_REVIEWER)?'<button class="btn btn-outline-primary btn-sm" onclick="reviewRecord('+r.id+','+r.version+')">审核</button>':''):'<span class="badge-ok">已审核</span>'+(r.reviewed_by?'<small class="d-block text-muted">审核人：'+escText(r.reviewed_by)+'</small>':''))+'</td>'+
+        '<td>'+renderPersonalReimbursement(r)+'</td>'+
         '<td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+(r.notes||'').replace(/"/g,'&quot;')+'">'+escText(r.notes||'-')+'</td>'+
-        '<td><button class="btn btn-outline-secondary btn-sm" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button></td>'+
+        (CAN_MANAGE ? '<td>'+(r.personal_paid_at ? '—' : '<button class="btn btn-outline-secondary btn-sm" aria-label="编辑第 '+r.id+' 条记录" title="编辑记录" onclick="edR('+r.id+')"><i class="bi bi-pencil"></i></button> <button class="btn btn-outline-danger btn-sm" aria-label="删除第 '+r.id+' 条记录" title="删除记录" onclick="delR('+r.id+','+r.version+')"><i class="bi bi-trash"></i></button>')+'</td>' : '')+
         '</tr>';
     }).join('') : '';
-  }).catch(function(e){ fundsToast('记录加载失败：'+e.message,'error'); });
+  }).catch(function(e){
+    if(recordsInactive || own !== recordsRequest || controller.signal.aborted)return;
+    fundsListState('error','记录加载失败：'+e.message);
+  }).finally(function(){if(own === recordsRequest)recordsAbort=null;});
+}
+
+function renderPersonalReimbursement(record) {
+  var badge = record.personal_status
+    ? '<span class="'+(record.personal_paid_at ? 'badge-ok' : 'badge-pending')+'">'+escText(record.personal_status)+'</span>'
+    : '—';
+  var actions = window.FundsReimbursement?.actions(record) || '';
+  if (!personalCatalog || !record.self_funded || record.personal_paid_at) return badge + actions;
+  var candidates = personalCatalog.matches[record.amount_cents] || [];
+  if (!candidates.length) return badge + '<small class="d-block">暂无同金额发票</small>' + actions;
+  return badge + actions + '<details class="mt-1"><summary>同金额发票（'+candidates.length+' 张）</summary><ul class="ps-3 mb-0">'+candidates.map(function(invoice){
+    var url = '/invoices/file/'+invoice.id.split('/').map(encodeURIComponent).join('/');
+    var owner = invoice.submitter_id ? invoice.submitter+' #'+invoice.submitter_id : '归属待确认';
+    var description = [owner,
+      invoice.date, invoice.vendor, invoice.invoice_number || invoice.filename].filter(Boolean).join(' · ');
+    var action = '';
+    if (invoice.paid) action = '<small class="d-block">已用于个人报销</small>';
+    else if (invoice.submitter_id !== record.applicant_id) action = '<small class="d-block">提交人与申请人不一致</small>';
+    return '<li class="mb-1"><a href="'+escText(url)+'" target="_blank" rel="noopener">'+escText(description)+'</a>'+action+'</li>';
+  }).join('')+'</ul></details>';
+}
+
+async function refreshPersonalInvoices(button) {
+  button.disabled = true;
+  var status = document.getElementById('personalInvoiceFeedback');
+  status.textContent = '正在查找同金额发票…';
+  try {
+    var response = await BusinessUI.fetch('/funds/api/personal-invoices');
+    var result = await response.json();
+    if (!response.ok || result.code !== 0) throw new Error(result.msg || '发票查找失败');
+    personalCatalog = result;
+    status.textContent = '已刷新，可在自费记录下核对候选发票。';
+  } catch (error) {
+    personalCatalog = null;
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+    await reload();
+  }
+}
+
+async function loadLedgerStatus() {
+  var status = document.getElementById('funds-ledger-state');
+  if (!status) return;
+  try {
+    var response = await fetch('/funds/api/ledger-sync'), result = await response.json();
+    if (!response.ok || result.code !== 0) throw new Error(result.msg || '无法读取台账同步状态');
+    status.textContent = result.state === 'ok' ? 'TXT 台账已同步' : '数据库已保存，TXT 台账未同步；请使用“重新同步台账”或联系资金管理人员。';
+    status.dataset.state = result.state;
+    var button = document.getElementById('funds-ledger-repair');
+    if (button) button.hidden = !result.can_sync;
+  } catch (error) { status.textContent = '台账同步状态暂不可用：' + error.message; }
+}
+
+async function repairFundsLedger(button) {
+  button.disabled = true;
+  try {
+    var response = await fetch('/funds/api/ledger-sync', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    var result = await response.json();
+    if (!response.ok || result.code !== 0) throw new Error(result.msg || '台账同步失败');
+    fundsToast(result.state === 'ok' ? 'TXT 台账已重新同步，资金记录未改变' : '同步期间又有新记录，请再次同步核对', result.state === 'ok' ? 'success' : 'error');
+  } catch (error) { fundsToast(error.message, 'error'); }
+  finally { button.disabled = false; await loadLedgerStatus(); }
 }
 
 async function handleAdd(e){
@@ -113,15 +275,16 @@ async function handleAdd(e){
   };
   d.applicant = document.getElementById('aApplicant').value.trim() || ME_NAME;
   if(d.record_type==='出'){
+    if (!CAN_MANAGE || document.getElementById('aSelfFunded')?.checked) d.self_funded = true;
     d.invoice_count = parseInt(document.getElementById('aInvCnt').value)||0;
     d.handler = document.getElementById('aHandler').value.trim();
   }
   try {
-    var r = await BusinessUI.fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
-    var j = await r.json();
-    if(j.code===0){ fundsToast(j.review_status==='待审核' ? '记录已提交，等待财务审核' : '记录已添加','success'); clearF(); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
-    else fundsToast(j.msg || '操作失败','error');
-  } catch(e){ fundsToast('提交失败：'+e.message,'error'); }
+    if (fundsCreateBusy) return;
+    var entry = fundsCreate.prepare(d);
+    fundsFormRequest = entry.body.request_id;
+    await submitFundsCreate(entry);
+  } catch(e){ fundsToast('未发送新增请求：'+e.message,'error'); }
 }
 
 async function edR(id){
@@ -133,7 +296,9 @@ async function edR(id){
     document.getElementById('eAmt').value=d.amount; document.getElementById('eCat').value=d.category||'';
     document.getElementById('eSD').value=d.source_dest||''; document.getElementById('eDt').value=d.record_date;
     document.getElementById('eInv').value=d.invoice_count||0; document.getElementById('eApl').value=d.applicant||'';
-    document.getElementById('eHdl').value=d.handler||''; document.getElementById('eNts').value=d.notes||'';
+    document.getElementById('eT').disabled = !!d.self_funded;
+    document.getElementById('eApl').readOnly = !!d.self_funded;
+    document.getElementById('eHdl').value=d.handler||''; document.getElementById('eNts').value=d.notes||'';window.FormControls?.refresh(document.getElementById('eNts'));
     edM.show();
   } catch(e){ fundsToast('记录加载失败：'+e.message,'error'); }
 }
@@ -155,7 +320,7 @@ async function saveE(){
     var r = await BusinessUI.fetch(API+'/'+document.getElementById('eId').value,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
     var j = await r.json();
     if(r.status===409){ fundsToast(j.msg||'记录已变更，请刷新后重试','error'); reload(); return; }
-    if(j.code===0){ edM.hide(); fundsToast('记录已更新，审核状态可能需要重新确认','success'); reload(); loadStats(); }
+    if(j.code===0){ edM.hide(); fundsToast(j.ledger_sync==='failed'?j.msg:'记录已更新，审核状态可能需要重新确认',j.ledger_sync==='failed'?'error':'success'); reload(); loadStats(); }
     else fundsToast(j.msg || '操作失败','error');
   } catch(e){ fundsToast('保存失败：'+e.message,'error'); }
 }
@@ -167,7 +332,7 @@ async function delR(id,version){
     var result = await response.json();
     if (response.status===409){ fundsToast(result.msg||'记录已变更，请刷新后重试','error'); reload(); return; }
     if (!response.ok || result.code !== 0) throw new Error(result.msg || '服务端拒绝删除');
-    fundsToast('记录已删除','success');
+    fundsToast(result.ledger_sync==='failed'?result.msg:'记录已删除',result.ledger_sync==='failed'?'error':'success');
     reload(); loadStats();
   } catch(e){ fundsToast('删除失败：'+e.message,'error'); }
 }
@@ -178,7 +343,7 @@ async function reviewRecord(id,version){
     var r = await BusinessUI.fetch(API+'/'+id+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:version})});
     var j = await r.json();
     if(r.status===409){fundsToast(j.msg,'error');reload();return}
-    if(j.code===0){ fundsToast('已审核通过','success'); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
+    if(j.code===0){ fundsToast(j.ledger_sync==='failed'?j.msg:'已审核通过',j.ledger_sync==='failed'?'error':'success'); reload(); loadStats(); if(CAN_REVIEW)loadPending(); }
     else fundsToast(j.msg||'操作失败','error');
   }catch(e){ fundsToast('操作失败：'+e.message,'error'); }
 }
@@ -201,7 +366,8 @@ function loadStats(){
     if(result.code!==0)throw new Error(result.msg||'统计加载失败');
     var d = result.data, cnt = d.record_count;
     document.getElementById('sIn').textContent = '¥'+Money.format(d.total_in);
-    document.getElementById('sOut').textContent = '¥'+Money.format(d.total_out);
+    document.getElementById('sOut').textContent = '¥'+Money.format(d.approved_out);
+    document.getElementById('sPendingOut').textContent = '¥'+Money.format(d.unapproved_out);
     var bal = d.balance;
     document.getElementById('sBal').textContent = '¥'+Money.format(bal);
     document.getElementById('sBal').style.color = Money.compare(bal,'0.00')>=0?'var(--funds-balance-positive, #1890ff)':'#ff4d4f';
@@ -231,6 +397,7 @@ function loadChart(type, btn){
   chartAbort = new AbortController();
   document.querySelectorAll('#t-charts .btn-group .btn').forEach(function(b){ b.classList.remove('active'); });
   if(btn) btn.classList.add('active');
+  document.getElementById('chartImg').hidden = true;
   document.getElementById('chartImg').style.display = 'none';
   document.getElementById('chartEmp').textContent = '正在生成图表…';
   document.getElementById('chartEmp').style.display = 'block';
@@ -238,18 +405,20 @@ function loadChart(type, btn){
     if (generation !== chartRequest) return;
     if(j.code===0){
       document.getElementById('chartImg').src = j.data;
+      document.getElementById('chartImg').hidden = false;
       document.getElementById('chartImg').style.display = 'inline';
       document.getElementById('chartEmp').style.display = 'none';
     } else {
       document.getElementById('chartEmp').textContent = j.msg || '图表加载失败，请重新点击图表类型重试';
       document.getElementById('chartEmp').style.display = 'block';
-      document.getElementById('chartImg').style.display = 'none';
+      document.getElementById('chartImg').hidden = true;
+  document.getElementById('chartImg').style.display = 'none';
     }
   }).catch(function(e){
     if (generation !== chartRequest) return;
     document.getElementById('chartEmp').textContent='图表加载失败：'+e.message;
     document.getElementById('chartEmp').style.display='block';
-    document.getElementById('chartImg').style.display='none';
+    document.getElementById('chartImg').hidden=true;document.getElementById('chartImg').style.display='none';
   });
 }
 

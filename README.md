@@ -4,6 +4,8 @@
 
 > **代码状态与线上状态不同**：本文说明仓库 `main` 分支已经实现的功能，不代表生产服务器已部署同一提交。生产版本应由维护者核对部署记录；本仓库不会自动升级线上数据库。
 
+推荐使用 **[HTTPS 网页](https://manager.skywalker-rm.online/)**；部署支持代码后，可在 Chrome / Edge 安装为 PWA，或在 iOS Safari 添加到主屏幕。安装仍使用同一网站，离线仅显示无数据的连接说明。旧 Windows / Linux / Android 客户端继续保留。见[网页与 PWA 使用说明](docs/usage/网页与PWA.md)和[迁移、部署与回滚](docs/technical/PWA迁移与运维.md)。
+
 ## 快速开始
 
 需要 Python 3.13（CI 验证版本；其他 Python 版本以实际兼容性为准）。
@@ -16,6 +18,8 @@
     python app.py
 
 访问 **http://127.0.0.1:8520**（可通过 `PORT` 修改本地端口）。首次创建空库时会创建 `admin` 账户：使用 `PROGRESS_INITIAL_ADMIN_PASSWORD` 指定独立初始密码，或者从仅当前系统账户可读写的 `initial-admin-password.txt` 获取随机初始凭据（可用 `PROGRESS_INITIAL_CREDENTIALS_PATH` 指定路径）。首次登录必须改密，交付并改密后应删除该文件。已有数据库和账户不会因此重置。
+
+Windows 双击 **`start.bat`** 可同时启动 HTTP 服务和手机扫码用的 HTTPS 入口，默认端口分别为 `8520`、`8521`。启动器自动选择物理网卡的局域网 IPv4，也可运行 `start.bat --ip <电脑局域网IPv4>` 显式指定。手机首次使用需按[资产管理的手机扫码设置](docs/usage/资产管理.md#手机通过局域网调试摄像头)安装本地公开证书。在启动窗口按 `Ctrl+C` 会同时停止两处入口，原有数据库环境变量继续生效。若 HTTP 服务已由其他终端启动，则只运行 `python deploy/local_https.py --ip <电脑局域网IPv4>` 添加 HTTPS 入口，不再重复运行 `start.bat`。
 
 **不要将真实 `data.db`、`data/`、`secret.key`、发票或成员密码提交至 Git。**
 
@@ -52,18 +56,22 @@
 
 邮件服务首次部署与后续升级均自动安装 systemd 模板与共享环境配置，默认不启用发信；在服务器设置 `/etc/xtyf-manager/mail.env` 后自行启用邮件 timer，见[邮件服务配置](docs/technical/日常项目与邮件服务.md)。
 
-本仓库使用 GitHub Actions 在 PR、main 分支提交及手工触发时自动执行
+本仓库使用 GitHub Actions 在指向 `main` 的 PR 创建或更新时自动执行
 Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查与分支覆盖率统计。
 覆盖率报告见 Actions Summary 和 python-coverage Artifact。
 
     python -m pip install -r requirements-dev.txt
-    coverage run --branch --source=app,common,modules -m unittest discover -s tests -v
+    coverage run --branch --source=app,common,modules,deploy -m unittest discover -s tests -v
     coverage report -m
     node --test tests/js/*.test.cjs
 
 测试使用隔离的临时 SQLite 与文件目录，不会读写生产数据。
 完整功能覆盖矩阵、运行命令与不包括的浏览器 E2E 范围，见
 [测试与 GitHub Actions](docs/technical/测试与CI.md)。
+
+## 更新公告与发布日志
+
+登录后的顶部显示“网站已更新”公告，点击可进入 `/updates` 时间轴查看构建时缓存的最近 200 条 Git Commit 记录；成员也可通过侧栏随时打开更新日志。公告按用户和浏览器记录已读的部署 commit，并在页面保持打开时每分钟检查一次新版本。服务器无须访问 GitHub 或保留 `.git`；当发布包由 `deploy/package_release.py` 生成时自动写入 `site-release.json`。更多信息见 [更新公告与发布日志](docs/technical/更新公告与发布日志.md)。
 
 ## 部署与数据安全
 
@@ -73,7 +81,7 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 
 `deploy/backup.sh` 可以分别备份进度库、资金库，并在周日打包发票，但**不包含任务截图和密钥组成的同一恢复点**。生产升级之前应暂停写入，对所有数据库、附件、发票和密钥制作一致性备份并先演练恢复。详见[发布检查与数据恢复](docs/technical/发布检查与数据恢复.md)。
 
-现行服务使用 HTTP；HTTP 不提供传输加密，限制访问网络、权限和敏感数据传播是部署方必须处理的风险。这里不新增 HTTPS 开发任务。
+后端 Gunicorn 可继续使用内部 HTTP；正式浏览器入口推荐同源 HTTPS。手机摄像头本地调试可使用上述 HTTPS 入口。生产证书、入口跳转、代理及 Secure Cookie 需由部署方验收，本地调试代理不承担生产部署。
 
 ## 文档导航
 
@@ -91,3 +99,5 @@ Python 单元/API 回归测试、前端 JavaScript 单元测试、语法检查�
 ### 任务进度、依赖图与本地协作
 
 任务中心支持百分比进度、备注和图片历史及前置依赖图。协作页提供团队内部话题、回复和文件，不再连接 GitHub。参见 [本地协作](docs/technical/本地协作.md)。
+
+本轮全项目修复、隔离验证与回滚边界见 [2026-10-22 审查修复记录](docs/technical/全项目审查修复-2026-10-22.md)。依赖升级须同步修改 `requirements*.txt` 的固定版本并重新验证；部署不另行安装未固定的 Gunicorn。

@@ -28,6 +28,9 @@ dist/
 mail.env
 data/mail-preview/
 
+# Generated at deploy/package time, never committed.
+site-release.json
+
 # Client signing secrets and generated build resources belong to this stage.
 .build-tools/
 clients/signing/
@@ -44,3 +47,11 @@ clients/android/res/drawable-nodpi/xtyf_launcher.png
 # Restored on demand from npm tarballs pinned in vendor-lock.json.
 clients/frontend/vendor/
 client-ui-release/
+clients/windows/node_modules/
+
+# Local verification output and exact-base upgrade checkout.
+.ci-main-baseline/
+.coverage*
+htmlcov/
+coverage.xml
+coverage.json

@@ -64,7 +64,8 @@ function createScheduleSession(projectId, request, changed = () => {}, afterSave
     const liveIds = new Set(result.rows.filter(row => row.eligible && row.needs_duration).map(row => String(row.id)));
     context.draft.durations = Object.fromEntries(Object.entries({...context.draft.durations, ...result.durations})
       .filter(([id]) => liveIds.has(id)));
-    context.message = result.errors?.length ? "请处理下方问题，然后更新预览。" : result.changed_count
+    context.message = !result.rows.length ? "当前造车组别没有任务，请先在任务中心创建任务并选择该组别，再回来排期。"
+      : result.errors?.length ? "请处理下方问题，然后更新预览。" : result.changed_count
       ? "预览将调整 " + Number(result.changed_count) + " 项任务，确认后保存。" : "当前方案无需调整日期。";
     context.error = !!result.errors?.length;
     emit(true);
@@ -137,8 +138,39 @@ function scheduleProblemList(items, title, warning = false) {
     }).join("") + '</ul></section>';
 }
 
+function chooseScheduleProject() {
+  const projects = state.projects.filter(project => project.is_active !== 0);
+  const opened = showModal('<header class="modal-head"><h2>选择排期组别</h2><button class="btn ghost sm" type="button" data-schedule-choice-close>关闭</button></header>' +
+    '<p class="ux-note">一次预览一个造车组别；选择组别不会修改任务，确认应用后才保存日期。</p>' +
+    (projects.length ? '<form id="schedule-project-choice"><label>造车组别<select name="project" required>' + options(projects, "", "请选择造车组别") +
+      '</select></label><div class="modal-actions"><button class="btn primary" type="submit">查看排期预览</button></div></form>'
+      : '<p role="status">暂无可用造车组别，请先关闭此窗口，在本页新增造车组别。</p>'), "选择排期组别", {
+        returnFocus: () => document.getElementById("schedule-project"),
+      });
+  if (opened === false) return;
+  document.querySelector('[data-schedule-choice-close]').addEventListener('click', hideModal);
+  const form = document.getElementById('schedule-project-choice');
+  if (!form) return;
+  form.elements.project.focus();
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    const projectId = form.elements.project.value;
+    if (hideModal() === false) return;
+    taskFilters.project = projectId;
+    fillTaskFilters();
+    renderTaskTable();
+    openSchedulePreview(projectId);
+  });
+}
+
 async function openSchedulePreview(projectId) {
-  if (!isManagement() || !projectId) return;
+  if (!isManagement()) return;
+  const project = projectById(projectId);
+  if (!project || project.is_active === 0) {
+    chooseScheduleProject();
+    return;
+  }
   const projectKey = Number(projectId), previous = scheduleSessions.get(projectKey);
   if (previous && !previous.closed) {
     document.querySelector("[data-schedule-root]")?.querySelector("[data-schedule-close]")?.focus();
@@ -152,6 +184,7 @@ async function openSchedulePreview(projectId) {
     '<p id="schedule-stale" class="schedule-stale hidden" role="status">选项已修改，下方仍为上次预览；请更新预览。</p><div id="schedule-body"><p class="empty">正在生成预览…</p></div></div>' +
     '<footer class="schedule-footer"><p id="schedule-feedback" class="form-message" role="status" aria-live="polite"></p><div class="modal-actions"><button class="btn" type="button" id="schedule-repreview">更新预览</button><button class="btn primary" type="button" id="schedule-apply" disabled>确认应用排期</button></div></footer></div>', "整组排期预览", {
       className: "schedule-dialog", beforeClose: () => !session.saving,
+      returnFocus: () => document.getElementById("schedule-project"),
       onClose: () => { session.close(); scheduleSessions.delete(projectKey); },
     });
   if (opened === false) return;
@@ -167,7 +200,7 @@ async function openSchedulePreview(projectId) {
       base.value = context.draft.base_date;
       root.querySelector("#schedule-body").innerHTML = scheduleProblemList(result.errors, "请先处理以下问题")
         + scheduleProblemList(result.warnings, "排期提醒（不阻止应用）", true)
-        + '<div class="schedule-tasks">' + (schedulePreviewRows(result.rows, context.draft) || '<p class="empty">当前造车组别没有任务</p>') + '</div>';
+        + '<div class="schedule-tasks">' + (schedulePreviewRows(result.rows, context.draft) || '<p class="empty">当前造车组别没有任务。<a href="/tasks?type=vehicle">前往任务中心创建任务</a></p>') + '</div>';
       root.querySelectorAll("[data-schedule-task]").forEach(input => input.addEventListener("change", () => {
         context.draft.task_ids = [...root.querySelectorAll("[data-schedule-task]:checked")].map(item => Number(item.dataset.scheduleTask));
         context.invalidate();

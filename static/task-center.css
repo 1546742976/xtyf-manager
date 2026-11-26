@@ -27,7 +27,7 @@ body.task-create-open { overflow:hidden; }
 .task-create-grid .task-create-wide, #create-form .task-create-dependencies { grid-column:1/-1; }
 .task-create-dialog input, .task-create-dialog select, .task-create-dialog textarea { width:100%; min-width:0; max-width:100%; }
 .task-create-dialog input[type=checkbox] { width:auto; }
-.task-create-dialog textarea[name=detail] { width:100%; height:120px; min-height:120px; max-height:120px; resize:none; }
+.task-create-dialog textarea[name=detail] { width:100%; min-height:120px; }
 .task-create-dialog .choice-item { display:flex; min-height:44px; }
 .task-create-dialog .choice-host { max-height:180px; overflow:auto; }
 .task-date-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
@@ -85,3 +85,77 @@ body.task-create-open { overflow:hidden; }
   .task-create-actions .btn { flex:1; }
   .task-create-dialog input, .task-create-dialog select, .task-create-dialog textarea { font-size:16px; }
 }
+
+/* One task-state visual language across cards, dashboard rows and timeline rows.
+   Priority: blocked > overdue > due soon > dependency > normal workflow status.
+   The status and deadline badges remain text-based for accessibility. */
+.task-tone-blocked { --task-accent:var(--red); }
+.task-tone-overdue { --task-accent:var(--orange); }
+.task-tone-due-soon { --task-accent:#b47c00; }
+.task-tone-dependency { --task-accent:#7652ac; }
+.task-tone-in-progress { --task-accent:var(--blue); }
+.task-tone-not-started { --task-accent:var(--muted); }
+.task-tone-completed { --task-accent:var(--green); }
+.task-tone-cancelled { --task-accent:var(--gray); }
+:root[data-theme="dark"] .task-tone-due-soon { --task-accent:#edc55b; }
+:root[data-theme="dark"] .task-tone-dependency { --task-accent:#baa0f3; }
+:is(.task,.ws-task-row,.timeline-row)[class*="task-tone-"] {
+  border-inline-start:4px solid var(--task-accent);
+  background:var(--card);
+  background:color-mix(in srgb,var(--card) 95%,var(--task-accent));
+}
+:is(.task,.ws-task-row,.timeline-row)[class*="task-tone-"]:hover {
+  background:color-mix(in srgb,var(--card) 90%,var(--task-accent));
+}
+/* Strongest issue gets the full frame on every task surface, including compact rows. */
+:is(.task,.ws-task-row,.timeline-row).task-tone-blocked,
+:is(.task,.ws-task-row,.timeline-row).task-tone-blocked:hover {
+  border:2px solid var(--task-accent);
+  border-inline-start-width:5px;
+}
+/* An understated shadow pulse communicates urgency without moving or resizing cards. */
+.task-tone-blocked {
+  --task-breathe-duration:3.2s;
+  --task-breathe-spread:3px;
+  --task-breathe-opacity:23%;
+}
+.task-tone-overdue {
+  --task-breathe-duration:3.8s;
+  --task-breathe-spread:2.5px;
+  --task-breathe-opacity:18%;
+}
+.task-tone-due-soon {
+  --task-breathe-duration:4.6s;
+  --task-breathe-spread:2px;
+  --task-breathe-opacity:14%;
+}
+:where(.task,.ws-task-row,.timeline-row):is(.task-tone-blocked,.task-tone-overdue,.task-tone-due-soon) {
+  animation:task-state-breathe var(--task-breathe-duration) ease-in-out infinite;
+}
+@keyframes task-state-breathe {
+  0%,100% { box-shadow:0 0 0 0 transparent; }
+  50% {
+    box-shadow:0 0 0 var(--task-breathe-spread)
+      color-mix(in srgb,var(--task-accent) var(--task-breathe-opacity),transparent);
+  }
+}
+.badge.task-dependency {
+  background:color-mix(in srgb,var(--card) 84%,#7652ac);
+  color:var(--task-dependency-ink,#68429f);
+}
+:root[data-theme="dark"] .badge.task-dependency { --task-dependency-ink:#d4bffe; }
+.tree-task-meta .badge { padding:2px 5px; font-size:10px; }
+.task-tone-legend { display:flex;align-items:center;flex-wrap:wrap;gap:7px 14px;margin:8px 0 16px;color:var(--muted);font-size:12px; }
+.task-tone-legend-label { font-weight:600;color:var(--text); }
+.task-tone-legend > span:not(.task-tone-legend-label) { display:inline-flex;align-items:center;gap:5px; }
+.task-tone-legend i { display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--task-accent);flex:none; }
+.ws-dashboard-card .task-tone-legend { margin:10px 0 8px; }
+@media (prefers-reduced-motion:reduce) {
+  :where(.task,.ws-task-row,.timeline-row):is(.task-tone-blocked,.task-tone-overdue,.task-tone-due-soon) {
+    animation:none;
+  }
+}
+
+.badge.task-deadline-overdue { background:color-mix(in srgb,var(--card) 84%,var(--orange));color:var(--orange-text,var(--orange)); }
+.badge.task-deadline-soon { background:color-mix(in srgb,var(--card) 83%,#b47c00);color:#805900; }
+:root[data-theme="dark"] .badge.task-deadline-soon {background:#40321a;color:#f4d27d;}

@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS collaboration_messages (
  body TEXT NOT NULL, created_at TEXT NOT NULL, created_epoch REAL NOT NULL,
  withdrawn_at TEXT, withdrawn_by INTEGER REFERENCES members(id)
 );
+CREATE INDEX IF NOT EXISTS collaboration_messages_author ON collaboration_messages(author_id);
 CREATE INDEX IF NOT EXISTS collaboration_messages_topic ON collaboration_messages(topic_id,id);
 CREATE TABLE IF NOT EXISTS collaboration_attachments (
  id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES collaboration_messages(id),

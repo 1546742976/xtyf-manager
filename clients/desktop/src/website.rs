@@ -1,5 +1,5 @@
 use super::*;
-use tauri::webview::{DownloadEvent, NewWindowResponse, PermissionResponse, WebviewBuilder};
+use tauri::webview::{DownloadEvent, NewWindowResponse, WebviewBuilder};
 
 /// Discovery is anonymous. A server may upgrade its own HTTP origin, but never
 /// redirect credentials to another host/port or downgrade an HTTPS connection.
@@ -191,12 +191,13 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
     let download_directory = state.directory.join("website-downloads");
     fs::create_dir_all(&download_directory).map_err(|e| e.to_string())?;
     let pending = Arc::new(Mutex::new(HashMap::<PathBuf, (String, String)>::new()));
+    let camera_origin = origin.clone();
     let mut builder = WebviewBuilder::new("website-page", WebviewUrl::External(origin.clone()))
         .on_navigation(move |url| {
             if website_resource(&navigate_origin, url) { true }
             else { browse_elsewhere(&navigate_app, url); false }
         })
-        .on_permission_request(|_, _| PermissionResponse::Deny)
+        .on_permission_request(move |view, kind| crate::camera::request(view, kind, Some(&camera_origin)))
         .on_new_window(move |url, _| {
             if website_resource(&popup_origin, &url) {
                 let handle = popup_app.clone();
@@ -264,6 +265,7 @@ pub fn open(app: &tauri::AppHandle, state: &AppState, prepared: Prepared) -> Res
     if smoke_directory().is_some() { builder = builder.data_directory(state.directory.join("webview")); }
     match window.add_child(builder, tauri::PhysicalPosition::new(0, 0), size) {
         Ok(view) => {
+            if let Err(error) = crate::camera::configure(&view) { close(app); return Err(error); }
             if let Some(local) = app.get_webview("main") { let _ = local.hide(); }
             let _ = view.set_focus();
             Ok(json!({"opened":true,"effectiveServerUrl":origin.origin().ascii_serialization()}))

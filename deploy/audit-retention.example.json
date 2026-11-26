@@ -1,0 +1,6 @@
+{
+  "critical": 365,
+  "important": 180,
+  "normal": 90,
+  "routine": 7
+}

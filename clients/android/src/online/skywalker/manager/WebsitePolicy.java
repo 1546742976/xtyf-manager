@@ -5,6 +5,10 @@ import java.net.URI;
 
 /** Shared origin checks for the unprivileged website view and its download channel. */
 final class WebsitePolicy {
+    static boolean camera(String origin, String document, String requester) {
+        return origin != null && origin.startsWith("https://")
+            && trusted(origin, document) && trusted(origin, requester);
+    }
     static boolean trusted(String origin, String value) {
         try {
             URI target = URI.create(value); String withoutFragment = target.toString().split("#", 2)[0];

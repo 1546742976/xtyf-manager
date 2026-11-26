@@ -4,13 +4,14 @@
   const isLocal=url=>url.protocol===location.protocol&&url.host===location.host;
   const routes={
     '/':['dashboard.html','dashboard'], '/login':['login.html','login'], '/tasks':['board.html','tasks'],
-    '/account':['account.html','account'], '/manage':['manage.html','manage','manage_tasks'],
+    '/account':['account.html','account'], '/updates':['site_updates.html','updates'], '/manage':['manage.html','manage','manage_tasks'],
     '/members':['members.html','members','manage_members'], '/discussions':['discussions.html','discussions'],
     '/funds':['funds.html','funds','access_funds'], '/invoices':['invoices.html','invoices'],
+    '/assets':['assets.html','assets'], '/assets/detail':['assets.html','assets'],
     '/admin/mail':['mail_admin.html','mail','manage_mail'],
     '/admin/security':['security.html','security','manage_security']
   };
-  const anonymousBootstrap=()=>({authenticated:false,me:null,user:null,permissions:{},role_names:{admin:'管理员',manager:'管理人员',member:'成员'},statuses:[],priorities:[]});
+  const anonymousBootstrap=()=>({authenticated:false,me:null,user:null,permissions:{},role_names:{admin:'超级管理员',manager:'管理人员',member:'成员'},statuses:[],priorities:[]});
   let config={serverUrl:'',version:''},bootstrap=anonymousBootstrap();
   let route='/',frame=null,sequence=0,generation=0,historyIndex=0,serverGeneration=0,bootSequence=0,bootstrapSequence=0,booting=false,compatible=false,preview=null,noticeTimer;
   let compatibilityRejected=false,nativeInitialized=false,locallyReady=false,healthySent=false,nativeForeground=true,updatesServer=null,updateState={status:'unavailable'};
@@ -145,6 +146,7 @@
     if(bootstrap.authenticated&&key==='/login'){
       setRoute(url.searchParams.get('next')||'/',true,false);return renderRoute();
     }
+    if(key.startsWith('/assets')&&!bootstrap.assets_enabled)return localError('服务器暂未启用资产管理','请联系管理员更新服务器；已有任务和其他业务仍可正常使用。');
     if(entry[2]&&!bootstrap.permissions[entry[2]])return localError('没有访问权限','当前账户不能访问此页面。');
     const taskType=url.searchParams.get('type')==='daily'?'daily':'vehicle',project=url.searchParams.get('project')||'';
     const context={...bootstrap,page:entry[1],task_type:taskType,project_id:taskType==='daily'&&/^[1-9]\d{0,18}$/.test(project)?project:''};
@@ -153,6 +155,7 @@
     if(frame)frame.remove();
     frame=document.createElement('iframe');frame.title='巡天御风工作空间';
     frame.setAttribute('referrerpolicy','no-referrer');
+    frame.setAttribute('allow',"camera 'self'");
     // Both template and scripts are packaged. All server strings were escaped by the compiler.
     frame.srcdoc=html.replace('<head>','<head><base href="'+localBase+'/"><script src="/page-runtime.js"></script>');
     host.replaceChildren(frame);document.title='巡天御风管理系统';

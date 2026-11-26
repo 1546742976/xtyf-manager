@@ -64,7 +64,7 @@ async function login(page, base, username, password, newPassword) {
       return page;
     }
     const admin = await newPage();
-    await login(admin, base, 'admin', '123456', 'review-admin-password');
+    await login(admin, base, 'admin', 'browser-test-initial', 'review-admin-password');
     const owner = await api(admin, '/api/member', {name: '日常负责人', username: 'repair_owner', password: 'owner-password'});
     const reader = await api(admin, '/api/member', {name: '只读成员', username: 'repair_reader', password: 'reader-password'});
     assert.ok(owner.id && reader.id);

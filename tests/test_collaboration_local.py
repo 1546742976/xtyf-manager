@@ -27,7 +27,7 @@ class LocalCollaborationTests(unittest.TestCase):
         cls.app = app_module.app
         cls.admin = cls.app.test_client()
         assert cls.admin.post('/login', json={
-            'username': 'admin', 'password': '123456',
+            'username': 'admin', 'password': 'ci-test-password-only',
         }).get_json()['ok']
         cls.users = {}
         for role in ('author', 'reader', 'manager'):
@@ -113,11 +113,11 @@ class LocalCollaborationTests(unittest.TestCase):
         self.assertFalse(self.author.get(f'{API}/topics/{tid}/messages').get_json()['messages'][0]['withdrawn'])
 
     def test_title_body_limits_and_literal_text_are_preserved(self):
-        title, body = '题' * 120, '文' * 5000
+        title, body = '题' * 120, '文' * 20000
         topic = self.topic(title=title, body=body)
         self.assertEqual(topic['topic']['title'], title)
         self.assertEqual(topic['message']['body'], body)
-        for fields in ({'title': '题' * 121}, {'title': ' \n '}, {'body': '文' * 5001}, {'body': 'x' + ' ' * 5000},
+        for fields in ({'title': '题' * 121}, {'title': ' \n '}, {'body': '文' * 20001}, {'body': 'x' + ' ' * 20000},
                        {'body': ' \n '}, {'submission_id': 'bad!'}):
             with self.subTest(fields=list(fields)):
                 response = self.author.post(API + '/topics', json={
@@ -214,6 +214,42 @@ class LocalCollaborationTests(unittest.TestCase):
         self.assertTrue(any(event['kind'] == 'message_withdrawn' and event['message_id'] == reply['message_id'] for event in data['events']))
         self.assertNotIn(body, response.get_data(as_text=True))
         self.assertEqual(self.reader.get(f"{API}/topics/{tid}/changes?after={data['cursor']}").get_json()['events'], [])
+
+    def test_withdrawn_reply_visible_only_to_author_across_apis_and_files(self):
+        topic = self.topic()
+        tid = topic['topic_id']
+        secret = '仅发送者可见-' + uuid4().hex
+        response = self.upload(tid, [('作者附件.txt', b'private-original')], body=secret)
+        self.assertEqual(response.status_code, 201, response.get_json())
+        message = response.get_json()['message']
+        mid = message['id']
+        file_url = message['attachments'][0]['download_url']
+        cursor = self.reader.get(f'{API}/topics/{tid}/messages').get_json()['cursor']
+        self.assertEqual(self.manager.post(f'{API}/messages/{mid}/withdraw', json={}).status_code, 200)
+
+        # A manager who performed the withdrawal has no access to the author's
+        # content; an administrator does not bypass this rule either.
+        for client in (self.reader, self.manager, self.admin):
+            with self.subTest(viewer=client):
+                messages = client.get(f'{API}/topics/{tid}/messages').get_json()['messages']
+                withdrawn = next(item for item in messages if item['id'] == mid)
+                self.assertTrue(withdrawn['withdrawn'])
+                self.assertEqual(withdrawn['body'], '')
+                self.assertEqual(withdrawn['attachments'], [])
+                changes = client.get(f'{API}/topics/{tid}/changes?after={cursor}')
+                self.assertNotIn(secret, changes.get_data(as_text=True))
+                self.assertNotIn('作者附件.txt', changes.get_data(as_text=True))
+                self.assertEqual(client.get(file_url).status_code, 404)
+
+        author_rows = self.author.get(f'{API}/topics/{tid}/messages').get_json()['messages']
+        original = next(item for item in author_rows if item['id'] == mid)
+        self.assertTrue(original['withdrawn'])
+        self.assertEqual(original['body'], secret)
+        self.assertEqual(original['attachments'][0]['download_url'], file_url)
+        events = self.author.get(f'{API}/topics/{tid}/changes?after={cursor}').get_json()['events']
+        self.assertTrue(any(event['kind'] == 'message_withdrawn' and
+                            event['message']['body'] == secret for event in events))
+        self.assertEqual(self.author.get(file_url).data, b'private-original')
 
     def test_message_cursor_pages_are_ascending_without_gaps(self):
         topic = self.topic()
@@ -415,6 +451,9 @@ class LocalCollaborationTests(unittest.TestCase):
         withdrawn = next(row for row in rows if row['id'] == message['id'])
         self.assertEqual(withdrawn['attachments'], [])
         self.assertTrue(withdrawn['withdrawn'])
+        own = self.author.get(f'{API}/topics/{tid}/messages').get_json()['messages']
+        self.assertEqual(next(row for row in own if row['id'] == message['id'])['attachments'][0]['name'], '撤回原件.zip')
+        self.assertEqual(self.author.get(attachment['download_url']).data, b'keep-for-snapshot')
         self.assertEqual(self.disk_files(), files_before)
 
     def test_attachment_limits_and_failed_finalization_leave_no_partial_message(self):

@@ -4,16 +4,57 @@ const {chromium,webkit,devices}=require('playwright');
 const root=path.resolve(__dirname,'../..'),out=path.join(root,'.venv','palette-workspace-check');fs.mkdirSync(out,{recursive:true});
 const palettes=['silver','rm-light','mist','paw','space','rm-dark','graphite','xueli'];
 const widths=[375,390,767,768,850,1280];
+// The vector fills its native viewBox; ensure rounded logo hosts cannot cut it off.
+async function assertCompleteLogo(page, selector) {
+ const logo=await page.locator(selector).evaluate(host=>{
+  const img=host.querySelector('img.brand-logo');
+  const style=getComputedStyle(img), outer=getComputedStyle(host);
+  return {
+   path:new URL(img.currentSrc||img.src).pathname,
+   loaded:img.complete&&img.naturalWidth>0&&img.naturalHeight>0,
+   clip:outer.overflow, fit:style.objectFit,
+   padding:[style.paddingTop,style.paddingRight,style.paddingBottom,style.paddingLeft].map(parseFloat),
+  };
+ });
+ assert.equal(logo.path,'/static/brand/xtyf-logo.svg');
+ assert.equal(logo.loaded,true);
+ assert.equal(logo.clip,'visible');
+ assert.equal(logo.fit,'contain');
+ assert.ok(logo.padding.every(value=>value>=3),JSON.stringify(logo));
+}
+// Exercise the shared sidebar badge on pages with different stylesheet stacks.
+async function assertSidebarUnreadBadge(page, url) {
+ const metrics=await page.locator('#collab-unread').evaluate(el=>{
+  // Simulate a nonzero unread count without relying on persisted message fixtures.
+  el.hidden=false;el.style.removeProperty('display');el.textContent='99+';
+  const style=getComputedStyle(el),rect=el.getBoundingClientRect();
+  return {display:style.display,background:style.backgroundColor,color:style.color,
+   radius:parseFloat(style.borderRadius),fontSize:style.fontSize,
+   width:rect.width,height:rect.height,padding:parseFloat(style.paddingLeft)};
+ });
+ // CSS blockifies inline-flex on flex items, so getComputedStyle reports flex.
+ assert.equal(metrics.display,'flex',`${url} unread badge display`);
+ assert.equal(metrics.background,'rgb(227, 76, 95)',`${url} unread badge background`);
+ assert.equal(metrics.color,'rgb(255, 255, 255)',`${url} unread badge foreground`);
+ assert.equal(metrics.fontSize,'11px',`${url} unread badge font size`);
+ assert.ok(metrics.radius>=10 && metrics.height>=20 && metrics.height<=22 &&
+  metrics.width>=metrics.height && metrics.padding>=6,`${url} unread badge shape: ${JSON.stringify(metrics)}`);
+}
 (async()=>{
  const server=spawn(process.env.REVIEW_PYTHON||'python',['-B',path.join(__dirname,'theme_server.py')],{cwd:root,env:process.env,stdio:['ignore','pipe','pipe']});let browser,log='';const results=[];
  try{
   const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error(log)),30000);server.stderr.on('data',d=>log+=d);server.stdout.on('data',d=>{const m=String(d).match(/THEME_DEMO_URL=(\S+)/);if(m){clearTimeout(timer);resolve(m[1]);}});server.once('exit',code=>{clearTimeout(timer);reject(Error('server '+code+' '+log));});});
   browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'});const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await context.route('**/discussions/api/**',r=>r.fulfill({json:{ok:true,source:'api',items:[]}}));
-  await page.goto(base+'/login');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('123456');await page.locator('#login-form button[type=submit]').click();await page.waitForURL(base+'/');
+  await page.goto(base+'/login');await assertCompleteLogo(page,'.login-mark');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('theme-demo-password');await page.locator('#login-form button[type=submit]').click();await page.waitForURL(base+'/');
   const api=async(url,data,method='POST')=>page.evaluate(async({url,data,method})=>{const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return {status:r.status,...await r.json()};},{url,data,method});
   const today=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Shanghai'}));today.setDate(today.getDate()+24);const target=[today.getFullYear(),String(today.getMonth()+1).padStart(2,'0'),String(today.getDate()).padStart(2,'0')].join('-');
   assert.equal((await api('/api/workspace/countdown',{title:'完整形态考核',target_date:target,version:1},'PUT')).ok,true);await page.reload();
+  for(const url of ['/','/invoices/','/funds/']){
+   await page.goto(base+url);
+   await assertSidebarUnreadBadge(page,url);
+  }
+
   for(const [i,palette] of palettes.entries()){
    await page.setViewportSize({width:1280,height:900});
    await page.goto(base+'/account');
@@ -25,6 +66,7 @@ const widths=[375,390,767,768,850,1280];
     assert.match(await page.locator('[data-palette-choice="rm-dark"]').innerText(),/黑白极简/);
    }
    await page.goto(base+'/');
+   await assertCompleteLogo(page,'.ws-brand-mark');
    assert.equal(await page.locator('[data-palette-choice]').count(),0,'workspace shortcuts do not expose palette choices');
    const contrast=await page.evaluate(()=>{
     const s=getComputedStyle(document.documentElement);const rgb=v=>{const e=document.createElement('span');e.style.color=v;document.body.append(e);const a=getComputedStyle(e).color.match(/[\d.]+/g).slice(0,3).map(Number);e.remove();return a;};
@@ -59,7 +101,7 @@ const widths=[375,390,767,768,850,1280];
   await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{document.documentElement.style.fontSize='20px';});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   assert.deepEqual(errors,[]);await browser.close();browser=null;
   const webkitPath=process.env.REVIEW_WEBKIT_PATH;let webkitAvailable=fs.existsSync(webkitPath||webkit.executablePath());
-  if(webkitAvailable){browser=await webkit.launch({headless:true,...(webkitPath?{executablePath:webkitPath}:{})});const p=await browser.newPage({...devices['iPhone 13']});await p.goto(base+'/login');await p.locator('[name=username]').fill('admin');await p.locator('[name=password]').fill('123456');await p.locator('#login-form button[type=submit]').click();await p.waitForURL(base+'/');await p.goto(base+'/account');await p.locator('[data-palette-choice=xueli]').click();await p.waitForFunction(()=>document.documentElement.dataset.palette==='xueli'&&!document.querySelector('[data-theme-toggle]').disabled);await p.goto(base+'/');assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await p.screenshot({path:path.join(out,'webkit-iphone13-xueli.png'),fullPage:true});results.push({engine:'WebKit',device:'iPhone 13 emulation',passed:true});}
+  if(webkitAvailable){browser=await webkit.launch({headless:true,...(webkitPath?{executablePath:webkitPath}:{})});const p=await browser.newPage({...devices['iPhone 13']});await p.goto(base+'/login');await p.locator('[name=username]').fill('admin');await p.locator('[name=password]').fill('theme-demo-password');await p.locator('#login-form button[type=submit]').click();await p.waitForURL(base+'/');await p.goto(base+'/account');await p.locator('[data-palette-choice=xueli]').click();await p.waitForFunction(()=>document.documentElement.dataset.palette==='xueli'&&!document.querySelector('[data-theme-toggle]').disabled);await p.goto(base+'/');assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await p.screenshot({path:path.join(out,'webkit-iphone13-xueli.png'),fullPage:true});results.push({engine:'WebKit',device:'iPhone 13 emulation',passed:true});}
   fs.writeFileSync(path.join(out,'result.json'),JSON.stringify({ok:true,results,webkitAvailable,realDevices:false},null,2));console.log('PALETTES_OK '+JSON.stringify({palettes:8,widths:6,results,realDevices:false}));
  }catch(e){console.error(e);console.error(log.slice(-2000));process.exitCode=1;}finally{if(browser)await browser.close();server.kill();}
 })();

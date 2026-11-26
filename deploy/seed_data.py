@@ -49,6 +49,8 @@ def main(data_path=None):
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys=ON')
+    # Keep the whole import atomic, including catalog rows and credentials.
+    db.execute('BEGIN IMMEDIATE')
     created_members = []
     created_tasks = []
     try:
@@ -76,14 +78,13 @@ def main(data_path=None):
         for name, username, group_name, role in members:
             if db.execute('SELECT 1 FROM members WHERE username=?', (username,)).fetchone():
                 continue
-            with db:
-                group_ids = _catalog(db, 'groups', group_name)
-                initial_password = secrets.token_urlsafe(10)
-                member_id = db.execute(
-                    'INSERT INTO members(name,username,password_hash,group_name,role,created_at,must_change_password) '
-                    'VALUES(?,?,?,?,?,?,1)',
-                    (name, username, generate_password_hash(initial_password), '', role, NOW)).lastrowid
-                _set_member_groups(db, member_id, group_ids)
+            group_ids = _catalog(db, 'groups', group_name)
+            initial_password = secrets.token_urlsafe(10)
+            member_id = db.execute(
+                'INSERT INTO members(name,username,password_hash,group_name,role,created_at,must_change_password) '
+                'VALUES(?,?,?,?,?,?,1)',
+                (name, username, generate_password_hash(initial_password), '', role, NOW)).lastrowid
+            _set_member_groups(db, member_id, group_ids)
             created_members.append(f'{name}（{username} / {initial_password}）')
         for title, username, project, group_name, status, progress, priority, detail in tasks:
             owner = db.execute('SELECT id FROM members WHERE username=? AND is_active=1 '
@@ -92,22 +93,24 @@ def main(data_path=None):
                 raise RuntimeError(f'负责人不存在或不可用，拒绝导入任务：{title}')
             if db.execute('SELECT 1 FROM tasks WHERE title=? AND owner_id=?', (title, owner['id'])).fetchone():
                 continue
-            with db:
-                group_ids = _catalog(db, 'groups', group_name)
-                project_ids = _catalog(db, 'projects', project)
+            group_ids = _catalog(db, 'groups', group_name)
+            project_ids = _catalog(db, 'projects', project)
             if len(project_ids) > 1:
                 raise RuntimeError('每个任务只能选择一个造车组别')
             task_id, version, error, status_code = create_task(db, dict(actor), {
                 'title': title, 'detail': detail, 'owner_id': owner['id'],
                 'project_id': project_ids[0] if project_ids else None,
-                'group_ids': group_ids, 'priority': priority, 'status': status})
+                'group_ids': group_ids, 'priority': priority, 'status': status}, manage_transaction=False)
             if error:
                 raise RuntimeError(f'任务导入失败：{title}：{error}')
-            with db:
-                existing = [row[0] for row in db.execute(
-                    'SELECT project_id FROM member_projects WHERE member_id=?', (owner['id'],))]
-                _set_member_projects(db, owner['id'], sorted(set(existing + project_ids)))
+            existing = [row[0] for row in db.execute(
+                'SELECT project_id FROM member_projects WHERE member_id=?', (owner['id'],))]
+            _set_member_projects(db, owner['id'], sorted(set(existing + project_ids)))
             created_tasks.append(f'{title} → {username}')
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

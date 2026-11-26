@@ -47,9 +47,9 @@ function timelineTaskRow(task, range) {
   const bar = position
     ? `<span class="timeline-bar ${position.sameDay ? "same-day" : ""} ${["已完成", "已取消"].includes(status) ? "is-finished" : ""}" style="left:${position.left}%;width:${position.width}%"></span>`
     : '<span class="timeline-no-date">日期待完善</span>';
-  return `<button type="button" class="timeline-row ${status === "阻塞" ? "is-blocked" : ""}" data-task-id="${Number(task.id)}" aria-label="查看任务 ${esc(task.title)}，${esc(owner)}，${esc(status)}，${esc(dateText)}">
+  return `<button type="button" class="timeline-row ${taskHighlightClasses(task)}" data-task-id="${Number(task.id)}" aria-label="查看任务 ${esc(task.title)}，${esc(owner)}，${esc(status)}，${esc(dateText)}">
     <span class="timeline-task-info"><span class="timeline-task-title">${esc(task.title)}</span>
-      <span class="timeline-task-meta"><span>${esc(owner)}</span>${badge(status, STATUS_CLASS[status] || "gray")}</span>
+      <span class="timeline-task-meta"><span>${esc(owner)}</span>${badge(status, STATUS_CLASS[status] || "gray")}${taskAttentionBadge(task, true)}</span>
       <span class="timeline-task-dates ${dates.error ? "has-date-error" : ""}">${esc(dateText)}</span></span>
     <span class="timeline-track" aria-hidden="true">${timelineTicks(range).map((tick) => `<i class="timeline-gridline" style="left:${tick.left}%"></i>`).join("")}${bar}</span></button>`;
 }

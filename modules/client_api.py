@@ -7,7 +7,7 @@ local UI, including when a first-login password change is required.
 from flask import Blueprint, jsonify, request, session
 
 from common import ROLE_NAMES, current_user
-from modules.funds import can_review
+from modules.funds import can_review, is_personal_reviewer
 from modules.invoice_validation import STATUSES as INVOICE_STATUSES
 from modules.security import csrf_token, has_permission
 from modules.workspace_settings import DARK_THEMES, LIGHT_THEMES, THEME_MODES, preferences
@@ -33,22 +33,28 @@ def create_client_blueprint(authenticate, statuses, priorities):
         manager = bool(ready and user["role"] in ("admin", "manager"))
         admin = bool(ready and user["role"] == "admin")
         review = bool(ready and can_review(user))
+        personal_reviewer = bool(ready and is_personal_reviewer(user))
         invoices = bool(ready and has_permission("invoices.manage", user))
         return jsonify(
             ok=True,
             protocolVersion=PROTOCOL_VERSION,
             uiCompatibility={"protocolMin": 1, "protocolMax": 1},
+            assets_enabled=True,
+            asset_units_enabled=True,
+            asset_intake_enabled=True,
             authenticated=user is not None,
             user=public_user,
             me=public_user,
             permissions={
                 "manage_tasks": manager,
                 "manage_members": manager,
-                "access_funds": manager,
+                "access_funds": ready,
+                "match_personal_invoices": personal_reviewer and invoices,
                 "review_funds": review,
                 "manage_invoices": invoices,
                 "manage_mail": admin,
                 "manage_security": admin,
+                "manage_assets": bool(ready and (manager or has_permission("assets.manage", user))),
             },
             role_names=ROLE_NAMES,
             statuses=list(statuses),
@@ -62,6 +68,8 @@ def create_client_blueprint(authenticate, statuses, priorities):
             },
             can_review_funds=review,
             can_review=review,
+            personal_reviewer=personal_reviewer,
+            can_match_personal_invoices=personal_reviewer and invoices,
             can_manage_invoices=invoices,
             is_finance=invoices,
             csrf_token=csrf_token(),

@@ -10,7 +10,7 @@ function setup() {
   const image = {style: {}, src: ''}, empty = {style: {}, textContent: ''};
   const button = {classList: {add() {}, remove() {}}};
   const nodes = {chartImg: image, chartEmp: empty, 't-charts': {classList: {contains: (v) => classes.has(v)}}};
-  const context = {URLSearchParams, AbortController, setTimeout, clearTimeout,
+  const context = {URLSearchParams, AbortController, setTimeout, clearTimeout, addEventListener(){},
     XTYF_USER: {name: 'Admin'},
     document: {documentElement: {dataset: {palette: 'silver'}},
       addEventListener(name, callback) { listeners[name] = callback; },

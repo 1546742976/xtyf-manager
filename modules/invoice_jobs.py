@@ -6,7 +6,7 @@ import uuid
 from contextlib import contextmanager
 
 from common import DB_PATH
-from modules.security import audit_background_finish, audit_background_start
+from modules.security import audit_background_finish, audit_background_start, permission_is_current
 
 JOB_TYPES = {'scan_dups', 'organize', 'refresh', 'delete_dups'}
 TERMINAL = {'done', 'error', 'interrupted'}
@@ -84,6 +84,12 @@ def get_job(jid):
         return _serialize(db.execute('SELECT * FROM invoice_jobs WHERE id=?', (jid,)).fetchone())
 
 
+def actor_is_current(user_id, session_version):
+    """Validate a stream viewer without retaining a Flask or SQLite context."""
+    with _db() as db:
+        return permission_is_current(db, user_id, 'invoices.manage', session_version)
+
+
 def list_jobs():
     with _db() as db:
         rows = db.execute(
@@ -143,12 +149,7 @@ def recover_and_claim():
             row = db.execute("SELECT * FROM invoice_jobs WHERE status='queued' ORDER BY created_at,id LIMIT 1").fetchone()
             if row is None:
                 return None
-            allowed = db.execute(
-                "SELECT 1 FROM members m JOIN member_permissions p ON p.member_id=m.id "
-                "WHERE m.id=? AND m.is_active=1 AND m.deleted_at IS NULL AND m.must_change_password=0 "
-                "AND m.session_version=? AND p.permission='invoices.manage'",
-                (row['actor_id'], row['session_version']),
-            ).fetchone()
+            allowed = permission_is_current(db, row['actor_id'], 'invoices.manage', row['session_version'])
             if not allowed:
                 _finish(db, row, 'error', '发起人的账号或财务授权已变更，请重新登录后发起',
                         {'error': '发起人的账号或财务授权已变更'}, 'failure')

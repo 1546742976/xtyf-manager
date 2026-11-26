@@ -248,14 +248,32 @@ def render_verification_html(code):
                '<p style="margin:14px 0 12px;font-size:13px;color:#9b531b">'
                '验证码 30 分钟内有效，请勿转发给他人。</p>'
                '<p style="margin:0 0 12px;font-size:13px;line-height:1.8;'
-               'color:#52647c">验证后每天北京时间 08:00 接收个人任务早报、'
-               '22:00 接收团队项目晚报（包含周末）；仅收录进行中、阻塞或未开始但已逾期的事项，'
-               '无符合提醒条件的事项时跳过对应日报。</p>'
+               'color:#52647c">验证后可在个人账户中分别调整个人、团队及倒计时邮件的发送频率。'
+               '无符合提醒条件的任务时将跳过汇总邮件。</p>'
                '<p style="margin:0;font-size:12px;color:#718098">'
                '如非本人操作，请忽略此邮件。系统不会通过邮件向您索取密码。</p>')
     return _document('邮箱验证码', '账户安全 / 邮箱绑定',
                      '请前往网站个人账户页面输入验证码', details,
                      '您的邮箱绑定验证码已生成，30 分钟内有效')
+
+
+
+def render_password_recovery_html(code):
+    details = (
+        '<p style="margin:0 0 15px;font-size:14px;color:#52647c;line-height:1.8">'
+        '有人申请重置此账号的密码。如是您本人操作，请在登录页面的找回密码表单输入下方验证码。</p>'
+        '<table role="presentation" width="100%" cellspacing="0" cellpadding="0">'
+        '<tr><td align="center" style="padding:20px;background:#ebf2fd;border:1px solid #d9e6fa">'
+        f'<span style="font-size:32px;letter-spacing:7px;color:#1e4d95;font-weight:700">{_e(code)}</span>'
+        '</td></tr></table>'
+        '<p style="margin:15px 0;font-size:13px;color:#9b531b">验证码 15 分钟内有效，'
+        '最多尝试 5 次，请勿转发。</p>'
+        '<p style="margin:0;font-size:13px;color:#718098">如非本人操作，请忽略此邮件。'
+        '系统不会通过邮件索取密码。</p>'
+    )
+    return _document('重置登录密码', '账户安全 / 密码找回',
+                     '请在原登录页面输入验证码并设置新密码', details,
+                     '巡天御风密码重置验证码，15 分钟内有效')
 
 
 def render_test_html():

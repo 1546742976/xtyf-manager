@@ -9,7 +9,7 @@ from common import get_db
 class TestCrossProjectSchedule(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        self.assertEqual(self.admin.post('/login', json={'username': 'admin', 'password': '123456'}).status_code, 200)
+        self.assertEqual(self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'}).status_code, 200)
         marker = uuid4().hex[:12]
         self.project = self.admin.post('/api/projects', json={'name': '排期本组' + marker}).get_json()['id']
         self.external_project = self.admin.post('/api/projects', json={'name': '排期外组' + marker}).get_json()['id']

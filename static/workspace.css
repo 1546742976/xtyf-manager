@@ -15,7 +15,14 @@ body.ws-app { margin:0 !important; min-width:0 !important; background:#f3f6fb !i
 .ws-nav-link:hover,.ws-signout:hover{background:#213955;color:#fff !important}
 .ws-nav-link.is-active{background:#2b4b74;color:#fff !important}
 .ws-nav-link.is-active::before{content:"";position:absolute;left:-14px;top:10px;bottom:10px;width:3px;background:#60c8ef;border-radius:0 3px 3px 0}
-.ws-nav-link .nav-badge{margin-left:auto;background:#e34c5f !important}
+/* Sidebar counters must be self-contained: invoices/funds do not load style.css. */
+.ws-nav-link .nav-badge{
+  display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+  min-width:20px;height:20px;padding:0 6px;margin-left:auto;
+  border-radius:999px;background:#e34c5f !important;color:#fff;
+  font-size:11px;font-weight:600;line-height:1;white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
 .ws-sidebar-bottom{margin:0 14px 15px;padding-top:13px;border-top:1px solid #314761}
 .ws-user-card{display:flex;gap:10px;align-items:center;padding:8px 6px;color:#fff !important;text-decoration:none}
 .ws-avatar,.ws-top-avatar{display:grid;place-items:center;border-radius:12px;background:#dbe9ff;color:#2550a4;font-weight:800;flex:none}
@@ -27,14 +34,14 @@ body.ws-app { margin:0 !important; min-width:0 !important; background:#f3f6fb !i
 .ios-install ol{padding-left:20px;margin:8px 0}
 .ios-install p{margin:8px 0 0}
 .ws-signout{display:flex;gap:11px;align-items:center;color:#a8bbd6 !important;font-size:12px;padding:10px 9px;border-radius:10px;text-decoration:none}
-.workspace-main{margin-left:242px;min-width:0;min-height:100vh}
+.workspace-main{margin-left:242px;min-width:0;min-height:100vh;display:flex;flex-direction:column}
 .workspace-topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:70;background:#fff;border-bottom:1px solid #e3eaf3;padding:0 32px;min-height:69px}
 .ws-breadcrumb{display:flex;gap:13px;align-items:center;font-size:13px;color:#8798b1}.ws-breadcrumb a{color:#8798b1}.ws-breadcrumb strong{font-weight:700;color:#1b304d}.ws-breadcrumb-sep{color:#c0c9d6}
 .ws-top-user{display:flex;align-items:center;gap:11px;text-decoration:none;color:#657895 !important;font-size:12px}.ws-top-avatar{width:33px;height:33px;border-radius:50%}
 .ws-menu-toggle{display:none;flex-direction:column;gap:4px;justify-content:center;align-items:center;background:#fff;border:1px solid #dfe7f4;border-radius:9px;width:38px;height:38px;cursor:pointer}
 .ws-menu-toggle span{width:17px;height:2px;background:#274463;border-radius:2px}
 .ws-sidebar-overlay{display:none}
-.ws-app .workspace-content{min-width:0;padding-bottom:36px}
+.ws-app .workspace-content{min-width:0;flex:1 0 auto;padding-bottom:36px}
 .ws-app .workspace-main > .container,.ws-app .workspace-main > .container-fluid {max-width:none !important;width:100%;margin:0 !important;padding:28px 32px !important;}
 .ws-app .workspace-main .page-head{max-width:none !important;padding:27px 32px 0 !important;background:transparent !important;border:0 !important}
 .ws-app .workspace-main .page-head h1,.ws-app .workspace-main .ux-page-head h1 {font-size:clamp(23px,2.4vw,31px) !important;color:#182a44}
@@ -54,7 +61,12 @@ body.ws-app { margin:0 !important; min-width:0 !important; background:#f3f6fb !i
 .ws-app .ws-section-lead{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
 .ws-app .ws-section-lead h2{margin:0 !important}.ws-app .ws-section-lead a{font-size:13px}
 .ws-dashboard-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin:0 0 20px}
-.ws-dashboard-stat{padding:20px;border:1px solid #e1e9f4;border-radius:16px;background:#fff;min-height:125px}
+.ws-dashboard-stat{display:block;padding:20px;border:1px solid #e1e9f4;border-radius:16px;background:#fff;min-height:125px;color:inherit;text-decoration:none}
+.ws-dashboard-stat:hover{border-color:#8eaee0;background:var(--surface-inset,#f8fbff);text-decoration:none;color:inherit}
+.ws-dashboard-stat:focus-visible{outline:3px solid var(--focus,#3979d5);outline-offset:3px}
+.task-focus-summary{display:flex;align-items:center;gap:12px;margin:10px 0;color:var(--muted);font-size:13px;flex-wrap:wrap}
+.task-focus-summary[hidden]{display:none}
+.task-focus-summary a{font-weight:600}
 .ws-dashboard-stat .ws-label{font-size:12px;color:#7185a0;font-weight:600}
 .ws-dashboard-stat .ws-value{display:block;font-size:32px;font-weight:800;color:#152942;line-height:1.4;font-variant-numeric:tabular-nums}
 .ws-dashboard-stat .ws-footnote{font-size:11px;color:#14826d}
@@ -118,3 +130,5 @@ button.ws-signout{background:none;border:0;width:100%;cursor:pointer;font:inheri
 .modal.task-preview .task-progress-heading{margin-top:0}
 .modal.task-preview .progress-timeline{max-height:260px}
 @media(max-width:560px){.ws-task-row-top{align-items:flex-start}.ws-task-row-title{min-width:120px}}
+
+.task-preview-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}

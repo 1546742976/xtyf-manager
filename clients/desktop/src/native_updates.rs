@@ -108,7 +108,7 @@ pub fn create_view(app: &tauri::AppHandle) -> Result<(), String> {
     let csp = csp["app"]["security"]["csp"].as_str().unwrap_or("").to_string();
     let mut builder = tauri::webview::WebviewBuilder::new("main", WebviewUrl::App("index.html".into()))
         .initialization_script(format!("Object.defineProperty(window,'__XTYF_VIEW_TOKEN__',{{value:{},writable:false,configurable:false}});",json!(view_id)))
-        .on_permission_request(|_,_|tauri::webview::PermissionResponse::Deny)
+        .on_permission_request(|view, kind| crate::camera::request(view, kind, None))
         .on_navigation(local_url).on_new_window(|_,_|tauri::webview::NewWindowResponse::Deny)
         .on_web_resource_request(move |request, response| {
             if !Url::parse(&request.uri().to_string()).is_ok_and(|u| local_url(&u)) { return; }
@@ -127,7 +127,7 @@ pub fn create_view(app: &tauri::AppHandle) -> Result<(), String> {
         });
     if smoke_directory().is_some() { builder = builder.data_directory(state.directory.join("webview")); }
     let view = window.add_child(builder, tauri::PhysicalPosition::new(0,0), size).map_err(|e|e.to_string())?;
-    let _ = view;
+    crate::camera::configure(&view)?;
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(15)).await;

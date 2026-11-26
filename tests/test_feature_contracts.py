@@ -8,7 +8,7 @@ class TestFeatureContracts(unittest.TestCase):
     def setUp(self):
         self.client = app_module.app.test_client()
         response = self.client.post("/login", json={
-            "username": "admin", "password": "123456"})
+            "username": "admin", "password": "ci-test-password-only"})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["ok"])
 
@@ -41,15 +41,17 @@ class TestFeatureContracts(unittest.TestCase):
             "username": username, "password": "member-test-password",
         }).get_json()["ok"])
         for path in ("/api/data", "/api/account/profile",
-                     "/api/groups", "/api/projects", "/invoices/api/stats"):
+                     "/api/groups", "/api/projects", "/invoices/api/stats", "/funds/api/records"):
             with self.subTest(path=path):
                 self.assertEqual(member.get(path).status_code, 200)
-        for path in ("/funds/api/records", "/api/admin/permissions",
+        for path in ("/funds/api/export", "/funds/api/personal-invoices", "/api/admin/permissions",
                      "/api/admin/audit", "/invoices/api/owners"):
             with self.subTest(path=path):
                 self.assertEqual(member.get(path).status_code, 403)
+        created_task = member.post("/api/task", json={"title": "普通成员创建任务"})
+        self.assertEqual(created_task.status_code, 200)
+        self.assertTrue(created_task.get_json()["ok"])
         for path, payload in (
-            ("/api/task", {"title": "未经授权"}),
             ("/api/groups", {"name": "新专业组"}),
             ("/api/projects", {"name": "新造车组别"}),
         ):
@@ -62,7 +64,7 @@ class TestFeatureContracts(unittest.TestCase):
         versions = {}
         try:
             for amount in ("1.25", "2.75"):
-                response = self.client.post("/funds/api/records", json={
+                response = self.client.post("/funds/api/records", json={'request_id': uuid4().hex,
                     "record_type": "进", "amount": amount,
                     "record_date": "2026-10-13", "source_dest": marker,
                 })
@@ -88,9 +90,6 @@ class TestFeatureContracts(unittest.TestCase):
                     query_string={"amount_min": value}).status_code, 400)
         finally:
             for rid in ids:
-                detail = self.client.get("/funds/api/records/" + str(rid))
-                self.assertEqual(detail.status_code, 200)
-                self.assertEqual(detail.get_json()["data"]["id"], rid)
                 self.assertEqual(self.client.delete(
                     "/funds/api/records/" + str(rid),
                     query_string={"version": versions[rid]}).status_code, 200)

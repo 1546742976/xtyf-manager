@@ -16,7 +16,7 @@ execFileSync(python, ['-B','clients/build_frontend.py','--output-dir',dist], {cw
 const fixture = execFileSync(python, ['-c','from PIL import Image; import sys; im=Image.new("RGB",(96,64),"#268eb0"); im.paste("#e8a070",(20,10,60,40)); im.save(sys.stdout.buffer,format="PNG")']);
 // DocumentsProvider metadata can be generic; the native reader identifies the original bytes.
 const file = {handle:'session-avatar-1', name:'synthetic.png', mime:'application/octet-stream', size:fixture.length};
-const mime = {'.js':'application/javascript','.css':'text/css','.html':'text/html','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2'};
+const mime = {'.js':'application/javascript','.mjs':'application/javascript','.css':'text/css','.html':'text/html','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2'};
 const server = http.createServer((req,res) => {
   const relative = decodeURIComponent(new URL(req.url,'http://local').pathname).slice(1) || 'index.html';
   const filename = path.resolve(dist, relative);
@@ -53,22 +53,24 @@ async function main() {
     return {status:response.status(),headers,body:body.toString(binary?'base64':'utf8'),encoding:binary?'base64':'text'};
   }
   await transport({path:'/api/client/bootstrap'});
-  assert.equal((await transport({path:'/api/client/login',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'admin',password:'123456'})})).status,200);
-  assert.equal((await transport({path:'/api/password',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old:'123456',new:'client-avatar-test-password',confirm:'client-avatar-test-password'})})).status,200);
+  assert.equal((await transport({path:'/api/client/login',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'admin',password:'browser-test-initial'})})).status,200);
+  assert.equal((await transport({path:'/api/password',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old:'browser-test-initial',new:'client-avatar-test-password',confirm:'client-avatar-test-password'})})).status,200);
   for(const [label,engine,options] of [['chromium',chromium,{viewport:{width:1280,height:900}}],['webkit',webkit,devices['iPhone 13']]]) {
     activeEngine=label;activePhase='browser startup';
     browser=await engine.launch({headless:true});
-    const context=await browser.newContext(options),page=await context.newPage();activePage=page;
+    const context=await browser.newContext(options);
+    let page=await context.newPage();activePage=page;
     const state={current:'A',pending:'B',calls:[],failAvatar:false,offline:false,incompatible:false,capable:true,applies:0};activeState=state;
-    page.on('pageerror',error=>errors.push(label+': '+error.message));
-    await page.exposeFunction('__testNative',async(action,args)=>{
+    const watchPage=current=>current.on('pageerror',error=>errors.push(label+': '+error.message));
+    watchPage(page);
+    await context.exposeFunction('__testNative',async(action,args)=>{
       state.calls.push({action,args});
       const update=()=>({status:state.pending?'pending':'current',currentVersion:state.current,pendingVersion:state.pending,message:state.pending?'新页面已下载，将在下次启动生效。':'当前页面已是最新版本。',installer:{version:'1.0.11',url:'/api/client/installers/test',sha256:'a'.repeat(64)}});
-      if(action==='get_config')return {serverUrl:base,version:'1.0.10',bridgeVersion:2,capabilities:state.capable?['ui_updates','image_preview']:['ui_updates'],platform:label==='webkit'?'android':'windows-x86_64'};
+      if(action==='get_config')return {serverUrl:base,version:'1.0.10',bridgeVersion:2,capabilities:state.capable?['ui_updates','image_preview','pdf_save']:['ui_updates'],platform:label==='webkit'?'android':'windows-x86_64'};
       if(action==='check_updates'||action==='update_status')return update();
       if(action==='apply_update'){state.applies++;state.current=state.pending;state.pending=null;return {};}
       if(action==='ui_ready'||action==='cancel')return {};
-      if(action==='download')return {cancelled:true};
+      if(action==='download'){if(args.pdfBody)state.onPdfSave?.();return {cancelled:true};}
       if(action==='pick_files')return [file];
       if(action==='read_selected_image'){assert.equal(args.handle,file.handle);return {body:fixture.toString('base64'),mime:'image/png',size:file.size};}
       if(action==='request'||action==='read_resource'){
@@ -79,10 +81,19 @@ async function main() {
       }
       throw Error('Unexpected native action '+action);
     });
-    await page.addInitScript(()=>{
+    await context.addInitScript(()=>{
       Object.defineProperty(window,'__XTYF_VIEW_TOKEN__',{value:'fixture-view-token',writable:false,configurable:false});
       window.XTYFNative={invoke:(action,args)=>window.__testNative(action,args)};
     });
+    // The native A/B UI update starts with a new WebView, not a reload of an
+    // existing WebKit document holding canvas/image decoders and detached frames.
+    // Recreate just the document; retain the context, IPC and authenticated backend.
+    const restartDocument=async()=>{
+      const url=page.url();
+      await page.close();
+      page=await context.newPage();activePage=page;watchPage(page);
+      await page.goto(url);
+    };
     const account=()=>page.frameLocator('#page-host iframe');
     const loaded=async count=>{
       await page.waitForFunction(count=>{const doc=document.querySelector('#page-host iframe').contentDocument,images=[...doc.querySelectorAll('[data-avatar-image]')];return images.length===count&&images.every(img=>img.naturalWidth===512&&!img.hidden&&img.parentElement.querySelector('[data-avatar-initial]').hidden);},count);
@@ -124,19 +135,30 @@ async function main() {
     await page.locator('#client-settings-open').click();page.once('dialog',dialog=>dialog.accept());await page.locator('#updates-apply').click();
     await page.waitForFunction(()=>!document.getElementById('updates-apply').disabled);
     assert.equal(state.applies,1);assert.equal(state.current,'B');
-    await page.reload();await account().locator('#avatar-change').waitFor({state:'visible'});await loaded(3);
+    await restartDocument();await account().locator('#avatar-change').waitFor({state:'visible'});await loaded(3);
     for(const route of ['/invoices/','/funds/']){await page.evaluate(route=>XTYF.navigate(route),route);await account().locator('h1').first().waitFor();await loaded(2);}
     await page.evaluate(()=>XTYF.navigate('/account'));await account().locator('#avatar-remove').waitFor({state:'visible'});
     await account().locator('#avatar-remove').click();await account().locator('#avatar-result').filter({hasText:'已恢复'}).waitFor();
     assert.equal(await account().locator('[data-avatar-image]').count(),0);assert.equal(await page.evaluate(()=>XTYF.bootstrap.me.avatar_url),null);
     await page.screenshot({path:path.join(output,label+'-account.png'),fullPage:true});
-    activePhase='capability reload';state.capable=false;await page.reload();await account().locator('h1').waitFor();await page.waitForFunction(()=>XTYF.compatible);
+    activePhase='packaged asset PDF';
+    const itemReply=await transport({path:'/api/assets/catalog/items',method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request_id:crypto.randomUUID(),name:'客户端中文标签 '+label,kind:'consumable',unit:'颗'})});
+    assert.equal(itemReply.status,200);const material=JSON.parse(itemReply.body);
+    await page.evaluate(()=>XTYF.navigate('/assets'));await account().locator('#asset-status').filter({hasText:'数据已更新'}).waitFor();
+    await page.evaluate(async id=>{await document.querySelector('#page-host iframe').contentWindow.AssetLabels.open([{id,name:'客户端中文标签'}]);},material.id);
+    const pdfSaved=new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('PDF native save not invoked')),15000);state.onPdfSave=()=>{clearTimeout(timer);resolve();};});
+    await account().locator('#asset-label-download').click();await pdfSaved;
+    assert(state.calls.some(c=>c.action==='read_resource'&&c.args.path.startsWith('/api/assets/labels.pdf?')));
+    assert(state.calls.some(c=>c.action==='download'&&c.args.pdfBody&&Buffer.from(c.args.pdfBody,'base64').subarray(0,5).toString()==='%PDF-'));
+    assert(!state.calls.some(c=>c.action==='request'&&c.args.path.startsWith('/vendor/pdfjs/')),'PDF resources must stay local');
+    await account().locator('#asset-label-close').click();await page.evaluate(()=>XTYF.navigate('/account'));await account().locator('h1').waitFor();
+    activePhase='capability reload';state.capable=false;await restartDocument();await account().locator('h1').waitFor();await page.waitForFunction(()=>XTYF.compatible);
     assert.equal(await account().locator('#avatar-editor').isVisible(),false);
-    activePhase='incompatible bootstrap reload';state.incompatible=true;await page.reload();await page.getByRole('heading',{name:'服务器需要更新'}).waitFor();
+    activePhase='incompatible bootstrap reload';state.incompatible=true;await restartDocument();await page.getByRole('heading',{name:'服务器需要更新'}).waitFor();
     assert.match(await page.evaluate(()=>XTYF.request('/api/tasks').then(()=>'',error=>error.message)),/协议不兼容/);
     await page.locator('#client-settings-open').click();await page.locator('#updates-check').waitFor({state:'visible'});await page.locator('#settings-cancel').click();
     activePhase='offline reload';state.incompatible=false;state.offline=true;const before=state.calls.filter(call=>call.action==='ui_ready').length;
-    await page.reload();await account().locator('#login-form').waitFor();await page.locator('#connection-status').waitFor({state:'visible'});
+    await restartDocument();await account().locator('#login-form').waitFor();await page.locator('#connection-status').waitFor({state:'visible'});
     assert.ok(state.calls.filter(call=>call.action==='ui_ready').length>before,'local render marks ready even offline');
     await page.locator('#client-settings-open').click();await page.locator('#server-url').waitFor({state:'visible'});
     passed.push({engine:label,version:browser.version(),checks:['pending without runtime reload','installer save with signed SHA256','reload confirmation preserves drafts','emulated A/B restart','native generic MIME identified from bytes','native handle crop and failed retry','three avatars and refresh','invoices/funds','restore default','capability gate','incompatible business gate','offline ui_ready/settings']});

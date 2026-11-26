@@ -103,7 +103,7 @@ async function loadLogs(task, generation) {
 
 function attachmentCard(file) {
   const remove = file.can_delete ? `<button class="btn ghost sm danger-text" type="button" data-delete-attachment="${Number(file.id)}">删除</button>` : "";
-  return `<article class="attachment-card"><a href="${esc(file.url)}" target="_blank" rel="noopener" aria-label="预览截图 ${esc(file.original_name)}"><img src="${esc(file.url)}" width="${Number(file.width) || 320}" height="${Number(file.height) || 180}" alt="${esc(file.description || file.original_name)}" loading="lazy"></a><div><strong>${esc(file.original_name)}</strong><p>${esc(file.description || "无说明")} · ${Math.ceil((file.size_bytes || 0) / 1024)} KB</p><small>${esc(file.member_name)} · ${esc(file.created_at)}</small>${remove}</div></article>`;
+  return `<article class="attachment-card"><a href="${esc(file.url)}" data-image-preview data-image-name="${esc(file.original_name)}" aria-label="预览截图 ${esc(file.original_name)}"><img src="${esc(file.url)}" width="${Number(file.width) || 320}" height="${Number(file.height) || 180}" alt="${esc(file.description || file.original_name)}" loading="lazy"></a><div><strong>${esc(file.original_name)}</strong><p>${esc(file.description || "无说明")} · ${Math.ceil((file.size_bytes || 0) / 1024)} KB</p><small>${esc(file.member_name)} · ${esc(file.created_at)}</small>${remove}</div></article>`;
 }
 
 async function loadAttachments(task, generation) {

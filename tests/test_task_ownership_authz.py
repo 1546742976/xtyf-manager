@@ -9,7 +9,7 @@ class TaskOwnershipAuthorization(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.admin = app_module.app.test_client()
-        cls.admin.post('/login', json={'username': 'admin', 'password': '123456'})
+        cls.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
         cls.clients = {}
         cls.ids = {}
         for role in ('member', 'manager'):

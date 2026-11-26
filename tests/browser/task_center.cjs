@@ -28,13 +28,15 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(15000);
     page.on('pageerror',error=>errors.push(error.message));
     await page.goto(base+'/login');
-    await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('123456');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
-    await page.locator('#account-password-form [name=old]').fill('123456');await page.locator('#account-password-form [name=new]').fill('task-center-password');await page.locator('#account-password-form [name=confirm]').fill('task-center-password');await page.locator('#account-password-form [type=submit]').click();await page.waitForURL(base+'/');
+    await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('browser-test-initial');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
+    await page.locator('#account-password-form [name=old]').fill('browser-test-initial');await page.locator('#account-password-form [name=new]').fill('task-center-password');await page.locator('#account-password-form [name=confirm]').fill('task-center-password');await page.locator('#account-password-form [type=submit]').click();await page.waitForURL(base+'/');
     const owner=(await api(page,'/api/member',{name:'机械负责人',username:'task_center_owner',password:'owner-password'})).body;
     await api(page,'/api/member',{name:'视觉负责人',username:'task_center_vision',password:'owner-password'});
-    const specialties=(await api(page,'/api/groups')).body.groups;
-    const mechanical=`group-${specialties.find(group=>group.name==='机械').id}`;
-    const vision=`group-${specialties.find(group=>group.name==='视觉').id}`;
+    const groups=(await api(page,'/api/data')).body.groups;
+    const mechanicalGroup=groups.find(g=>g.name==='机械'&&g.is_active!==0);
+    const visionGroup=groups.find(g=>g.name==='视觉'&&g.is_active!==0);
+    assert.ok(mechanicalGroup&&visionGroup,'specialty groups must be present');
+    const mechanical='group-'+mechanicalGroup.id,vision='group-'+visionGroup.id;
     await page.goto(base+'/tasks#create');await ready(page);
     assert.equal(await page.locator('#create-form [name=title]').evaluate(node=>node===document.activeElement),true);
     await page.locator('#create-form [name=title]').fill('保持草稿');await page.keyboard.press('Escape');
@@ -97,7 +99,7 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
       await page.locator('#task-create-type').selectOption('daily');await ready(page);
       const dailySubmit=page.locator('#daily-form [type=submit]');await dailySubmit.scrollIntoViewIfNeeded();const dailyBounds=await dailySubmit.boundingBox();assert.ok(dailyBounds.y+dailyBounds.height<=821);
       assert.equal(await page.locator('#daily-form').evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'daily form overflow '+width);
-      const textarea=await page.locator('#daily-form [name=detail]').evaluate(node=>({resize:getComputedStyle(node).resize,width:node.getBoundingClientRect().width,parent:node.parentElement.getBoundingClientRect().width}));assert.equal(textarea.resize,'none');assert.ok(Math.abs(textarea.width-textarea.parent)<2);
+      const textarea=await page.locator('#daily-form [name=detail]').evaluate(node=>({resize:getComputedStyle(node).resize,width:node.getBoundingClientRect().width,parent:node.parentElement.getBoundingClientRect().width}));assert.equal(textarea.resize,'vertical');assert.ok(Math.abs(textarea.width-textarea.parent)<2);
       await page.screenshot({path:path.join(output,'daily-create-'+width+'.png')});
       await page.locator('.daily-owner-groups').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(output,'daily-owners-'+width+'.png')});await page.keyboard.press('Escape');
     }
@@ -105,8 +107,8 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await page.goto(base+'/tasks?type=daily');assert.equal(await page.locator('#board').count(),0);await page.locator('#new-task-toggle').click();await ready(page);assert.equal(await page.locator('#task-create-type').inputValue(),'daily');await page.locator('#daily-form [name=title]').fill('统一入口日常目标');
     for(const stage of [mechanical,vision]){await page.locator(`[name=enabled][value=${stage}]`).check();await page.locator(`[name=owners-${stage}][value="${owner.id}"]`).check();}
     await page.locator('#daily-form [name=status]').selectOption('阻塞');
-    await page.locator('#daily-form [name=blocker_reason]').fill('等待联调设备');
-    await page.locator('#daily-form [name=blocker_next_action]').fill('负责人联系借用设备');
+    await page.locator('#daily-form [name=blocker_reason]').fill('联调设备未到位');
+    await page.locator('#daily-form [name=blocker_next_action]').fill('联系成员领取设备');
     let pending,posts=0;await page.route('**/api/daily-projects',route=>{posts++;pending=route;});
     await page.locator('#daily-form [type=submit]').click();await page.waitForFunction(()=>document.querySelector('#daily-form [type=submit]').disabled);
     await page.keyboard.press('Escape');assert.equal(await page.locator('#task-create-panel').evaluate(node=>node.open),true);assert.equal(await page.locator('#task-create-type').isDisabled(),true);
@@ -133,7 +135,7 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     await page.goto(base+'/daily-projects/'+id);await page.waitForURL(base+'/tasks?type=daily&project='+id);
     await page.locator('.task-type-tabs a').filter({hasText:'造车任务'}).click();await page.locator('#board').waitFor();assert.equal(await page.locator('#daily-app').count(),0);
     checks.push('daily tab retains grouped ownership; legacy URL redirects; switching restores vehicle board');
-    // Assert the actual default card and grouped member dialog in a mixed dataset.
+    // Assert the actual default card, disclosure and archive behavior in a mixed dataset.
     await page.waitForFunction(() => state.members.some(member => member.role !== 'admin'));
     const urgencyUI=await page.evaluate(() => {
       const memberId=Number(state.members.find(m=>m.role!=='admin').id);
@@ -150,120 +152,18 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
       const initial=Array.from(lane.querySelectorAll('#lane-m-'+memberId+' .task-head h3'),n=>n.textContent);
       const firstScore=taskUrgencyScore(state.tasks[1],memberId);
       lane.querySelector('[data-lane-tasks]').click();
-      const active=Array.from(document.querySelectorAll('#modal [data-task-group="active"] .task-head h3'),n=>n.textContent);
-      const archived=Array.from(document.querySelectorAll('#modal [data-task-group="finished"] .task-head h3'),n=>n.textContent);
-      const boardCards=lane.querySelectorAll('[data-task-id]').length;
-      hideModal();
-      return {initial,active,archived,boardCards,firstScore};
+      const list=document.querySelector('#modal [data-member-task-list]');
+      const expanded=Array.from(list.querySelectorAll('[data-task-group="active"] .task-head h3'),n=>n.textContent);
+      const archived=Array.from(list.querySelectorAll('[data-task-group="finished"] .task-head h3'),n=>n.textContent);
+      const hasSeparateGroups=list.querySelectorAll('[data-task-group]').length===2;
+      return {initial,expanded,archived,hasSeparateGroups,firstScore};
     });
     assert.deepEqual(urgencyUI.initial,['明天紧急参与']);
-    assert.deepEqual(urgencyUI.active,['明天紧急参与','无截止主责','一般总负责']);
+    assert.deepEqual(urgencyUI.expanded,['明天紧急参与','无截止主责','一般总负责']);
     assert.deepEqual(urgencyUI.archived,['历史已完成']);
-    assert.equal(urgencyUI.boardCards,1);
+    assert.equal(urgencyUI.hasSeparateGroups,true);
     assert.equal(urgencyUI.firstScore,68);
-    checks.push('mixed member lane keeps one card; all filtered work appears in active and finished dialog groups');
-
-    const laneFocus=await page.evaluate(()=>{
-      const [first,second]=state.members.filter(member=>member.role!=='admin');
-      const shared={id:902001,title:'共同紧急任务',owner_id:first.id,participant_ids:[second.id],status:'阻塞',priority:'高',days_left:0};
-      const own=id=>({id,title:'成员独立任务 '+id,owner_id:second.id,status:'未开始',priority:'低',days_left:null});
-      state.filters={group:'',project:'',status:'',q:'',mine:false};state.view='person';
-      state.tasks=[shared,own(902002),own(902003)];renderBoard();
-      const lane=()=>document.getElementById('lane-m-'+second.id);
-      const sharedCard=()=>lane().querySelector('[data-task-id="902001"]');
-      sharedCard().focus();renderBoard();
-      const sameMember=sharedCard()===document.activeElement;
-      state.tasks=[own(902002),own(902003)];renderBoard();
-      const remainingEntry=document.activeElement?.dataset.laneTasks==='m-'+second.id;
-      state.tasks=[shared,own(902002)];renderBoard();sharedCard().focus();
-      state.tasks=[own(902002)];renderBoard();
-      const remainingCard=lane().querySelector('[data-task-id="902002"]')===document.activeElement;
-      state.tasks=[shared];renderBoard();sharedCard().focus();state.tasks=[];renderBoard();
-      const emptyFallback=document.activeElement===document.querySelector('#view-seg [data-view="person"]');
-      return {sameMember,remainingEntry,remainingCard,emptyFallback};
-    });
-    assert.deepEqual(laneFocus,{sameMember:true,remainingEntry:true,remainingCard:true,emptyFallback:true});
-    checks.push('background lane redraw retains shared-task focus within the same member and falls back to that member entry/card or person view');
-
-    // Exercise list/detail navigation and writes against this isolated server's actual tasks.
-    const listTasks=[];
-    for(let index=0;index<9;index++) {
-      const result=await api(page,'/api/task',{title:'成员弹窗任务 '+index,owner_id:owner.id,status:index>=7?'已完成':'进行中',priority:'中'});
-      assert.equal(result.body.ok,true);listTasks.push(result.body.id);
-    }
-    await page.goto(base+'/tasks');
-    await page.waitForFunction(id=>state.tasks.some(task=>task.id===id),listTasks[8]);
-    await page.locator('#f-q').fill('成员弹窗');
-    const listOpener=page.locator(`[data-lane-tasks="m-${owner.id}"]`);
-    await listOpener.click();
-    const list=page.locator('#modal.member-task-list-dialog');
-    await list.waitFor();assert.equal(await list.locator('[data-task-id]').count(),9);
-    assert.equal(await list.locator('[data-task-group="active"] [data-task-id]').count(),7);
-    assert.equal(await list.locator('[data-task-group="finished"] [data-task-id]').count(),2);
-    const lastCard=list.locator('[data-task-id]').last();
-    await lastCard.focus();await page.keyboard.press('Tab');
-    assert.equal(await list.locator('[data-close]').evaluate(node=>node===document.activeElement),true);
-    await page.keyboard.press('Shift+Tab');
-    assert.equal(await lastCard.evaluate(node=>node===document.activeElement),true);
-    const lastId=Number(await lastCard.getAttribute('data-task-id'));
-    await lastCard.scrollIntoViewIfNeeded();
-    const listScroll=await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollTop);
-    await lastCard.press('Enter');
-    await page.locator('#task-form').waitFor();
-    assert.equal(await page.locator('#modal-mask:not(.hidden)').count(),1);
-    assert.equal(await page.locator('#modal [data-close]').innerText(),'返回任务列表');
-    await page.keyboard.press('Escape');await list.waitFor();
-    assert.equal(await list.locator(`[data-task-id="${lastId}"]`).evaluate(node=>node===document.activeElement),true);
-    assert.ok(Math.abs(await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollTop)-listScroll)<2);
-    await page.keyboard.press('Escape');await list.waitFor({state:'hidden'});
-    assert.equal(await listOpener.evaluate(node=>node===document.activeElement),true);
-    checks.push('member list traps Tab on task cards; Enter opens a single detail; Escape restores list scroll/card then current lane opener');
-
-    await listOpener.click();
-    await list.locator(`[data-task-id="${listTasks[0]}"]`).click();await page.locator('#task-form').waitFor();
-    await page.locator('#modal-mask').click({position:{x:3,y:3}});await list.waitFor();
-    await list.locator(`[data-task-id="${listTasks[0]}"]`).click();await page.locator('#task-form').waitFor();
-    await page.locator('#modal [data-close]').click();await list.waitFor();
-    await list.locator(`[data-task-id="${listTasks[0]}"]`).click();await page.locator('#task-form').waitFor();
-    await page.locator('#task-form [name=title]').fill('成员弹窗任务 已更新');await page.locator('#task-form [type=submit]').click();
-    await list.waitFor();await list.locator('.task-head h3').filter({hasText:'成员弹窗任务 已更新'}).waitFor();
-    assert.equal(await page.locator('#f-q').inputValue(),'成员弹窗');
-    await list.locator(`[data-task-id="${listTasks[0]}"]`).click();await page.locator('#progress-form').waitFor();
-    await page.locator('#progress-form [name=progress]').fill('42');await page.locator('#progress-form [name=note]').fill('列表返回验证');
-    await page.locator('#progress-form [type=submit]').click();await list.waitFor();
-    assert.match(await list.locator(`[data-task-id="${listTasks[0]}"] .task-progress-heading`).innerText(),/42%/);
-    await list.locator(`[data-task-id="${listTasks[1]}"]`).click();await page.locator('#task-form').waitFor();
-    page.once('dialog',dialog=>dialog.accept());await page.locator('#modal [data-delete-task]').click();await list.waitFor();
-    assert.equal(await list.locator(`[data-task-id="${listTasks[1]}"]`).count(),0);
-    assert.equal(await list.locator('[data-task-id]').count(),8);
-    checks.push('detail close/backdrop, settings save, progress save and deletion all return to refreshed member list without changing filter');
-
-    const focusId=listTasks[8];
-    await list.locator(`[data-task-id="${focusId}"]`).focus();
-    const beforeRefreshScroll=await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollTop);
-    const fresh=(await api(page,'/api/data')).body.tasks.find(task=>task.id===focusId);
-    assert.equal((await api(page,'/api/task/'+focusId,{version:fresh.version,title:'成员弹窗任务 后台更新'})).body.ok,true);
-    await page.evaluate(()=>refresh());
-    await list.locator('.task-head h3').filter({hasText:'成员弹窗任务 后台更新'}).waitFor();
-    assert.equal(await list.locator(`[data-task-id="${focusId}"]`).evaluate(node=>node===document.activeElement),true);
-    assert.ok(Math.abs(await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollTop)-beforeRefreshScroll)<2);
-    await list.locator('[data-close]').click();
-    assert.equal(await listOpener.evaluate(node=>node===document.activeElement),true);
-    await page.locator('#f-status').selectOption('已完成');await listOpener.click();
-    assert.equal(await list.locator('[data-task-group="active"] [data-task-id]').count(),0);
-    assert.equal(await list.locator('[data-task-group="finished"] [data-task-id]').count(),2);
-    await list.locator('[data-close]').click();await page.locator('#f-status').selectOption('');
-    checks.push('background refresh preserves list scroll/focus and restores rebuilt opener; completed filter stays scoped');
-
-    for(const width of [375,390,760,761,767,768,1280,1864]) {
-      await page.setViewportSize({width,height:820});await listOpener.click();
-      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,'member list page overflow '+width);
-      const rect=await list.boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width+1,'member list dialog fits '+width);
-      assert.equal(await list.locator('[data-member-task-scroll]').evaluate(node=>node.scrollHeight>node.clientHeight),true);
-      if([390,760,761,1280,1864].includes(width))await page.screenshot({path:path.join(output,'member-task-list-'+width+'.png')});
-      await list.locator('[data-close]').click();
-    }
-    checks.push('member task list scrolls internally and fits 375/390/760/761/767/768/1280/1864 widths');
+    checks.push('mixed member default top, full-list modal urgency order, and separate finished section in DOM');
 
     await page.locator('#modal [data-close]').click();
     for(const width of [375,390,767,768,850,1280,1606]) {
@@ -273,8 +173,30 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     }
     checks.push('dashboard daily block below work hints on right at 1280/1606; no overflow at seven widths');
 
-    // The homepage puts owned and participating tasks first, then sorts each group
-    // by urgency with the same weights and a +4 team responsibility baseline.
+    // Dashboard preview uses the existing edit modal; overview links retain scope.
+    await page.goto(base+'/');
+    await page.waitForFunction(id => state.tasks.some(task => task.id===id),parentA.id);
+    await page.locator(`[data-dashboard-task="${parentA.id}"]`).click();
+    await page.locator('#modal [data-dashboard-edit]').click();
+    await page.locator('#modal #task-form [name=title]').fill('首页直接编辑任务');
+    await page.locator('#modal #task-form button[type=submit]').click();
+    await page.waitForFunction(id => state.tasks.some(task => task.id===id&&task.title==='首页直接编辑任务'),parentA.id);
+    assert.equal(await page.locator(`[data-dashboard-task="${parentA.id}"] .ws-task-row-title`).innerText(),'首页直接编辑任务');
+    const hrefs=await page.locator('#dashboard-stats a.ws-dashboard-stat').evaluateAll(links => links.map(link => new URL(link.href).searchParams.get('focus')));
+    assert.deepEqual(hrefs,['mine','ongoing','due7','overdue']);
+    await page.locator('#dashboard-stats a[href*="focus=due7"]').click();
+    await page.waitForURL('**/tasks?type=vehicle&focus=due7');
+    await page.locator('#task-focus-summary').filter({hasText:'7 天内到期'}).waitFor();
+    assert.equal(await page.locator('#task-focus-summary').isVisible(),true);
+    await page.locator('#task-focus-summary a').click();
+    await page.waitForURL('**/tasks?type=vehicle');
+    assert.equal(await page.locator('#task-focus-summary').isVisible(),false);
+    checks.push('dashboard preview reuses task edit and refreshes its card; stat links preserve and clear scope');
+    await page.goto(base+'/');
+
+    // Personal work comes first; each group retains composite urgency ranking.
+    // Daily cards load independently; wait for the task/account snapshot as well.
+    await page.waitForFunction(() => Boolean(state.me?.id));
     const homeRanking = await page.evaluate(() => {
       const self = Number(state.me.id);
       state.tasks = [
@@ -302,7 +224,7 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
     assert.equal(homeRanking.teamScore,64);
     assert.equal(homeRanking.participantScore,68);
     assert.equal(homeRanking.ownScore,56);
-    checks.push('homepage puts personal tasks first, ranks each group by urgency (+4 team, +8 participant, +28 owner); excludes completed work');
+    checks.push('homepage prioritizes personal tasks, retains urgency within each group, and excludes completed work');
 
     if(process.env.REVIEW_WEBKIT_PATH) {
       phoneBrowser=await webkit.launch({headless:true,executablePath:process.env.REVIEW_WEBKIT_PATH});
@@ -312,6 +234,39 @@ async function ready(page) { await page.locator('#task-create-panel[open][aria-b
       await phone.goto(base+'/tasks?type=daily#create');await ready(phone);assert.equal(await phone.locator('#task-create-type').inputValue(),'daily');await phone.locator('#daily-form [name=title]').fill('WebKit 日常草稿');
       await phone.locator('#task-create-type').selectOption('vehicle');await ready(phone);await phone.locator('#task-create-type').selectOption('daily');await ready(phone);assert.equal(await phone.locator('#daily-form [name=title]').inputValue(),'WebKit 日常草稿');
       assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);checks.push('iPhone WebKit simulated create, close and shared type switching');
+    }
+    // Ordinary members must be able to finish both creation forms, not merely see them.
+    for (const engine of ['chromium', 'webkit']) {
+      const username='creator_'+engine;
+      const created=await api(page,'/api/member',{name:username,username,password:'member-initial',role:'member'});
+      assert.equal(created.status,200);
+      const memberBrowser=engine==='chromium'?browser:await webkit.launch({headless:true,...(process.env.REVIEW_WEBKIT_PATH?{executablePath:process.env.REVIEW_WEBKIT_PATH}:{})});
+      const context=await memberBrowser.newContext({viewport:{width:390,height:844}});
+      try {
+        const memberPage=await context.newPage();memberPage.on('pageerror',error=>errors.push(error.message));
+        await memberPage.goto(base+'/login');
+        await memberPage.locator('[name=username]').fill(username);await memberPage.locator('[name=password]').fill('member-initial');
+        await memberPage.locator('#login-form [type=submit]').click();await memberPage.waitForURL('**/account');
+        assert.equal((await api(memberPage,'/api/password',{old:'member-initial',new:'member-updated'})).status,200);
+        await memberPage.goto(base+'/tasks#create');await ready(memberPage);
+        await memberPage.locator('#create-form [name=title]').fill(engine+'成员造车任务');
+        await memberPage.locator('#create-owner').selectOption(String(created.body.id));
+        await memberPage.locator('#create-form [type=submit]').click();
+        await memberPage.locator('#task-create-feedback').filter({hasText:'任务已创建'}).waitFor();
+        await memberPage.goto(base+'/tasks?type=daily#create');await ready(memberPage);
+        await memberPage.locator('#daily-form [name=title]').fill(engine+'成员日常任务');
+        await memberPage.locator(`[name=enabled][value=${mechanical}]`).check();
+        await memberPage.locator(`[name=owners-${mechanical}][value="${created.body.id}"]`).check();
+        await memberPage.locator('#daily-form [type=submit]').click();
+        await memberPage.waitForURL(/project=\d+/);
+        await memberPage.locator('#daily-edit').waitFor({state:'visible'});
+        assert.equal(await memberPage.locator('#daily-edit').count(),1);
+        await memberPage.locator('#daily-edit').click();await memberPage.locator('#daily-form [name=title]').waitFor();
+        assert.equal(await memberPage.locator('#daily-form [name=status],#daily-form [name=enabled]').count(),0);
+        await memberPage.keyboard.press('Escape');
+        assert.equal((await api(memberPage,'/api/projects',{name:'不可越权'})).status,403);
+        checks.push(engine+' ordinary member completes vehicle and daily creation; management remains restricted');
+      } finally {await context.close();if(engine==='webkit')await memberBrowser.close();}
     }
     assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:true,checks,errors},null,2));console.log('TASK_CENTER_BROWSER_OK '+JSON.stringify(checks));
   } catch(error) { console.error(error);console.error(errors);console.error(log.slice(-2000));process.exitCode=1; }

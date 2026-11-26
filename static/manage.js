@@ -1,7 +1,7 @@
 "use strict";
 
 function roleName(role) {
-  return { admin: "管理员", manager: "项管", member: "成员" }[role] || role;
+  return { admin: "超级管理员", manager: "项管", member: "成员" }[role] || role;
 }
 
 function memberGroups(member) {

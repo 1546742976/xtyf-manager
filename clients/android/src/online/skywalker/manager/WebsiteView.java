@@ -20,6 +20,9 @@ import java.util.concurrent.ExecutorService;
 final class WebsiteView {
     interface Host {
         void configure(WebView view);
+        void camera(WebView view, PermissionRequest request, String origin);
+        void cancelCamera(WebView view);
+        void cancelledCamera(PermissionRequest request);
         void external(String url);
         void local(String intent);
         void message(String message);
@@ -75,6 +78,8 @@ final class WebsiteView {
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
+            @Override public void onPermissionRequest(PermissionRequest request) { host.camera(web, request, origin); }
+            @Override public void onPermissionRequestCanceled(PermissionRequest request) { host.cancelledCamera(request); }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (!WebsitePolicy.trusted(origin, view.getUrl())) { callback.onReceiveValue(null); return true; }
                 return host.choose(view, callback, params);
@@ -121,6 +126,7 @@ final class WebsiteView {
     void resume() { if (!closed) web.onResume(); }
     boolean valid(long expected) { return !closed && expected == generation; }
     private void invalidate() {
+        host.cancelCamera(web);
         generation++; host.cancelChooser(web);
         synchronized (connections) { for (HttpURLConnection connection : connections) connection.disconnect(); connections.clear(); }
         if (blobPort != null) { blobPort.close(); blobPort = null; } resetBlob();

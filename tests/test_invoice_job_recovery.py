@@ -27,6 +27,7 @@ class TestInvoiceJobRecovery(unittest.TestCase):
             db.executescript("""
                 CREATE TABLE members (
                     id INTEGER PRIMARY KEY,
+                    role TEXT NOT NULL DEFAULT 'manager',
                     is_active INTEGER NOT NULL DEFAULT 1,
                     deleted_at TEXT,
                     must_change_password INTEGER NOT NULL DEFAULT 0,
@@ -74,6 +75,21 @@ class TestInvoiceJobRecovery(unittest.TestCase):
         with closing(sqlite3.connect(self.db_path)) as db, db:
             return db.execute("SELECT outcome FROM security_audit WHERE id=?",
                               (audit_id,)).fetchone()[0]
+
+    def test_superadmin_claims_without_grants_and_demotion_blocks_next_job(self):
+        with closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE members SET role='admin' WHERE id=1")
+            db.execute("DELETE FROM member_permissions WHERE member_id=1")
+        jid, _ = self._insert_job()
+        with InvoiceFileLock(self.lock_path):
+            self.assertEqual(invoice_jobs.recover_and_claim()['id'], jid)
+            invoice_jobs.finish_job(jid, result={})
+        with closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("UPDATE members SET role='manager' WHERE id=1")
+        second, _ = self._insert_job()
+        with InvoiceFileLock(self.lock_path):
+            self.assertIsNone(invoice_jobs.recover_and_claim())
+        self.assertEqual(self._db_row(second)['status'], 'error')
 
     def test_readonly_job_crash_retries_and_finishes_with_audit(self):
         jid, audit_id = self._insert_job("refresh")
@@ -124,6 +140,21 @@ class TestInvoiceJobRecovery(unittest.TestCase):
         self.assertEqual(self._db_row(jid)["status"], "error")
         self.assertEqual(self._db_row(jid)["attempts"], 0)
         self.assertEqual(self._audit(audit_id), "failure")
+
+    def test_stream_actor_validation_rejects_invalid_account_or_session(self):
+        self.assertTrue(invoice_jobs.actor_is_current(1, 0))
+        self.assertFalse(invoice_jobs.actor_is_current(1, 1))
+        for column, value in (("is_active", 0), ("deleted_at", "2026-10-22"),
+                              ("must_change_password", 1)):
+            with self.subTest(column=column):
+                with closing(sqlite3.connect(self.db_path)) as db, db:
+                    db.execute(f"UPDATE members SET {column}=? WHERE id=1", (value,))
+                self.assertFalse(invoice_jobs.actor_is_current(1, 0))
+                with closing(sqlite3.connect(self.db_path)) as db, db:
+                    db.execute("UPDATE members SET is_active=1,deleted_at=NULL,must_change_password=0 WHERE id=1")
+        with closing(sqlite3.connect(self.db_path)) as db, db:
+            db.execute("DELETE FROM member_permissions WHERE member_id=1")
+        self.assertFalse(invoice_jobs.actor_is_current(1, 0))
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "requires POSIX flock subprocess")
     def test_two_processes_claim_one_job_only_once(self):

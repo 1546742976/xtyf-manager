@@ -1,3 +1,10 @@
+[hidden]{display:none!important}
+/* Let the layout own control sizes; preserve native checkbox/radio/range sizing. */
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=button]):not([type=submit]):not([type=reset]):not([type=hidden]),select,textarea){box-sizing:border-box;max-width:100%;min-width:0}
+:where(form textarea,.form-control,.form-select){width:100%}
+/* Keep textarea width owned by its form/grid cell. Vertical-only dragging cannot
+   resize adjacent columns, controls, or the surrounding dialog. */
+textarea{--textarea-max-height:360px;--textarea-resize-max-height:800px;resize:vertical;max-height:min(75dvh,var(--textarea-resize-max-height));overflow-y:auto}
 /* XTYF Design System v2 — shared across progress, finance and invoices */
 :root {
   color-scheme: light;
@@ -103,14 +110,15 @@ tbody tr:hover td {background:#f8faff;}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;transition-duration:.01ms!important;}}
 
 /* Account */
-.ux-account-grid{display:grid;grid-template-columns:minmax(260px,.75fr) minmax(0,1.25fr);grid-template-areas:"profile email" "appearance editor" ". password";gap:24px;align-items:stretch;}
+.ux-account-grid{display:grid;grid-template-columns:minmax(260px,.75fr) minmax(0,1.25fr);grid-template-areas:"profile editor" "appearance email";gap:24px;align-items:stretch;}
 .ux-account-grid>.panel{min-width:0;margin:0;}
 .ux-account-grid>.ux-account-profile{grid-area:profile;min-height:512px;}
 .ux-account-grid>.ux-account-email{grid-area:email;min-height:512px;}
 .ux-account-grid>.ux-account-appearance{grid-area:appearance;}
 .ux-account-grid>.ux-account-editor{grid-area:editor;}
-.ux-account-grid>.ux-account-password{grid-area:password;}
-.ux-account-password-required{grid-template-areas:"profile password" "appearance .";}
+.ux-account-subsection{margin-top:24px;padding-top:24px;border-top:1px solid var(--ux-border);}
+.ux-account-profile>.introductions{margin-top:12px;}
+.ux-account-password-required{grid-template-areas:"profile editor" "appearance .";}
 .ux-account-profile{display:flex;flex-direction:column;gap:12px;}
 .ux-account-avatar{display:grid;place-items:center;width:66px;height:66px;border-radius:19px;
   background:linear-gradient(145deg,#3769d9,#13a5a3);color:#fff;font-size:30px;font-weight:750;
@@ -134,3 +142,17 @@ tbody tr:hover td {background:#f8faff;}
 
 /* Keep the inline email OTP form hidden until an active challenge is present. */
 #email-code-form[hidden]{display:none;}
+
+.error-page{max-width:640px;margin:12vh auto;padding:24px;color:var(--text);background:var(--card);border-radius:18px}.text-counter{display:block;font-size:12px;color:var(--muted);margin-top:4px}
+/* Filing information shared by the public login page and authenticated workspace. */
+.site-icp-footer {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+  text-align: center;
+  color: var(--muted, #65758e);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.site-icp-footer a { color: inherit; text-decoration: none; }
+.site-icp-footer a:hover { text-decoration: underline; }

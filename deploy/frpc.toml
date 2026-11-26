@@ -6,7 +6,7 @@
 # 修改后生效：sudo systemctl restart frpc
 # ============================================================
 
-serverAddr = "47.116.50.22"
+serverAddr = "FRP_SERVER_HOST"
 serverPort = 7000
 
 # 传输协议（默认 tcp，无需修改）
@@ -16,18 +16,18 @@ transport.protocol = "tcp"
 auth.method = "token"
 auth.token = "（真实 token 见服务器 /opt/frp/frpc.toml，勿外传）"
 
-# ---- 映射 1：域名转发入口（云服务器 nginx: manager.skywalker-rm.online → 127.0.0.1:10031）
+# ---- 映射 1：域名入口（云服务器 nginx: MANAGER_DOMAIN → 配置的映射端口）
 [[proxies]]
 name = "xtyf-progress-http"
 type = "tcp"
 localIP = "127.0.0.1"
 localPort = 80
-remotePort = 10031
+remotePort = 0 # 部署时填写分配的域名入口端口
 
-# ---- 映射 2：IP 直连入口（http://47.116.50.22:10030）
+# ---- 映射 2：IP 直连入口（http://FRP_SERVER_HOST:REMOTE_PORT）
 [[proxies]]
 name = "xtyf-progress-tcp"
 type = "tcp"
 localIP = "127.0.0.1"
 localPort = 80
-remotePort = 10030
+remotePort = 0 # 部署时填写分配的直连入口端口；此示例不能直接运行

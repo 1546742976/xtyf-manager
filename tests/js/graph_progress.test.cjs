@@ -20,7 +20,7 @@ function page(scripts) {
   return { context, evaluate: (src) => vm.runInContext(src, context) };
 }
 
-test("compact progress card displays percentage and escaped note; images stay in details", () => {
+test("compact progress card displays percentage, escaped note and latest images", () => {
   const { evaluate } = page(["app.js", "task-board.js"]);
   const task = {
     id: 11, title: "完成驱动", priority: "高", status: "进行中",
@@ -34,7 +34,10 @@ test("compact progress card displays percentage and escaped note; images stay in
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /<span>成员A<\/span>/);
   assert.doesNotMatch(html, /<script>/);
-  assert.doesNotMatch(html, /<img/);
+  assert.ok(html.includes('src="/api/task/11/attachments/21"'));
+  const imageOnly = evaluate("taskCard")({...task, latest_note:'',latest_progress:{actor_name:'成员A',note:'',image_ids:[21]}});
+  assert.match(imageOnly, /task-note-images/);
+  assert.doesNotMatch(imageOnly, /<p><\/p>/);
   const withoutNote = evaluate("taskCard")({...task, latest_progress:null});
   assert.doesNotMatch(withoutNote, /task-note|无备注/);
   assert.match(withoutNote, /role="progressbar"/);

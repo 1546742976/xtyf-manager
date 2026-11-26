@@ -116,12 +116,10 @@ def adapt_script(text):
 
 
 def adapt_template(name, text):
+    if name in {'_pwa_head.html', '_pwa_install.html'}:
+        return ''  # Website-only: old clients retain their native update/session lifecycle.
     if name == "_security_head.html":
         text = text.replace('<script src="{{ url_for(\'static\', filename=\'security.js\') }}"></script>', '')
-    if name == "funds.html":
-        text = re.sub(r'<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/css/bootstrap.min.css"\s+onerror="[^"]*">', '<link rel="stylesheet" href="/vendor/bootstrap/bootstrap.min.css">', text)
-        text = re.sub(r'<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css"\s+onerror="[^"]*">', '<link rel="stylesheet" href="/vendor/bootstrap-icons/bootstrap-icons.min.css">', text)
-        text = re.sub(r'<script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.3/js/bootstrap.bundle.min.js"\s+onerror="[^"]*"></script>', '<script src="/vendor/bootstrap/bootstrap.bundle.min.js"></script>', text)
     if name == "email_verify.html":
         text = text.replace('target="_blank" rel="noopener"', '').replace('在新标签页登录', '在应用内登录')
     text = re.sub(r"(<script\b[^>]*>)([\s\S]*?)(</script>)", lambda m:m[1]+adapt_script(m[2])+m[3], text)
@@ -141,16 +139,17 @@ def build(output=DIST):
     compiled = runtime.replace("/* COMPILED_TEMPLATES */", ",\n".join(js(name)+":"+value for name,value in templates.items()))
     (output / "templates.js").write_text(compiled, encoding="utf-8")
     for path in (ROOT / "static").rglob("*"):
+        relative = path.relative_to(ROOT / "static")
         if not path.is_file(): continue
+        if relative.parts[:2] in (("vendor", "bootstrap"), ("vendor", "bootstrap-icons")): continue
         destination = output / "static" / path.relative_to(ROOT / "static")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if path.suffix == ".js":
+        if path.suffix == ".js" and "vendor" not in path.relative_to(ROOT / "static").parts:
             content = adapt_script(path.read_text(encoding="utf-8-sig"))
             if path.name == "business-ui.js":
                 start, end = content.index('  async function download('), content.index('  document.addEventListener("click"')
                 content = content[:start] + '  async function download(url,filename="download"){return action("download:"+url,[],()=>window.XTYF.download(url,filename));}\n' + content[end:]
             if path.name == "invoices.js":
-                content = content.replace("new EventSource('/invoices/api/job/stream/'+encodeURIComponent(id))", "new XTYFJobPoller(id)")
                 content = content.replace("handleFiles(e.dataTransfer.files)", "window.XTYF.pickInvoiceFiles()")
             if path.name == "discussions.js":
                 content = content.replace("url.origin===window.XTYFLocation.origin&&", "window.XTYF.isLocal(url)&&")

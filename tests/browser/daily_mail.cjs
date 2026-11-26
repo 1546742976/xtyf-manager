@@ -4,6 +4,18 @@ const {spawn,spawnSync}=require('node:child_process');
 const {chromium,webkit,devices}=require('playwright');
 const root=path.resolve(__dirname,'../..'),output=path.join(root,'.venv','daily-mail-check');fs.mkdirSync(output,{recursive:true});
 async function api(page,url,data){return page.evaluate(async({url,data})=>{const r=await fetch(url,data===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});return {status:r.status,body:await r.json()};},{url,data});}
+async function imageUpload(page,id,stage){
+  const form=page.locator(`[data-progress-form=${stage}]`), endpoint=`/api/daily-projects/${id}/groups/${stage}`;
+  const bytes=await page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=3000;canvas.height=100;canvas.getContext('2d').fillRect(0,0,5,5);return canvas.toDataURL('image/png').split(',')[1];});
+  await form.locator('[name=files]').setInputFiles({name:'transparent.png',mimeType:'image/png',buffer:Buffer.from(bytes,'base64')});
+  const prepared=await page.evaluate(async stage=>{const original=document.querySelector(`[data-progress-form=${stage}] [name=files]`).files[0];const result=await DailyImages.prepare(original);const bitmap=await createImageBitmap(result.file);const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;const ctx=canvas.getContext('2d');ctx.drawImage(bitmap,0,0);const info={width:bitmap.width,alpha:ctx.getImageData(bitmap.width-1,0,1,1).data[3]};bitmap.close();return info;},stage);
+  assert.equal(prepared.width,2048);assert.equal(prepared.alpha,0);
+  let uploads=0;const listener=request=>{if(request.method()==='POST'&&request.url().endsWith(endpoint+'/progress'))uploads++;};page.on('request',listener);
+  await page.route('**'+endpoint+'/preflight?*',route=>route.fulfill({status:409,json:{ok:false,error:'预检版本变化'}}));
+  await form.locator('[name=note]').fill('图片上传草稿');await form.locator('button').click();await form.locator('.form-message').filter({hasText:'预检版本变化'}).waitFor();
+  assert.equal(uploads,0);assert.equal(await form.locator('[name=files]').evaluate(input=>input.files.length),1);assert.equal(await form.locator('[name=note]').inputValue(),'图片上传草稿');
+  await page.unroute('**'+endpoint+'/preflight?*');await form.locator('button').click();await form.locator('.form-message').filter({hasText:'进度已保存'}).waitFor();assert.equal(uploads,1);page.off('request',listener);
+}
 (async()=>{
   const python=process.env.REVIEW_PYTHON||'python';
   const server=spawn(python,['-B',path.join(__dirname,'server.py')],{cwd:root,env:{...process.env,MAIL_MODE:'preview',PUBLIC_BASE_URL:'https://team.example'},stdio:['ignore','pipe','pipe']});
@@ -15,8 +27,8 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     });
     browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(15000);
     page.on('pageerror',error=>errors.push(error.message));page.on('dialog',d=>d.accept());
-    await page.goto(base+'/login');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('123456');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
-    await page.locator('#account-password-form [name=old]').fill('123456');await page.locator('#account-password-form [name=new]').fill('daily-browser-password');await page.locator('#account-password-form [name=confirm]').fill('daily-browser-password');await page.locator('#account-password-form button').click();await page.waitForURL(base+'/');
+    await page.goto(base+'/login');await page.locator('[name=username]').fill('admin');await page.locator('[name=password]').fill('browser-test-initial');await page.locator('#login-form [type=submit]').click();await page.waitForURL('**/account');
+    await page.locator('#account-password-form [name=old]').fill('browser-test-initial');await page.locator('#account-password-form [name=new]').fill('daily-browser-password');await page.locator('#account-password-form [name=confirm]').fill('daily-browser-password');await page.locator('#account-password-form button').click();await page.waitForURL(base+'/');
     const owner=(await api(page,'/api/member',{name:'浏览器负责人',username:'daily_browser_owner',password:'owner-password'})).body;
     const specialties=(await api(page,'/api/groups')).body.groups;
     const mechanical=`group-${specialties.find(group=>group.name==='机械').id}`;
@@ -37,6 +49,7 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.route(`**/api/daily-projects/${id}/groups/${vision}/progress`,r=>r.request().method()==='POST'?r.fulfill({status:409,json:{ok:false,error:'分配或进度已变化'}}):r.continue());
     await groupForm(page,vision).locator('button').click();await groupForm(page,vision).locator('.form-message').filter({hasText:'输入已保留'}).waitFor();assert.equal(await groupForm(page,vision).locator('[name=note]').inputValue(),'尚未提交的视觉草稿');
     await page.unroute(`**/api/daily-projects/${id}/groups/${vision}/progress`);checks.push('goal creation, group progress, cross-group draft retention and conflict recovery');
+    await imageUpload(page,id,mechanical);checks.push('local image resize, alpha retention, preflight denial and draft retry');
     for(const theme of ['light','dark']){
       await api(page,'/api/account/preferences',{theme});
       for(const width of [375,390,767,768,1280]){
@@ -49,12 +62,22 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.setViewportSize({width:1280,height:900});await page.goto(base+'/account');
     const mailPanel=page.locator('section').filter({has:page.locator('#email-form')});
     const accountMailNotice=await mailPanel.textContent();
-    assert.match(accountMailNotice,/08:00.*个人任务早报.*22:00.*团队项目晚报/);
-    assert.match(accountMailNotice,/只收录进行中、阻塞或未开始但已逾期的造车任务和日常项目/);
-    assert.match(accountMailNotice,/已完成（包括当天完成）、已取消、已删除事项始终排除/);
-    assert.match(accountMailNotice,/截止日期早于发送当天（北京时间），今天截止不算逾期/);
-    assert.match(accountMailNotice,/个人范围无符合提醒条件的事项时不发送早报，全团队无符合提醒条件的事项时不发送晚报/);
-    assert.doesNotMatch(accountMailNotice,/未完成事项及当天完成事项|未完成及当天完成/);
+    assert.match(accountMailNotice,/个人汇总.*08:00.*0\.5 天.*20:00.*团队汇总.*22:00/);
+    assert.match(accountMailNotice,/按每位成员设置的周期发送/);
+    assert.match(accountMailNotice,/没有符合条件的任务时不会发送汇总/);
+    const ownPrefs=page.locator('#email-preferences-form');
+    await page.locator('#email-state').filter({hasText:'模拟模式'}).waitFor();
+    await ownPrefs.locator('[name=morning_interval_days]').fill('0.5');
+    await ownPrefs.locator('[name=daily_interval_days]').fill('14');
+    await ownPrefs.locator('[name=countdown_interval_days]').fill('2');
+    await ownPrefs.locator('[name=countdown_enabled]').check();
+    await ownPrefs.locator('button[type=submit]').click();
+    await page.locator('#email-preferences-result').filter({hasText:'已保存'}).waitFor();
+    const savedPrefs=(await api(page,'/api/account/email')).body.preferences;
+    assert.equal(savedPrefs.morning_interval_hours,12);
+    assert.equal(savedPrefs.daily_interval_days,14);
+    assert.equal(savedPrefs.countdown_interval_days,2);
+    assert.equal(savedPrefs.countdown_enabled,true);
     // Initial account loading populates the input; wait before entering a new address.
     await page.locator('#email-state').filter({hasText:'模拟模式'}).waitFor();
     await page.locator('#email-address').fill('browser@example.com');await page.locator('#email-form button').click();await page.locator('#email-result').filter({hasText:'模拟模式'}).waitFor();
@@ -78,15 +101,20 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
     await page.locator('#mail-jobs strong').filter({hasText:'个人任务早报'}).waitFor();
     await page.locator('#mail-jobs strong').filter({hasText:'团队项目晚报'}).waitFor();
     const adminMailNotice=await page.locator('#mail-admin').textContent();
-    assert.match(adminMailNotice,/08:00.*个人任务早报.*22:00.*团队项目晚报/);
-    assert.match(adminMailNotice,/只收录进行中、阻塞或未开始但已逾期的造车任务和日常项目/);
-    assert.match(adminMailNotice,/已完成（包括当天完成）、已取消、已删除事项始终排除/);
-    assert.match(adminMailNotice,/截止日期早于发送当天（北京时间），今天截止不算逾期/);
-    assert.match(adminMailNotice,/个人范围无符合提醒条件的事项时不发送早报，全团队无符合提醒条件的事项时不发送晚报/);
-    assert.match(adminMailNotice,/测试邮件使用相同筛选，无符合提醒条件的事项时仍发送测试提示/);
-    assert.doesNotMatch(adminMailNotice,/未完成事项及当天完成事项|未完成及当天完成/);
+    assert.match(adminMailNotice,/个人任务汇总（0\.5–7 天）.*团队项目汇总（1–14 天）/);
+    assert.match(adminMailNotice,/验证码不受此配置影响/);
+    assert.match(adminMailNotice,/没有符合条件的内容则跳过/);
     await page.screenshot({path:path.join(output,'morning-evening-mail-admin.png'),fullPage:true});
-    await page.unroute('**/api/admin/mail?*');checks.push('personal/team notices cover active, blocked and overdue-only filtering, Beijing deadline boundary and empty-digest behavior; separate admin record labels');
+    await page.unroute('**/api/admin/mail?*');
+    const ownerPrefs=page.locator(`[data-mail-prefs="${owner.id}"]`);
+    await ownerPrefs.locator('[name=morning_enabled]').uncheck();
+    await ownerPrefs.locator('[name=daily_interval_days]').fill('5');
+    await ownerPrefs.locator('button[type=submit]').click();
+    await page.locator('#mail-result').filter({hasText:'成员设置已保存'}).waitFor();
+    const savedOwner=(await api(page,'/api/admin/mail')).body.members.find(m=>m.id===owner.id);
+    assert.equal(savedOwner.preferences.morning_enabled,false);
+    assert.equal(savedOwner.preferences.daily_interval_days,5);
+    checks.push('account and admin cadence configuration persists; mail notices and separate record labels');
     await page.goto(base+'/');await page.locator('#daily-dashboard a').filter({hasText:'共同大目标'}).waitFor();
     const task=(await api(page,'/api/task',{title:'邮件链接目标'})).body;
     await page.goto(base+'/tasks?task='+task.id);await page.locator('#modal').filter({hasText:'邮件链接目标'}).waitFor();
@@ -98,6 +126,7 @@ async function api(page,url,data){return page.evaluate(async({url,data})=>{const
       phoneBrowser=await webkit.launch({headless:true,executablePath:process.env.REVIEW_WEBKIT_PATH});
       const context=await phoneBrowser.newContext({...devices['iPhone 13']});await context.addCookies(await page.context().cookies());const phone=await context.newPage();phone.on('pageerror',e=>errors.push(e.message));
       await phone.goto(base+`/daily-projects/${id}`);await groupForm(phone,mechanical).waitFor();assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+      await imageUpload(phone,id,mechanical);
       await groupForm(phone,mechanical).locator('[name=note]').fill('WebKit 手机更新');await groupForm(phone,mechanical).locator('button').click();await groupForm(phone,mechanical).locator('.form-message').filter({hasText:'进度已保存'}).waitFor();await phone.screenshot({path:path.join(output,'daily-webkit-iphone.png'),fullPage:true});checks.push('iPhone WebKit simulated group update');
     }
     assert.deepEqual(errors,[]);fs.writeFileSync(path.join(output,'result.json'),JSON.stringify({ok:true,checks,errors},null,2));console.log('DAILY_MAIL_BROWSER_OK '+JSON.stringify(checks));

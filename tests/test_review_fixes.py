@@ -20,7 +20,7 @@ from modules.funds_revisions import migrate as migrate_revisions
 class TestReviewFixes(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        self.admin.post('/login', json={'username': 'admin', 'password': '123456'})
+        self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
         name = 'review_' + uuid4().hex[:12]
         created = self.admin.post('/api/member', json={
             'name': name, 'username': name, 'password': 'review-password', 'role': 'manager'}).get_json()
@@ -41,8 +41,64 @@ class TestReviewFixes(unittest.TestCase):
             'tmp_path': tmp, 'month': '2026.10', 'amount': '1.00', **fields})
 
     def record(self):
-        return self.admin.post('/funds/api/records', json={
-            'record_type': '进', 'amount': '5.00', 'record_date': '2026-10-13'}).get_json()
+        name = 'writer_' + uuid4().hex[:12]
+        self.assertTrue(self.admin.post('/api/member', json={'name': name, 'username': name,
+            'password': 'writer-password', 'role': 'manager'}).get_json()['ok'])
+        writer = app_module.app.test_client()
+        self.assertTrue(writer.post('/login', json={'username': name, 'password': 'writer-password'}).get_json()['ok'])
+        response = writer.post('/funds/api/records', json={'request_id': uuid4().hex,
+            'record_type': '进', 'amount': '5.00', 'record_date': '2026-10-13'})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertIn('id', payload, payload)
+        return payload
+
+    def test_reviewer_submission_requires_click_and_records_actual_approver(self):
+        # Review permission must never auto-approve a new submission.
+        payload = {'request_id': uuid4().hex, 'record_type': '进', 'amount': '12.34',
+                   'record_date': '2026-10-29', 'review_status': '已审核',
+                   'reviewed_by': '伪造审核人', 'reviewed_at': '2026-10-29 00:00:00'}
+        response = self.member.post('/funds/api/records', json=payload)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        created = response.get_json()
+        self.assertEqual(created['review_status'], '待审核')
+        with funds.get_funds_db() as db:
+            before = db.execute(
+                'SELECT review_status, reviewed_by, reviewed_at FROM records WHERE id=?',
+                (created['id'],)).fetchone()
+        self.assertEqual(tuple(before), ('待审核', '', ''))
+
+        # A different authorized reviewer performs the actual approval.
+        approver_name = 'approver_' + uuid4().hex[:12]
+        user = self.admin.post('/api/member', json={
+            'name': approver_name, 'username': approver_name,
+            'password': 'review-password', 'role': 'manager'}).get_json()
+        self.assertTrue(user['ok'], user)
+        granted = self.admin.post(
+            f"/api/admin/permissions/{user['id']}",
+            json={'permissions': ['funds.review']})
+        self.assertEqual(granted.status_code, 200, granted.get_json())
+        approver = app_module.app.test_client()
+        self.assertTrue(approver.post('/login', json={
+            'username': approver_name, 'password': 'review-password'}).get_json()['ok'])
+        approved = approver.post(
+            f"/funds/api/records/{created['id']}/review",
+            json={'version': created['version']})
+        self.assertEqual(approved.status_code, 200, approved.get_json())
+        self.assertEqual(approved.get_json()['version'], created['version'] + 1)
+
+        # An idempotent replay cannot undo an approval already completed.
+        replay = self.member.post('/funds/api/records', json=payload)
+        self.assertEqual(replay.status_code, 200, replay.get_json())
+        self.assertTrue(replay.get_json()['replayed'])
+        with funds.get_funds_db() as db:
+            after = db.execute(
+                'SELECT review_status, reviewed_by, reviewed_at FROM records WHERE id=?',
+                (created['id'],)).fetchone()
+        self.assertEqual(after['review_status'], '已审核')
+        self.assertEqual(after['reviewed_by'], approver_name)
+        self.assertRegex(after['reviewed_at'],
+                         r'^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$')
 
     def test_stale_review_rejected_and_unchanged_edit_keeps_version(self):
         record = self.record()
@@ -95,7 +151,8 @@ class TestReviewFixes(unittest.TestCase):
                 db.execute("INSERT INTO records VALUES(7,123,'已审核')")
                 db.commit()
                 migrate_revisions(db); migrate_revisions(db)
-                self.assertEqual(db.execute('SELECT * FROM records').fetchone(), (7, 123, '已审核', 1))
+                self.assertEqual(db.execute('SELECT * FROM records').fetchone(),
+                                 (7, 123, '已审核', 1, 0, None, None, None))
             finally:
                 db.close()
 
@@ -172,7 +229,9 @@ class TestReviewFixes(unittest.TestCase):
     def test_nested_organize_preserves_metadata_cache_and_is_idempotent(self):
         with invoices._invoice_lock, tempfile.TemporaryDirectory() as root, patch.multiple(
             invoices, BASE_DIR=root, META_FILE=os.path.join(root, '.invoice_meta.json'),
-            CACHE_FILE=os.path.join(root, '.invoice_cache.json')):
+            CACHE_FILE=os.path.join(root, '.invoice_cache.json'),
+            SNAPSHOT_FILE=os.path.join(root, '.invoice_snapshot.json'),
+            SNAPSHOT_STATE_FILE=os.path.join(root, '.invoice_snapshot_state.json')):
             meta = {}
             for sub in ('a', 'b'):
                 rel = f'legacy/deep/{sub}/类别-1元-商家-2026.10.13-发票.pdf'
@@ -190,7 +249,9 @@ class TestReviewFixes(unittest.TestCase):
             preview = self.admin.get('/invoices/api/organize/preview').get_json()
             self.assertEqual(preview['count'], 2)
             self.assertTrue(all(row['status'] == '已报销' and row['month'] == '2026.9' for row in preview['files']))
-            result = invoices.organize_all_files()
+            organized = self.admin.post('/invoices/api/organize', json={})
+            self.assertEqual(organized.status_code, 200, organized.get_data(as_text=True))
+            result = organized.get_json()['results']
             self.assertEqual((result['moved'], result['errors']), (2, 0))
             moved = invoices.load_meta()
             self.assertEqual(len(moved), 2)
@@ -203,9 +264,14 @@ class TestReviewFixes(unittest.TestCase):
                 self.assertTrue(os.path.isfile(os.path.join(root, entry['rel_path'])))
                 self.assertNotIn('\\', entry['rel_path'])
             self.assertEqual(set(invoices.load_cache()), set(moved))
-            self.assertEqual(invoices.organize_all_files()['moved'], 0)
+            repeated = self.admin.post('/invoices/api/organize', json={})
+            self.assertEqual(repeated.status_code, 200, repeated.get_data(as_text=True))
+            self.assertEqual(repeated.get_json()['results']['moved'], 0)
             self.assertEqual(invoices.load_meta(), moved)
-            rows = self.member.get('/invoices/api/invoices').get_json()['data']
+            listing = self.member.get('/invoices/api/invoices')
+            self.assertEqual(listing.status_code, 200)
+            self.assertEqual(listing.headers['X-Invoice-Snapshot-State'], 'current')
+            rows = listing.get_json()['data']
             self.assertEqual(len(rows), 2)
             self.assertTrue(all(row['amount'] == '99.99' for row in rows))
 
@@ -249,6 +315,30 @@ class TestReviewFixes(unittest.TestCase):
             self.assertEqual(db.execute('SELECT kind FROM task_revisions WHERE task_id=?', (task['id'],)).fetchone()[0], 'create')
             self.assertTrue(db.execute('SELECT 1 FROM member_projects WHERE member_id=? AND project_id=?',
                                        (after['id'], task['project_id'])).fetchone())
+
+    def test_seed_import_is_atomic_when_later_task_is_invalid(self):
+        from deploy import seed_data
+        from common import DB_PATH, get_db
+        unique = 'atomic_' + uuid4().hex[:10]
+        with tempfile.TemporaryDirectory() as root, patch.object(seed_data, 'DB_PATH', DB_PATH), \
+                contextlib.redirect_stdout(io.StringIO()):
+            seed_path = os.path.join(root, 'seed-import.json')
+            payload = {
+                'members': [(unique, unique, '视觉', 'member')],
+                'tasks': [
+                    (unique + ' good', unique, '哨兵', '视觉', '未开始', 0, '中', ''),
+                    (unique + ' invalid', unique, '哨兵', '视觉', '非法状态', 0, '中', ''),
+                ],
+            }
+            with open(seed_path, 'w', encoding='utf-8') as stream:
+                json.dump(payload, stream, ensure_ascii=False)
+            with self.assertRaises(RuntimeError):
+                seed_data.main(seed_path)
+        with app_module.app.app_context():
+            db = get_db()
+            self.assertIsNone(db.execute('SELECT id FROM members WHERE username=?', (unique,)).fetchone())
+            self.assertEqual(db.execute('SELECT count(*) FROM tasks WHERE title LIKE ?',
+                                        (unique + '%',)).fetchone()[0], 0)
 
     def test_seed_missing_local_file_does_not_open_database(self):
         from deploy import seed_data

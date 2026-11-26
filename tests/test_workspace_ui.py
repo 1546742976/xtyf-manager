@@ -5,7 +5,7 @@ from test_tasks import app_module
 class TestWorkspaceNavigation(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        result = self.admin.post('/login', json={'username': 'admin', 'password': '123456'})
+        result = self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
         self.assertTrue(result.get_json()['ok'])
 
     def test_all_workspace_pages_render_shared_navigation(self):
@@ -23,6 +23,21 @@ class TestWorkspaceNavigation(unittest.TestCase):
                 self.assertIn('workspace.js', text)
                 self.assertIn(page_label, text)
 
+    def test_icp_footer_on_public_and_authenticated_pages(self):
+        for client, url in (
+            (app_module.app.test_client(), '/login'),
+            (self.admin, '/'),
+            (self.admin, '/tasks'),
+        ):
+            with self.subTest(url=url):
+                response = client.get(url)
+                self.assertEqual(response.status_code, 200)
+                html = response.get_data(as_text=True)
+                self.assertIn('class="site-icp-footer"', html)
+                self.assertEqual(html.count('苏ICP备2026059121号-1'), 1)
+                self.assertIn('href="https://beian.miit.gov.cn/"', html)
+                self.assertIn('target="_blank" rel="noopener noreferrer"', html)
+
     def test_member_exports_csv_without_credentials(self):
         response = self.admin.get('/api/members/export.csv')
         self.assertEqual(response.status_code, 200)
@@ -30,7 +45,7 @@ class TestWorkspaceNavigation(unittest.TestCase):
         text = response.get_data(as_text=True)
         self.assertIn('姓名,用户名,专业组,造车组别,角色,账号状态', text)
         self.assertNotIn('password_hash', text)
-        self.assertNotIn('123456', text)
+        self.assertNotIn('ci-test-password-only', text)
 
     def test_csv_escapes_spreadsheet_formulas(self):
         created = self.admin.post('/api/member', json={
@@ -52,13 +67,15 @@ class TestWorkspaceNavigation(unittest.TestCase):
         self.assertTrue(member.post('/login',json={
             'username':'workspace_member','password':'member-pass-123',
         }).get_json()['ok'])
-        for url in ('/manage','/members','/funds/'):
+        for url in ('/manage','/members'):
             with self.subTest(url=url):
-                self.assertEqual(member.get(url).status_code,302)
+                self.assertEqual(member.get(url).status_code,403)
         text = member.get('/invoices/').get_data(as_text=True)
         self.assertIn('我的发票',text)
         self.assertNotIn('href="/members"',text)
-        self.assertNotIn('href="/funds/" class="ws-nav-link',text)
+        self.assertIn('href="/funds/" class="ws-nav-link',text)
+        self.assertEqual(member.get('/funds/').status_code, 200)
+        self.assertEqual(member.get('/funds/api/export').status_code, 403)
         self.assertEqual(member.get('/api/members/export.csv').status_code,403)
         self.assertEqual(member.get('/tasks').status_code,200)
 

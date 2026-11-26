@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f5f5f7">
+  <title>当前离线 · 巡天御风</title>
+  <style>
+    :root{color-scheme:light dark;font:16px/1.7 system-ui,sans-serif;background:#f5f5f7;color:#1d1d1f}
+    body{margin:0;min-height:100dvh;display:grid;place-items:center}
+    main{box-sizing:border-box;width:min(100% - 32px,520px);padding:32px;border:1px solid #d2d2d7;border-radius:16px;background:white}
+    h1{font-size:28px;margin:0 0 16px}p{margin:12px 0}a{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:10px;background:#0071e3;color:white;text-decoration:none;margin-top:12px}
+    a:focus-visible{outline:3px solid #d54443;outline-offset:4px}
+    @media(prefers-color-scheme:dark){:root{background:#0b0b0c;color:#f5f5f7}main{background:#1c1c1e;border-color:#68686d}}
+  </style>
+</head>
+<body><main role="alert">
+  <h1>当前离线，业务操作需联网</h1>
+  <p>暂时无法连接服务器。这里不保存或显示离线库存、任务、成员或资金数据，也不会在后台补交操作。</p>
+  <p>请检查网络连接后重试；若此前提交时断网，请先核对服务器记录，再决定是否重新提交。</p>
+  <a href="">重新连接当前页面</a>
+</main></body>
+</html>

@@ -1,7 +1,8 @@
-{% include "_web_app_head.html" %}
+{% include "_pwa_head.html" %}
 <script src="{{ url_for('static', filename='theme-init.js') }}"></script>
 <meta name="csrf-token" content="{{ csrf_token() }}">
 <script src="{{ url_for('static', filename='security.js') }}"></script>
 <script src="{{ url_for('static', filename='business-ui.js') }}"></script>
 <script src="{{ url_for('static', filename='theme.js') }}" defer></script>
 <script src="{{ url_for('static', filename='avatar.js') }}" defer></script>
+<script src="{{ url_for('static', filename='form-controls.js') }}" defer></script>

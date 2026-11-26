@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-palette="rm-light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>物料管理 · UI 设计示例</title>
+  <link rel="stylesheet" href="../../static/style.css">
+  <link rel="stylesheet" href="../../static/ui.css">
+  <link rel="stylesheet" href="../../static/workspace.css">
+  <link rel="stylesheet" href="../../static/apple.css">
+  <link rel="stylesheet" href="../../static/themes.css">
+  <link rel="stylesheet" href="../../static/assets.css">
+  <style>
+    #preview-dialog[open] { display:flex; flex-direction:column; }
+    #preview-dialog > .asset-dialog-scroll { flex:1; min-height:0; }
+    #preview-dialog > .asset-dialog-footer { flex:none; }
+    .preview-banner { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; max-width:1280px; margin:0 auto 24px; padding:12px 16px; border:1px solid var(--border); border-radius:10px; color:var(--muted); background:var(--surface-inset); font-size:12px; }
+    .preview-banner strong { color:var(--text); margin-right:10px; }
+    .preview-palette { display:flex; align-items:center; gap:6px; }
+    .preview-palette .btn { min-height:30px; padding:5px 10px; font-size:12px; }
+    .preview-palette .btn[aria-pressed="true"] { background:var(--primary); color:var(--on-primary); border-color:var(--primary); }
+    .preview-shell-icon { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+    .btn.preview-choice { display:grid; justify-content:stretch; justify-items:start; align-content:start; gap:8px; width:100%; padding:20px; text-align:left; white-space:normal; }
+    .preview-choice small { font-weight:400; color:var(--ux-muted); line-height:1.7; }
+    #preview-dialog-body { display:grid; gap:16px; }
+    #preview-dialog-body > :is(p,.asset-flow-steps,.asset-unit-toolbar,.preview-management-list) { margin-block:0; }
+    .preview-flow-message:empty { display:none; }
+    .preview-unit-selection { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:0; }
+    .preview-unit-selection > strong { flex:1 1 180px; min-width:0; overflow-wrap:anywhere; }
+    .preview-unit-table { display:grid; gap:8px; }
+    .preview-unit-table .asset-unit-row { display:grid; grid-template-columns:auto minmax(100px,1fr) auto minmax(110px,1fr) auto; align-items:center; gap:12px; padding:14px; border:1px solid var(--ux-stroke); border-radius:12px; }
+    .preview-unit-table .asset-unit-row:has(input:checked) { border-color:var(--brand-text,var(--ux-brand)); background:var(--ux-brand-soft); }
+    .preview-unit-table input[type=checkbox] { width:18px; min-height:18px; height:18px; accent-color:var(--ux-brand); }
+    .preview-unit-table small { display:block; color:var(--ux-muted); font-weight:400; margin-top:4px; }
+    .preview-flow-message { min-height:1.5em; margin:12px 0; color:var(--green-text,var(--green)); }
+    #preview-form-error { color:var(--ux-danger); }
+    .preview-quantity-result { font-size:20px; font-weight:650; }
+    .preview-management-list { display:grid; gap:10px; margin-block:16px; }
+    .preview-management-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:16px; border:1px solid var(--ux-stroke); border-radius:12px; }
+    .preview-management-row p { margin:6px 0 0; }
+    .preview-management-row .asset-actions { margin:0; }
+    .preview-search-label { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .preview-search-label a { color:var(--brand-text,var(--ux-brand)); font-weight:600; }
+    .preview-mine-heading { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
+    .preview-mine-heading h2 { margin:0; font-size:20px; }
+    .preview-mine-heading p { margin:6px 0 0; }
+    @media(max-width:650px) { .preview-unit-table .asset-unit-row { grid-template-columns:auto minmax(100px,1fr) auto; } .preview-unit-table .preview-unit-location { grid-column:2 / 3; } .preview-unit-table .asset-unit-row > .btn { grid-column:3; } }
+  </style>
+</head>
+<body class="ws-app">
+  <a href="#main-content" class="ux-skip-link">跳至主内容</a>
+  <svg class="ws-symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="icon-box" viewBox="0 0 24 24"><path d="m12 3 9 5v8l-9 5-9-5V8l9-5ZM3 8l9 5 9-5M12 13v8M7.5 5.5l9 5"/></symbol>
+    <symbol id="icon-tool" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V4h8v3M3 12h18M9 12v3h6v-3"/></symbol>
+    <symbol id="icon-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4M10 10h4v4h-4z"/></symbol>
+    <symbol id="icon-screw" viewBox="0 0 24 24"><path d="M4 10h16l1 10H3l1-10ZM7 10V6a5 5 0 0 1 10 0v4M9 15h6"/></symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24"><path d="m10.3 4-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3l-8-14a2 2 0 0 0-3.4 0ZM12 9v5m0 3v.1"/></symbol>
+    <symbol id="icon-meter" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="3"/><path d="M8 6h8v4H8zM9 18h.01M15 18h.01"/><circle cx="12" cy="15" r="2"/></symbol>
+    <symbol id="icon-task" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="m9 10 2 2 4-4M9 16h6"/></symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M17 6a3 3 0 0 1 0 6m1 4a5 5 0 0 1 3 4"/></symbol>
+    <symbol id="icon-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5ZM8 9h8m-8 3h5"/></symbol>
+    <symbol id="icon-wallet" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="15" rx="2"/><path d="M3 10h18M6 6V3h12M16 15h2"/></symbol>
+  </svg>
+  <aside class="workspace-sidebar" aria-label="示例主导航">
+    <a class="ws-brand" href="#preview" data-preview-action="工作台"><span class="ws-brand-mark" aria-hidden="true">御</span><span class="ws-brand-text"><strong>巡天御风</strong><small>TEAM MANAGEMENT</small></span></a>
+    <nav class="ws-nav" aria-label="业务工作区">
+      <div class="ws-nav-group"><div class="ws-nav-caption">工作空间</div><a href="#preview" data-preview-action="工作台" class="ws-nav-link"><svg aria-hidden="true"><use href="#icon-grid"/></svg>工作台</a></div>
+      <div class="ws-nav-group">
+        <div class="ws-nav-caption">团队协作</div>
+        <a href="#main-content" class="ws-nav-link is-active" aria-current="page"><svg aria-hidden="true"><use href="#icon-box"/></svg>资产管理</a>
+        <a href="#preview" data-preview-action="任务中心" class="ws-nav-link"><svg aria-hidden="true"><use href="#icon-task"/></svg>任务中心</a>
+        <a href="#preview" data-preview-action="协作" class="ws-nav-link"><svg aria-hidden="true"><use href="#icon-chat"/></svg>协作</a>
+        <a href="#preview" data-preview-action="成员管理" class="ws-nav-link"><svg aria-hidden="true"><use href="#icon-users"/></svg>成员管理</a>
+      </div>
+      <div class="ws-nav-group"><div class="ws-nav-caption">财务中心</div><a href="#preview" data-preview-action="资金台账" class="ws-nav-link"><svg aria-hidden="true"><use href="#icon-wallet"/></svg>资金台账</a><a href="#preview" data-preview-action="发票中心" class="ws-nav-link"><svg aria-hidden="true"><use href="#icon-task"/></svg>发票中心</a></div>
+    </nav>
+    <div class="ws-sidebar-bottom"><div class="ws-user-card"><span class="ws-avatar">示</span><span class="ws-user-info"><strong>示例管理员</strong><small>UI 设计预览</small></span></div></div>
+  </aside>
+  <div class="workspace-main">
+    <header class="workspace-topbar"><div class="ws-breadcrumb"><span>团队协作</span><span class="ws-breadcrumb-sep">/</span><strong>物料管理</strong></div><div class="ws-top-user"><span>示例数据</span><span class="ws-top-avatar">示</span></div></header>
+    <main class="container workspace-content" id="main-content">
+      <div class="preview-banner"><span><strong>UI 设计示例</strong>示例数据 · 可切换主题、筛选与预览操作，不连接实际库存。</span><div class="preview-palette" role="group" aria-label="预览主题"><button class="btn" type="button" data-palette-choice="rm-light" aria-pressed="true">浅色</button><button class="btn" type="button" data-palette-choice="rm-dark" aria-pressed="false">深色</button></div></div>
+      <section class="asset-workspace" aria-labelledby="asset-title">
+        <header class="asset-heading asset-page-header"><div><p class="asset-eyebrow">INVENTORY / 团队物料工作台</p><h1 id="asset-title">物料管理</h1><p id="asset-description" class="asset-muted">从一颗螺丝到一台设备，让每一份物料都有去处。</p></div><div class="asset-header-actions"><button class="btn" type="button" data-preview-action="刷新"><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></svg>刷新</button><button class="btn primary" type="button" data-preview-action="新增 / 扫码入库"><span aria-hidden="true">＋</span> 新增 / 扫码入库</button></div></header>
+        <div class="asset-nav-bar">
+          <nav class="asset-tabs asset-main-nav" aria-label="物料管理主导航"><a class="asset-main-link" href="#inventory" data-preview-view="inventory" aria-current="page">物料仓库</a><a class="asset-main-link" href="#mine" data-preview-view="mine">我的借用</a></nav>
+          <div class="asset-admin-tools"><span class="asset-tools-label">管理工具</span><button class="btn" type="button" data-preview-action="使用对象">使用对象</button><button class="btn" type="button" data-preview-action="单件盘点">单件盘点</button><button class="btn" type="button" data-preview-action="校区管理">校区管理</button><button class="btn" type="button" data-preview-action="类别管理">类别管理</button></div>
+        </div>
+        <div id="preview-inventory-page">
+        <nav class="asset-view-filters" aria-label="按物料使用方式筛选" aria-describedby="asset-summary-scope">
+          <button type="button" class="asset-view-button" data-asset-view="all" aria-pressed="true"><span class="asset-metric-top"><span>全部物料</span><svg class="asset-icon" width="20" height="20" aria-hidden="true"><use href="#icon-box"/></svg></span><strong class="asset-view-count">4</strong><span class="asset-metric-note">种物料 · 查看全部</span></button>
+          <button type="button" class="asset-view-button" data-asset-view="equipment" aria-pressed="false"><span class="asset-metric-top"><span>设备 / 工具</span><svg class="asset-icon" width="20" height="20" aria-hidden="true"><use href="#icon-tool"/></svg></span><strong class="asset-view-count">2</strong><span class="asset-metric-note">借用后归还</span></button>
+          <button type="button" class="asset-view-button" data-asset-view="quantity" aria-pressed="false"><span class="asset-metric-top"><span>数量耗材</span><svg class="asset-icon" width="20" height="20" aria-hidden="true"><use href="#icon-chip"/></svg></span><strong class="asset-view-count">1</strong><span class="asset-metric-note">按数量登记领用</span></button>
+          <button type="button" class="asset-view-button" data-asset-view="supply" aria-pressed="false"><span class="asset-metric-top"><span>自由取用</span><svg class="asset-icon" width="20" height="20" aria-hidden="true"><use href="#icon-screw"/></svg></span><strong class="asset-view-count">1</strong><span class="asset-metric-note">只需关注是否充足</span></button>
+          <button type="button" class="asset-view-button" data-asset-view="attention" aria-pressed="false"><span class="asset-metric-top"><span>需要补货</span><svg class="asset-icon" width="20" height="20" aria-hidden="true"><use href="#icon-alert"/></svg></span><strong class="asset-view-count">1</strong><span class="asset-metric-note">缺货或已标记不足</span></button>
+        </nav>
+        <div class="asset-feedback-row"><p id="asset-summary-scope" class="asset-muted">分类数量随搜索、校区和类别筛选更新。</p><p id="asset-status" role="status" aria-live="polite" tabindex="-1"></p></div>
+        <section class="asset-inventory-panel" id="inventory" aria-labelledby="inventory-title">
+          <div class="asset-discovery"><form class="asset-filters" id="preview-filter" role="search"><label class="asset-search">搜索物料<span class="asset-search-field"><svg class="asset-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input name="q" type="search" maxlength="120" placeholder="搜索名称、型号或规格…" autocomplete="off"></span></label><label>校区<select name="campus"><option value="">全部校区</option><option>南校区</option><option>北校区</option></select></label><label>类别<select name="category"><option value="">全部类别</option><option>动力组件</option><option>电子元件</option><option>紧固件</option><option>仪器工具</option></select></label><button class="btn primary" type="submit">查找</button><button class="btn asset-reset" type="reset">清空筛选</button></form></div>
+          <div class="asset-results-heading"><div><h2 id="inventory-title">库存清单</h2><p class="asset-result-summary" id="preview-summary" aria-live="polite">共 4 种物料 · 第 1 页</p></div><span class="asset-list-hint">点击名称查看库存与流转记录</span></div>
+          <div id="asset-content">
+            <div class="asset-list-header" aria-hidden="true"><span>物料信息</span><span>管理方式</span><span>库存概况</span><span>操作</span></div>
+            <div class="asset-list">
+              <article class="asset-card asset-list-row" data-kind="equipment" data-campus="南校区 北校区" data-category="动力组件">
+                <div class="asset-item-identity"><span class="asset-item-icon"><svg width="22" height="22" class="asset-icon" aria-hidden="true"><use href="#icon-tool"/></svg></span><div class="asset-item-copy"><h2><a href="#preview" data-preview-action="M3508 电机 · 详情">M3508 电机</a></h2><p>减速比 19:1 · 配套 C620 电调</p><span class="asset-item-category">动力组件</span></div></div>
+                <div class="asset-item-mode"><span class="asset-tag asset-tag-equipment">可借用品</span><small>按件追踪</small></div>
+                <div class="asset-row-stock"><span class="asset-count">24 <small>台</small></span><p>总量 · 在库 18 / 借出 6</p></div>
+                <div class="asset-actions"><button class="btn" type="button" data-action="register" data-preview-action="M3508 电机 · 管理单件">管理单件</button><details class="asset-row-more"><summary aria-label="M3508 电机的更多操作">更多</summary><div class="asset-more-actions"><button class="btn" type="button" data-preview-action="M3508 电机 · 编辑">编辑物品</button><button class="btn" type="button" data-preview-action="M3508 电机 · 标签打印">打印物料标签</button></div></details></div>
+              </article>
+              <article class="asset-card asset-list-row" data-kind="quantity" data-campus="南校区" data-category="电子元件">
+                <div class="asset-item-identity"><span class="asset-item-icon"><svg width="22" height="22" class="asset-icon" aria-hidden="true"><use href="#icon-chip"/></svg></span><div class="asset-item-copy"><h2><a href="#preview" data-preview-action="STM32 芯片 · 详情">STM32 芯片</a></h2><p>STM32F407VGT6 · LQFP-100</p><span class="asset-item-category">电子元件</span></div></div>
+                <div class="asset-item-mode"><span class="asset-tag">数量耗材</span><small>按量登记</small></div>
+                <div class="asset-row-stock"><span class="asset-count">128 <small>片</small></span><p>剩余库存 · 累计领用 32</p></div>
+                <div class="asset-actions"><button class="btn" type="button" data-action="register" data-preview-action="STM32 芯片 · 登记领用">登记领用</button><details class="asset-row-more"><summary aria-label="STM32 芯片的更多操作">更多</summary><div class="asset-more-actions"><button class="btn" type="button" data-preview-action="STM32 芯片 · 调整数量">调整数量</button><button class="btn" type="button" data-preview-action="STM32 芯片 · 编辑">编辑物品</button><button class="btn" type="button" data-preview-action="STM32 芯片 · 标签打印">打印物料标签</button></div></details></div>
+              </article>
+              <article class="asset-card asset-list-row" data-kind="supply" data-attention="true" data-campus="南校区 北校区" data-category="紧固件">
+                <div class="asset-item-identity"><span class="asset-item-icon"><svg width="22" height="22" class="asset-icon" aria-hidden="true"><use href="#icon-screw"/></svg></span><div class="asset-item-copy"><h2><a href="#preview" data-preview-action="M3 螺丝 · 详情">M3 螺丝</a></h2><p>M3×8 · 内六角圆柱头</p><span class="asset-item-category">紧固件</span></div></div>
+                <div class="asset-item-mode"><span class="asset-tag asset-tag-supply">自由取用</span><small>无需逐次登记</small></div>
+                <div class="asset-row-stock"><div class="asset-supply" data-supply-campus="南校区" data-supply-status="low"><span>南校区 · <strong class="asset-supply-low">不足</strong></span><button class="btn" type="button" data-preview-action="M3 螺丝 · 南校区补货">补齐了，标记充足</button></div><div class="asset-supply" data-supply-campus="北校区" data-supply-status="sufficient"><span>北校区 · <strong class="asset-supply-sufficient">充足</strong></span><button class="btn" type="button" data-preview-action="M3 螺丝 · 北校区标记不足">标记不足</button></div></div>
+                <div class="asset-actions"><details class="asset-row-more"><summary aria-label="M3 螺丝的更多操作">更多</summary><div class="asset-more-actions"><button class="btn" type="button" data-preview-action="M3 螺丝 · 编辑">编辑物品</button><button class="btn" type="button" data-preview-action="M3 螺丝 · 标签打印">打印物料标签</button></div></details></div>
+              </article>
+              <article class="asset-card asset-list-row" data-kind="equipment" data-campus="北校区" data-category="仪器工具">
+                <div class="asset-item-identity"><span class="asset-item-icon"><svg width="22" height="22" class="asset-icon" aria-hidden="true"><use href="#icon-tool"/></svg></span><div class="asset-item-copy"><h2><a href="#preview" data-preview-action="数字万用表 · 详情">数字万用表</a></h2><p>UT61E · 含配套表笔</p><span class="asset-item-category">仪器工具</span></div></div>
+                <div class="asset-item-mode"><span class="asset-tag asset-tag-equipment">可借用品</span><small>借用后归还</small></div>
+                <div class="asset-row-stock"><span class="asset-count">6 <small>台</small></span><p>总量 · 在库 5 / 借出 1</p></div>
+                <div class="asset-actions"><button class="btn" type="button" data-action="register" data-preview-action="数字万用表 · 登记借用">登记借用</button><details class="asset-row-more"><summary aria-label="数字万用表的更多操作">更多</summary><div class="asset-more-actions"><button class="btn" type="button" data-preview-action="数字万用表 · 调整数量">调整数量</button><button class="btn" type="button" data-preview-action="数字万用表 · 编辑">编辑物品</button><button class="btn" type="button" data-preview-action="数字万用表 · 标签打印">打印物料标签</button></div></details></div>
+              </article>
+            </div>
+            <p class="asset-empty" id="preview-empty" hidden>没有符合条件的示例物料，可清空筛选后查看全部。</p>
+            <footer class="asset-pager"><span class="asset-muted" id="preview-footer">第 1 页 · 共 4 项</span></footer>
+          </div>
+        </section>
+        </div>
+        <section id="preview-mine-page" aria-label="我的借用" hidden></section>
+      </section>
+    </main>
+  </div>
+  <dialog class="asset-dialog asset-dialog-wide" id="preview-dialog" aria-labelledby="preview-dialog-title">
+    <div class="asset-dialog-scroll">
+      <form id="preview-operation-form">
+        <header class="asset-heading"><div><p class="asset-dialog-context" id="preview-dialog-context"></p><h2 id="preview-dialog-title" tabindex="-1">操作预览</h2></div><button type="button" class="btn" data-flow="close" aria-label="关闭操作窗口">关闭</button></header>
+        <div id="preview-dialog-body"></div>
+        <p id="preview-form-error" role="alert"></p>
+      </form>
+    </div>
+    <footer class="asset-dialog-footer" id="preview-dialog-footer"></footer>
+  </dialog>
+  <script>
+    (() => {
+      const dialog = document.getElementById('preview-dialog');
+      const form = document.getElementById('preview-filter');
+      const operationForm = document.getElementById('preview-operation-form');
+      const body = document.getElementById('preview-dialog-body');
+      const footer = document.getElementById('preview-dialog-footer');
+      const items = [...document.querySelectorAll('.asset-list-row')].map((row, id) => ({
+        id, row, name: row.querySelector('h2').textContent, model: row.querySelector('.asset-item-copy p').textContent,
+        category: row.dataset.category, kind: row.dataset.kind, unit: id === 1 ? '片' : id === 2 ? '盒' : '台',
+        quantity: id === 1 ? 128 : id === 3 ? 6 : 24, borrowed: id === 0 ? 6 : id === 3 ? 1 : 0,
+        stock: id === 1 ? { '南校区': 128, '北校区': 0 } : id === 3 ? { '南校区': 0, '北校区': 6 } : { '南校区': 18, '北校区': 6 },
+        borrowedStock: { '南校区': id === 0 ? 6 : 0, '北校区': id === 3 ? 1 : 0 },
+        units: id === 0 ? [
+          { id: 'M3508-001', state: '在库', campus: '南校区', place: 'A-02 货架', user: '' },
+          { id: 'M3508-002', state: '借出', campus: '南校区', place: '电控组', user: '示例队员' },
+          { id: 'M3508-003', state: '故障', campus: '北校区', place: '维修待处理区', user: '' }
+        ] : []
+      }));
+      const viewButtons = [...document.querySelectorAll('[data-asset-view]')];
+      let activePage = 'inventory';
+      let view = 'all';
+      let activeItem = null;
+      let screen = '';
+      let origin = null;
+      let returnScreen = '';
+      let picked = new Set();
+      let savedMessage = '';
+      const campuses = ['南校区', '北校区'];
+      const categories = ['动力组件', '电子元件', '紧固件', '仪器工具'];
+      const objects = [{ id: 1, name: '步兵机器人 01', type: '机器人', campus: '南校区', note: '训练与调试使用', devices: ['M3508-017 · M3508 电机', 'C620-006 · 电调'] }];
+      let collection = '';
+      let editingIndex = -1;
+      let selectedObject = null;
+      let countScope = { campus: '南校区', itemId: 0 };
+      let countChecked = new Set();
+      const escape = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+      const button = (label, action, primary = false) => `<button class="btn${primary ? ' primary' : ''}" type="button" data-flow="${escape(action)}">${escape(label)}</button>`;
+      const scanLink = (task, label) => `<a class="btn" href="materials-scan-preview.html?task=${task}">${label}</a>`;
+      const setPage = page => {
+        activePage = page;
+        document.getElementById('preview-inventory-page').hidden = page !== 'inventory';
+        document.getElementById('preview-mine-page').hidden = page !== 'mine';
+        document.querySelector('.asset-admin-tools').hidden = page === 'mine';
+        document.querySelector('[data-preview-action="新增 / 扫码入库"]').hidden = page === 'mine';
+        document.getElementById('asset-title').textContent = page === 'mine' ? '我的借用' : '物料管理';
+        document.getElementById('asset-description').textContent = page === 'mine' ? '查看自己借用的设备，并从这里登记归还。' : '从一颗螺丝到一台设备，让每一份物料都有去处。';
+        document.querySelectorAll('[data-preview-view]').forEach(link => {
+          if (link.dataset.previewView === page) link.setAttribute('aria-current', 'page');
+          else link.removeAttribute('aria-current');
+        });
+        if (location.hash !== '#' + page) location.hash = page;
+      };
+      const options = (values, selected) => values.map(value => `<option${value === selected ? ' selected' : ''}>${escape(value)}</option>`).join('');
+      const note = '<span class="asset-muted">示例操作，仅在当前页面生效</span>';
+      const context = item => `<div class="asset-form-context"><strong>${escape(item.name)}</strong><span>${escape(item.model)} · ${escape(item.category)}</span></div>`;
+      const setScreen = (name, title, content, submitLabel, cancelLabel = '取消') => {
+        screen = name;
+        document.getElementById('preview-dialog-title').textContent = title;
+        document.getElementById('preview-dialog-context').textContent = `物料仓库${activeItem ? ` / ${activeItem.name}` : ''}${returnScreen === 'units' ? ' / 单件管理' : ''}`;
+        body.innerHTML = content;
+        footer.innerHTML = `${note}<div class="asset-footer-actions">${button(cancelLabel, 'back')}${submitLabel ? `<button class="btn primary" type="submit" form="preview-operation-form">${escape(submitLabel)}</button>` : ''}</div>`;
+        document.getElementById('preview-form-error').textContent = '';
+        if (!dialog.open) dialog.showModal();
+        document.getElementById('preview-dialog-title').focus();
+        dialog.querySelector('.asset-dialog-scroll').scrollTop = 0;
+      };
+      const closeDialog = () => {
+        dialog.close();
+        if (origin?.isConnected) origin.focus();
+      };
+      const status = message => { document.getElementById('asset-status').textContent = `${message}（示例操作，仅在当前页面生效）`; };
+      const selectedUnits = () => activeItem.units.filter(unit => picked.has(unit.id));
+      const stockOnHand = (item, campus) => (item.stock[campus] || 0) - (item.kind === 'equipment' ? item.borrowedStock[campus] || 0 : 0);
+      const unitActions = {
+        borrow: { title: '登记借用', state: '在库', next: '借出' },
+        return: { title: '登记归还', state: '借出', next: '在库' },
+        move: { title: '调拨校区', state: '在库', next: '在库' },
+        fault: { title: '标记故障', state: '在库', next: '故障' },
+        repair: { title: '维修完成', state: '故障', next: '在库' }
+      };
+      const updateUnitToolbar = () => {
+        const selected = selectedUnits();
+        document.getElementById('preview-selected').textContent = selected.length ? `已选 ${selected.length} 件 · ${selected.map(unit => unit.id).join('、')}` : '先选择单件，再选择要做的事';
+        body.querySelectorAll('[data-unit-operation]').forEach(control => {
+          const operation = unitActions[control.dataset.unitOperation];
+          control.disabled = !selected.length || selected.some(unit => unit.state !== operation.state);
+          control.title = control.disabled ? `请选择${operation.state}的单件` : operation.title;
+        });
+      };
+      const showUnits = () => {
+        returnScreen = '';
+        setScreen('units', '管理单件', `${context(activeItem)}
+          <div class="asset-flow-steps"><span>1. 选择单件</span><span>2. 选择操作</span><span>3. 填写并确认</span></div>
+          <p class="preview-flow-message" role="status">${escape(savedMessage)}</p>
+          <div class="asset-unit-toolbar"><div class="asset-unit-selection preview-unit-selection"><strong id="preview-selected"></strong>${button('清空选择', 'clear-selection')}</div>
+          <div class="asset-unit-action-group"><span>日常借还</span><div class="asset-actions"><button type="button" class="btn primary" data-unit-operation="borrow">借用</button><button type="button" class="btn" data-unit-operation="return">归还</button></div></div>
+          <details class="asset-unit-action-group"><summary>调拨与维修</summary><div class="asset-actions"><button type="button" class="btn" data-unit-operation="move">调拨校区</button><button type="button" class="btn" data-unit-operation="fault">标记故障</button><button type="button" class="btn" data-unit-operation="repair">维修完成</button></div></details></div>
+          <p class="asset-muted">在库件可借用、调拨或报修；借出件可归还；故障件可登记维修完成。</p>
+          <div class="asset-unit-list preview-unit-table">${activeItem.units.map(unit => `<div class="asset-unit-row"><input type="checkbox" name="selected-unit" id="preview-unit-${escape(unit.id)}" value="${escape(unit.id)}"${picked.has(unit.id) ? ' checked' : ''}><label for="preview-unit-${escape(unit.id)}"><strong>${escape(unit.id)}</strong><small>${escape(activeItem.name)}</small></label><span class="asset-tag">${escape(unit.state)}</span><span class="preview-unit-location">${escape(unit.campus)}<small>${escape(unit.user || unit.place)}</small></span><button type="button" class="btn" data-quick-unit="${escape(unit.id)}" data-quick-operation="${unit.state === '借出' ? 'return' : unit.state === '故障' ? 'repair' : 'borrow'}">${unit.state === '借出' ? '归还' : unit.state === '故障' ? '维修完成' : '借用'}</button></div>`).join('')}</div>
+          <p class="asset-muted">以上 3 件为可操作的单件示例，可反复尝试借还、调拨和维修流程。</p>`, '', '完成');
+        updateUnitToolbar();
+      };
+      const showUnitOperation = (action, from = 'units') => {
+        const operation = unitActions[action];
+        const selected = selectedUnits();
+        if (!selected.length || selected.some(unit => unit.state !== operation.state)) return;
+        returnScreen = from;
+        const destination = action === 'move' || action === 'return' || action === 'repair';
+        setScreen(`unit-${action}`, operation.title, `${context(activeItem)}
+          <div class="asset-operation-summary"><strong>${escape(operation.title)} ${selected.length} 件</strong><p>${selected.map(unit => escape(unit.id)).join('、')}</p><span>${escape(operation.state)} → ${escape(operation.next)}</span></div>
+          <section class="asset-form-section"><h3>${action === 'borrow' ? '借给谁，用在哪里' : '确认处理信息'}</h3><div class="asset-form-grid">
+          ${action === 'borrow' ? '<label>借用人<input name="person" required maxlength="30" placeholder="填写借用人姓名"></label><label>使用对象<input name="purpose" required maxlength="60" placeholder="例如：步兵机器人"></label>' : ''}
+          ${destination ? `<label>${action === 'move' ? '目标校区' : '入库校区'}<select name="campus" required>${options(campuses, selected[0].campus)}</select></label><label>存放位置<input name="place" required maxlength="60" value="${escape(action === 'move' ? '' : 'A-02 货架')}" placeholder="例如：A-02 货架"></label>` : ''}
+          <label>${action === 'fault' ? '故障说明（必填）' : '备注（选填）'}<textarea name="remark" rows="3" maxlength="200"${action === 'fault' ? ' required' : ''} placeholder="${action === 'fault' ? '例如：上电后无响应' : '补充本次操作信息'}"></textarea></label></div></section>`, `确认${operation.title}`, from === 'mine' ? '返回我的借用' : '返回单件列表');
+      };
+      const showEditor = (creating = false, scanned = false) => {
+        const item = activeItem || { name: '', model: '', category: scanned ? '动力组件' : categories[0], kind: scanned ? 'equipment' : 'quantity', unit: scanned ? '台' : '个' };
+        returnScreen = creating ? 'new' : '';
+        setScreen(creating ? 'create' : 'edit', creating ? (scanned ? '扫码后确认物料' : '新增物料') : '编辑物品', `${creating ? '<div class="asset-form-context"><strong>先填写物料资料，再设置登记方式</strong><span>带「必填」的字段需要填写，其余信息可稍后补充。</span></div>' : context(item)}
+          <section class="asset-form-section"><h3>基本资料</h3><div class="asset-form-grid">
+          <label>物料名称（必填）<input name="name" required maxlength="60" value="${escape(scanned ? '扫码示例 · 无刷电机' : item.name)}" placeholder="例如：M3508 电机"></label>
+          <label>型号 / 规格<input name="model" maxlength="120" value="${escape(scanned ? 'M3508 · 示例标签' : item.model)}" placeholder="用于区分相似物料"></label>
+          <label>类别<select name="category">${options(categories, item.category)}</select></label>
+          <label>计量单位（必填）<input name="unit" required maxlength="8" value="${escape(item.unit)}" placeholder="台、片、个"></label></div></section>
+          <section class="asset-form-section"><h3>管理方式</h3><div class="asset-form-grid"><label>使用与登记方式<select name="kind"${creating ? '' : ' disabled'}><option value="equipment"${item.kind === 'equipment' ? ' selected' : ''}>设备 / 工具 · 借用后归还</option><option value="quantity"${item.kind === 'quantity' ? ' selected' : ''}>数量耗材 · 按数量领用</option><option value="supply"${item.kind === 'supply' ? ' selected' : ''}>自由取用 · 只标记是否充足</option></select></label>
+          ${creating ? `<label>入库校区<select name="campus">${options(campuses, campuses[0])}</select></label><label>初始数量<input name="quantity" type="number" min="0" max="1000000" step="1" required value="0"></label>` : '<p class="asset-muted">已有流转记录的物料保留原管理方式，避免借还与库存记录失去对应关系。</p>'}</div></section>`, creating ? '新增物料' : '保存修改', creating ? '返回新增方式' : '取消');
+      };
+      const showQuantity = action => {
+        returnScreen = '';
+        const availableCampuses = ['adjust', 'receipt'].includes(action) ? campuses : campuses.filter(campus => stockOnHand(activeItem, campus) > 0);
+        const campus = availableCampuses[0] || campuses[0];
+        setScreen(action, action === 'adjust' ? '盘点校正' : action === 'receipt' ? '补货入库' : action === 'consume' ? '登记领用' : '登记借用', `${context(activeItem)}
+          <section class="asset-form-section"><h3>${action === 'adjust' ? '填写盘点后的在库数量' : action === 'receipt' ? '填写本次到货数量' : '填写本次使用信息'}</h3><div class="asset-form-grid">
+          <label>校区<select name="campus">${options(availableCampuses.length ? availableCampuses : campuses, campus)}</select></label>
+          <label>${action === 'adjust' ? '盘点后在库数量' : action === 'receipt' ? '到货数量' : action === 'consume' ? '领用数量' : '借用数量'}（${escape(activeItem.unit)}）<input name="quantity" type="number" min="${action === 'adjust' ? 0 : 1}" max="1000000" step="1" required value="${action === 'adjust' ? stockOnHand(activeItem, campus) : 1}"></label>
+          ${['adjust', 'receipt'].includes(action) ? `<label>${action === 'adjust' ? '校正原因' : '入库说明'}（必填）<input name="reason" required maxlength="120" placeholder="${action === 'adjust' ? '例如：实物盘点后校正' : '例如：采购到货 / 捐赠入库'}"></label>` : '<label>使用人（必填）<input name="person" required maxlength="30" placeholder="填写使用人姓名"></label><label>用途（必填）<input name="reason" required maxlength="120" placeholder="例如：电控组焊接调试"></label>'}
+          </div></section><div class="asset-operation-summary" id="preview-quantity-summary" aria-live="polite"></div>`, action === 'adjust' ? '确认校正' : action === 'receipt' ? '确认入库' : action === 'consume' ? '确认领用' : '确认借用');
+        updateQuantity();
+      };
+      const updateQuantity = () => {
+        const campus = operationForm.elements.campus.value;
+        const current = stockOnHand(activeItem, campus);
+        const amount = Number(operationForm.elements.quantity.value);
+        const remaining = screen === 'adjust' ? amount : screen === 'receipt' ? current + amount : current - amount;
+        const difference = remaining - current;
+        document.getElementById('preview-quantity-summary').innerHTML = `<strong>${escape(campus)} · ${screen === 'borrow-quantity' ? '可借数量' : '在库数量变化'}</strong><p class="preview-quantity-result">${current} → ${Number.isFinite(remaining) ? remaining : '—'} ${escape(activeItem.unit)}</p><span>${difference === 0 ? '数量未变化' : `${difference > 0 ? '增加' : '减少'} ${Math.abs(difference)} ${escape(activeItem.unit)}`}</span>${remaining < 0 ? '<p id="preview-stock-warning">数量超出该校区库存，请减少数量或切换校区。</p>' : ''}`;
+      };
+      const showNew = () => {
+        activeItem = null;
+        returnScreen = '';
+        setScreen('new', '新增物料', '<p class="asset-muted">按你手边的信息选择一种方式。</p><div class="asset-form-grid"><button type="button" class="btn preview-choice" data-flow="manual-new"><strong>＋ 手动新增</strong><small>直接填写名称、型号和管理方式。适合首次登记的新物料。</small></button><button type="button" class="btn preview-choice" data-flow="scan-new"><strong>⌗ 扫码识别</strong><small>读取物料标签后核对资料。示例提供一张可点击的标签，不启用摄像头。</small></button></div>', '', '返回仓库');
+      };
+      const showScan = () => {
+        location.href = 'materials-scan-preview.html?task=receive';
+      };
+      const updateItemRow = item => {
+        item.row.dataset.category = item.category;
+        item.row.dataset.kind = item.kind;
+        item.row.querySelector('h2 a').textContent = item.name;
+        item.row.querySelector('.asset-item-copy p').textContent = item.model || '未填写型号';
+        item.row.querySelector('.asset-item-category').textContent = item.category;
+        const count = item.row.querySelector('.asset-count');
+        if (count) count.innerHTML = `${item.quantity} <small>${escape(item.unit)}</small>`;
+        item.row.querySelectorAll('[data-preview-action]').forEach(control => { control.dataset.previewAction = `${item.name} · ${control.dataset.previewAction.split(' · ').pop()}`; });
+        item.row.querySelector('.asset-row-more summary')?.setAttribute('aria-label', `${item.name}的更多操作`);
+        if (item.kind === 'quantity') item.row.querySelector('.asset-row-stock > p').textContent = '剩余库存 · 示例已更新';
+        if (item.kind === 'equipment') item.row.querySelector('.asset-row-stock > p').textContent = `总量 · 在库 ${item.quantity - item.borrowed} / 借出 ${item.borrowed}`;
+        filter();
+      };
+      const enhanceQuantityMenu = item => {
+        if (item.kind === 'supply' || item.units.length) return;
+        const menu = item.row.querySelector('.asset-more-actions');
+        let adjust = [...menu.querySelectorAll('button')].find(control => control.dataset.previewAction.endsWith('调整数量'));
+        if (!adjust) { adjust = document.createElement('button'); adjust.type = 'button'; adjust.className = 'btn'; adjust.dataset.previewAction = `${item.name} · 调整数量`; menu.prepend(adjust); }
+        adjust.textContent = '盘点校正';
+        if (![...menu.querySelectorAll('button')].some(control => control.dataset.previewAction.endsWith('补货入库'))) {
+          const receipt = document.createElement('button'); receipt.type = 'button'; receipt.className = 'btn'; receipt.dataset.previewAction = `${item.name} · 补货入库`; receipt.textContent = '补货入库'; menu.prepend(receipt);
+        }
+      };
+      const createItem = values => {
+        const kind = String(values.get('kind'));
+        const source = items.find(item => item.kind === kind);
+        const row = source.row.cloneNode(true);
+        row.hidden = false;
+        row.dataset.campus = String(values.get('campus'));
+        row.querySelectorAll('details').forEach(menu => { menu.open = false; });
+        const quantity = Number(values.get('quantity'));
+        const item = { id: items.length, row, name: String(values.get('name')).trim(), model: String(values.get('model')).trim(), category: String(values.get('category')), kind, unit: String(values.get('unit')).trim(), quantity, borrowed: 0, stock: Object.fromEntries(campuses.map(campus => [campus, 0])), borrowedStock: Object.fromEntries(campuses.map(campus => [campus, 0])), units: [] };
+        item.stock[String(values.get('campus'))] = quantity;
+        if (kind === 'equipment') {
+          row.querySelector('[data-action="register"]').textContent = '登记借用';
+          row.querySelector('[data-action="register"]').dataset.previewAction = `${item.name} · 登记借用`;
+          row.querySelector('.asset-item-mode small').textContent = '借用后归还';
+        }
+        if (kind === 'supply') {
+          const supply = row.querySelector('[data-supply-campus]').cloneNode(true);
+          supply.dataset.supplyCampus = String(values.get('campus'));
+          supply.dataset.supplyStatus = 'sufficient';
+          supply.hidden = false;
+          supply.querySelector('span').firstChild.nodeValue = `${values.get('campus')} · `;
+          supply.querySelector('strong').className = 'asset-supply-sufficient';
+          supply.querySelector('strong').textContent = '充足';
+          supply.querySelector('button').textContent = '标记不足';
+          supply.querySelector('button').dataset.previewAction = `${item.name} · ${values.get('campus')}标记不足`;
+          row.querySelector('.asset-row-stock').replaceChildren(supply);
+        }
+        items.push(item);
+        document.querySelector('.asset-list').append(row);
+        enhanceQuantityMenu(item);
+        updateItemRow(item);
+        return item;
+      };
+      const collectionValues = () => collection === 'campus' ? campuses : categories;
+      const refreshFilterOptions = () => {
+        for (const [name, values, label] of [['campus', campuses, '全部校区'], ['category', categories, '全部类别']]) {
+          const selected = form.elements[name].value;
+          form.elements[name].innerHTML = `<option value="">${label}</option>${options(values, selected)}`;
+        }
+        filter();
+      };
+      const showCollection = kind => {
+        activeItem = null;
+        collection = kind;
+        returnScreen = '';
+        const title = kind === 'campus' ? '校区' : '类别';
+        setScreen('collection', `${title}管理`, `<div class="asset-heading"><p class="asset-muted">维护${title}名称，在新增物料与筛选时使用。</p>${button(`新增${title}`, 'collection-new', true)}</div><div class="preview-management-list">${collectionValues().map((name, index) => `<div class="preview-management-row"><div><strong>${escape(name)}</strong><p class="asset-muted">${items.filter(item => kind === 'campus' ? Object.hasOwn(item.stock, name) && item.stock[name] > 0 : item.category === name).length} 种示例物料</p></div><button type="button" class="btn" data-collection-edit="${index}">编辑</button></div>`).join('')}</div>`, '', '返回仓库');
+      };
+      const showCollectionEditor = index => {
+        editingIndex = index;
+        returnScreen = 'collection';
+        const title = collection === 'campus' ? '校区' : '类别';
+        setScreen('collection-edit', `${index < 0 ? '新增' : '编辑'}${title}`, `<section class="asset-form-section"><h3>${title}信息</h3><label>${title}名称（必填）<input name="name" required maxlength="30" value="${escape(index < 0 ? '' : collectionValues()[index])}" placeholder="填写便于辨识的名称"></label><p class="asset-muted">保存后，同一页面的物料表单与筛选项会同步更新。</p></section>`, '保存', `返回${title}列表`);
+      };
+      const showObjects = () => {
+        activeItem = null;
+        returnScreen = '';
+        setScreen('objects', '使用对象', `<div class="asset-heading"><p class="asset-muted">查看物料被用在哪台设备、机器人或项目上。</p>${button('新增使用对象', 'object-new', true)}</div><div class="preview-management-list">${objects.map(object => `<div class="preview-management-row"><div><strong>${escape(object.name)}</strong><p class="asset-muted">${escape(object.type)} · ${escape(object.campus)} · 已安装 ${object.devices.length} 件</p></div><div class="asset-actions"><button type="button" class="btn" data-object-view="${object.id}">查看已装设备</button><button type="button" class="btn" data-object-edit="${object.id}">编辑</button></div></div>`).join('')}</div>`, '', '返回仓库');
+      };
+      const showObjectDetail = object => {
+        selectedObject = object;
+        returnScreen = 'objects';
+        setScreen('object-detail', object.name, `<div class="asset-form-context"><strong>${escape(object.type)} · ${escape(object.campus)}</strong><span>${escape(object.note || '暂无备注')}</span></div><section class="asset-form-section"><h3>已装设备 · ${object.devices.length} 件</h3>${object.devices.length ? `<div class="preview-management-list">${object.devices.map(device => `<div class="preview-management-row"><strong>${escape(device)}</strong><span class="asset-tag">已安装</span></div>`).join('')}</div>` : '<p class="asset-muted">暂未安装设备，可在单件管理中登记流转。</p>'}</section>`, '', '返回使用对象');
+      };
+      const showObjectEditor = object => {
+        selectedObject = object;
+        returnScreen = 'objects';
+        setScreen('object-edit', object ? '编辑使用对象' : '新增使用对象', `<section class="asset-form-section"><h3>基本信息</h3><div class="asset-form-grid"><label>对象名称（必填）<input name="name" required maxlength="60" value="${escape(object?.name || '')}" placeholder="例如：步兵机器人 02"></label><label>类型<select name="type">${options(['机器人', '设备', '项目'], object?.type || '机器人')}</select></label><label>所属校区<select name="campus">${options(campuses, object?.campus || campuses[0])}</select></label><label>备注<textarea name="note" rows="3" maxlength="200">${escape(object?.note || '')}</textarea></label></div></section>`, '保存使用对象', '返回使用对象');
+      };
+      const countUnits = () => (items.find(item => item.id === countScope.itemId)?.units || []).filter(unit => unit.campus === countScope.campus);
+      const showCount = (setup = true) => {
+        activeItem = null;
+        returnScreen = setup ? '' : 'count';
+        const tracked = items.filter(item => item.units.length);
+        if (setup) {
+          setScreen('count-setup', '单件盘点', `<div class="asset-form-context"><strong>先确定范围，再逐件核对</strong><span>按实物或借出记录核对单件编号，未核对项会保留为待处理。</span></div><section class="asset-form-section"><h3>盘点范围</h3><div class="asset-form-grid"><label>校区<select name="campus">${options(campuses, countScope.campus)}</select></label><label>物料型号<select name="item">${tracked.map(item => `<option value="${item.id}"${item.id === countScope.itemId ? ' selected' : ''}>${escape(item.name)}</option>`).join('')}</select></label></div></section>`, '开始核对', '返回仓库');
+          return;
+        }
+        const units = countUnits();
+        setScreen('count-check', '逐件核对', `<div class="asset-form-context"><strong>${escape(countScope.campus)} · ${escape(items.find(item => item.id === countScope.itemId).name)}</strong><span>本轮范围共 ${units.length} 件；核对后勾选，不会自动修改库存。</span></div><div class="preview-management-list">${units.map(unit => `<label class="preview-management-row"><span><input style="width:18px;min-height:18px;vertical-align:middle" type="checkbox" name="count-unit" value="${escape(unit.id)}"${countChecked.has(unit.id) ? ' checked' : ''}> ${escape(unit.id)}</span><span class="asset-tag">${escape(unit.state)} · ${escape(unit.user || unit.place)}</span></label>`).join('') || '<p class="asset-muted">此校区没有可盘点的示例单件，请返回更换范围。</p>'}</div><label>盘点备注<textarea name="note" rows="2" maxlength="200" placeholder="例如：未找到某编号，后续核实借出记录"></textarea></label><p id="preview-count-progress" class="asset-muted">已核对 ${countChecked.size} / ${units.length} 件</p>`, units.length ? '完成盘点' : '', '返回盘点范围');
+      };
+      const showMine = () => {
+        activeItem = null;
+        returnScreen = '';
+        screen = '';
+        if (dialog.open) dialog.close();
+        setPage('mine');
+        const records = items.flatMap(item => item.units.filter(unit => unit.state === '借出').map(unit => ({ item, unit })));
+        const legacy = items.filter(item => item.kind === 'equipment' && !item.units.length && item.borrowed > 0);
+        document.getElementById('preview-mine-page').innerHTML = `<div class="preview-mine-heading"><div><h2>待归还 · ${records.length + legacy.length} 笔</h2><p class="asset-muted">借用列表直接显示在页面中，点击对应记录办理归还。</p></div><div class="asset-actions">${scanLink('borrow', '扫码借用')}${scanLink('return', '扫码归还')}</div></div><p class="asset-muted" role="status">${escape(savedMessage)}</p><div class="preview-management-list">${records.map(({ item, unit }) => `<div class="preview-management-row"><div><strong>${escape(item.name)} · ${escape(unit.id)}</strong><p class="asset-muted">${escape(unit.campus)} · 使用对象：${escape(unit.place)}</p></div><button type="button" class="btn primary" data-mine-return="${escape(unit.id)}" data-item="${item.id}">归还</button></div>`).join('')}${legacy.map(item => `<div class="preview-management-row"><div><strong>${escape(item.name)} · 借出 ${item.borrowed} ${escape(item.unit)}</strong><p class="asset-muted">按数量登记</p></div><button type="button" class="btn primary" data-mine-quantity="${item.id}">归还</button></div>`).join('')}${!records.length && !legacy.length ? '<p class="asset-empty">当前没有待归还的示例物料。</p>' : ''}</div>`;
+      };
+      const showQuantityReturn = () => {
+        returnScreen = 'mine';
+        const borrowedCampuses = campuses.filter(campus => (activeItem.borrowedStock[campus] || 0) > 0);
+        setScreen('return-quantity', '登记归还', `${context(activeItem)}<section class="asset-form-section"><h3>归还信息</h3><div class="asset-form-grid"><label>借出校区<select name="campus">${options(borrowedCampuses, borrowedCampuses[0])}</select></label><label>归还数量（${escape(activeItem.unit)}）<input name="quantity" required type="number" min="1" max="${activeItem.borrowed}" step="1" value="1"></label><label>备注<textarea name="note" rows="2" maxlength="200" placeholder="如有损坏，请补充说明"></textarea></label></div></section><p class="asset-muted">当前共借出 ${activeItem.borrowed} ${escape(activeItem.unit)}，归还后恢复可借数量。</p>`, '确认归还', '返回我的借用');
+      };
+      const back = () => {
+        if (returnScreen === 'units') showUnits();
+        else if (returnScreen === 'new') showNew();
+        else if (returnScreen === 'collection') showCollection(collection);
+        else if (returnScreen === 'objects') showObjects();
+        else if (returnScreen === 'count') showCount();
+        else if (returnScreen === 'mine') showMine();
+        else closeDialog();
+      };
+      const filter = () => {
+        const values = new FormData(form);
+        const query = String(values.get('q') || '').trim().toLowerCase();
+        const campus = String(values.get('campus') || '');
+        const category = String(values.get('category') || '');
+        let count = 0;
+        const totals = { all: 0, equipment: 0, quantity: 0, supply: 0, attention: 0 };
+        items.forEach(({ row }) => {
+          const supplies = [...row.querySelectorAll('[data-supply-campus]')];
+          supplies.forEach(supply => { supply.hidden = !!campus && supply.dataset.supplyCampus !== campus; });
+          const needsAttention = supplies.some(supply => !supply.hidden && supply.dataset.supplyStatus === 'low');
+          const baseMatch = row.querySelector('.asset-item-copy').textContent.toLowerCase().includes(query) && (!campus || row.dataset.campus.includes(campus)) && (!category || row.dataset.category === category);
+          if (baseMatch) {
+            totals.all++;
+            totals[row.dataset.kind]++;
+            if (needsAttention) totals.attention++;
+          }
+          const viewMatch = view === 'all' || row.dataset.kind === view || (view === 'attention' && needsAttention);
+          row.hidden = !(baseMatch && viewMatch);
+          if (!row.hidden) count++;
+        });
+        viewButtons.forEach(button => { button.querySelector('.asset-view-count').textContent = totals[button.dataset.assetView]; });
+        document.getElementById('preview-summary').textContent = `共 ${count} 种物料${count ? ' · 第 1 页' : ''}`;
+        document.getElementById('preview-footer').textContent = `第 1 页 · 共 ${count} 项`;
+        document.getElementById('preview-empty').hidden = count !== 0;
+      };
+      document.addEventListener('click', event => {
+        const pageLink = event.target.closest('[data-preview-view]');
+        if (pageLink) {
+          event.preventDefault();
+          if (pageLink.dataset.previewView === 'mine') showMine(); else setPage('inventory');
+          return;
+        }
+        document.querySelectorAll('.asset-row-more[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
+        const action = event.target.closest('[data-preview-action]');
+        if (action) {
+          event.preventDefault();
+          origin = action;
+          const menu = action.closest('.asset-row-more');
+          if (menu) {
+            menu.open = false;
+            origin = menu.querySelector('summary');
+          }
+          activeItem = items.find(item => item.row === action.closest('.asset-list-row')) || null;
+          returnScreen = '';
+          savedMessage = '';
+          picked = new Set();
+          const label = action.dataset.previewAction.split(' · ').pop();
+          if (label === '刷新') { if (activePage === 'mine') showMine(); else filter(); status('示例视图已刷新，当前页面中的修改已保留'); }
+          else if (label === '新增 / 扫码入库') showNew();
+          else if (label === '校区管理') showCollection('campus');
+          else if (label === '类别管理') showCollection('category');
+          else if (label === '使用对象') showObjects();
+          else if (label === '单件盘点') showCount();
+          else if (label === '我的借用') showMine();
+          else if (activeItem && label === '管理单件') showUnits();
+          else if (activeItem && label === '编辑') showEditor();
+          else if (activeItem && label === '调整数量') showQuantity('adjust');
+          else if (activeItem && label === '补货入库') showQuantity('receipt');
+          else if (activeItem && label === '登记领用') showQuantity('consume');
+          else if (activeItem && label === '登记借用') showQuantity('borrow-quantity');
+          else if (activeItem && (label.endsWith('补货') || label.endsWith('标记不足'))) {
+            const supply = action.closest('[data-supply-campus]');
+            const low = supply.dataset.supplyStatus === 'low';
+            supply.dataset.supplyStatus = low ? 'sufficient' : 'low';
+            supply.querySelector('strong').className = low ? 'asset-supply-sufficient' : 'asset-supply-low';
+            supply.querySelector('strong').textContent = low ? '充足' : '不足';
+            action.textContent = low ? '标记不足' : '补齐了，标记充足';
+            action.dataset.previewAction = `${activeItem.name} · ${supply.dataset.supplyCampus}${low ? '标记不足' : '补货'}`;
+            filter(); status(`${activeItem.name} · ${supply.dataset.supplyCampus}已标记${low ? '充足' : '不足'}`);
+          } else if (activeItem && label === '详情') {
+            setScreen('detail', activeItem.name, `${context(activeItem)}<div class="asset-form-grid"><section class="asset-form-section"><h3>库存概况</h3><strong>${activeItem.quantity} ${escape(activeItem.unit)}</strong><p class="asset-muted">${escape(activeItem.row.dataset.campus)} · ${escape(activeItem.category)}</p></section><section class="asset-form-section"><h3>接下来要做什么</h3><div class="asset-actions">${button('编辑资料', 'edit-current')}${activeItem.units.length ? button('管理单件', 'manage-current', true) : activeItem.kind !== 'supply' ? button(activeItem.kind === 'quantity' ? '登记领用' : '登记借用', 'use-current', true) : ''}</div></section></div>`, '', '返回仓库');
+          } else if (activeItem && label === '标签打印') {
+            setScreen('label', '物料标签预览', `${context(activeItem)}<div class="asset-operation-summary"><strong>${escape(activeItem.name)}</strong><p>${escape(activeItem.model)}</p><p>示例标签 · DEMO-${activeItem.id + 1}</p></div><p class="asset-muted">这里展示标签信息的确认界面；示例不连接打印机。</p>`, '', '返回仓库');
+          } else {
+            status(`当前为物料管理示例，「${label}」属于其他工作区。`);
+          }
+        }
+        const unitAction = event.target.closest('[data-unit-operation]');
+        if (unitAction && !unitAction.disabled) showUnitOperation(unitAction.dataset.unitOperation);
+        const quickUnit = event.target.closest('[data-quick-unit]');
+        if (quickUnit) { picked = new Set([quickUnit.dataset.quickUnit]); showUnitOperation(quickUnit.dataset.quickOperation); }
+        const collectionEdit = event.target.closest('[data-collection-edit]');
+        if (collectionEdit) showCollectionEditor(Number(collectionEdit.dataset.collectionEdit));
+        const objectView = event.target.closest('[data-object-view]');
+        if (objectView) showObjectDetail(objects.find(object => object.id === Number(objectView.dataset.objectView)));
+        const objectEdit = event.target.closest('[data-object-edit]');
+        if (objectEdit) showObjectEditor(objects.find(object => object.id === Number(objectEdit.dataset.objectEdit)));
+        const mineReturn = event.target.closest('[data-mine-return]');
+        if (mineReturn) { activeItem = items.find(item => item.id === Number(mineReturn.dataset.item)); picked = new Set([mineReturn.dataset.mineReturn]); showUnitOperation('return', 'mine'); }
+        const mineQuantity = event.target.closest('[data-mine-quantity]');
+        if (mineQuantity) { activeItem = items.find(item => item.id === Number(mineQuantity.dataset.mineQuantity)); showQuantityReturn(); }
+        const flow = event.target.closest('[data-flow]')?.dataset.flow;
+        if (flow === 'close') closeDialog();
+        else if (flow === 'back') back();
+        else if (flow === 'clear-selection') { picked.clear(); body.querySelectorAll('[name="selected-unit"]').forEach(input => { input.checked = false; }); updateUnitToolbar(); }
+        else if (flow === 'collection-new') showCollectionEditor(-1);
+        else if (flow === 'object-new') showObjectEditor(null);
+        else if (flow === 'manual-new') showEditor(true);
+        else if (flow === 'scan-new') showScan();
+        else if (flow === 'scanned') showEditor(true, true);
+        else if (flow === 'edit-current') showEditor();
+        else if (flow === 'manage-current') showUnits();
+        else if (flow === 'use-current') showQuantity(activeItem.kind === 'quantity' ? 'consume' : 'borrow-quantity');
+        const palette = event.target.closest('[data-palette-choice]');
+        if (palette) {
+          document.documentElement.dataset.palette = palette.dataset.paletteChoice;
+          document.documentElement.dataset.theme = palette.dataset.paletteChoice === 'rm-dark' ? 'dark' : 'light';
+          document.querySelectorAll('[data-palette-choice]').forEach(button => button.setAttribute('aria-pressed', String(button === palette)));
+        }
+        const selected = event.target.closest('[data-asset-view]');
+        if (selected) {
+          view = selected.dataset.assetView;
+          viewButtons.forEach(button => button.setAttribute('aria-pressed', String(button === selected)));
+          filter();
+        }
+      });
+      operationForm.addEventListener('change', event => {
+        if (event.target.name === 'selected-unit') {
+          if (event.target.checked) picked.add(event.target.value); else picked.delete(event.target.value);
+          updateUnitToolbar();
+        }
+        if (event.target.name === 'count-unit') {
+          if (event.target.checked) countChecked.add(event.target.value); else countChecked.delete(event.target.value);
+          document.getElementById('preview-count-progress').textContent = `已核对 ${countChecked.size} / ${countUnits().length} 件`;
+        }
+        if (['adjust', 'receipt', 'consume', 'borrow-quantity'].includes(screen) && event.target.name === 'campus') {
+          if (screen === 'adjust') operationForm.elements.quantity.value = stockOnHand(activeItem, event.target.value);
+          updateQuantity();
+        }
+      });
+      operationForm.addEventListener('input', event => {
+        if (['adjust', 'receipt', 'consume', 'borrow-quantity'].includes(screen) && event.target.name === 'quantity') updateQuantity();
+        document.getElementById('preview-form-error').textContent = '';
+      });
+      operationForm.addEventListener('submit', event => {
+        event.preventDefault();
+        if (!operationForm.reportValidity()) return;
+        const values = new FormData(operationForm);
+        const fail = message => { document.getElementById('preview-form-error').textContent = message; };
+        for (const field of operationForm.querySelectorAll('[required]')) {
+          if (!field.value.trim()) { fail('请填写必填信息，不能只输入空格。'); field.focus(); return; }
+        }
+        if (screen === 'collection-edit') {
+          const name = String(values.get('name')).trim();
+          const list = collectionValues();
+          if (list.some((value, index) => value === name && index !== editingIndex)) { fail('该名称已经存在，请换一个名称。'); return; }
+          const oldName = editingIndex < 0 ? '' : list[editingIndex];
+          if (editingIndex < 0) list.push(name); else list[editingIndex] = name;
+          items.forEach(item => {
+            if (collection === 'category' && item.category === oldName) item.category = name;
+            if (collection === 'campus') {
+              item.stock[name] = item.stock[oldName] || 0;
+              item.borrowedStock[name] = item.borrowedStock[oldName] || 0;
+              if (oldName && oldName !== name) { delete item.stock[oldName]; delete item.borrowedStock[oldName]; }
+              item.units.forEach(unit => { if (unit.campus === oldName) unit.campus = name; });
+              item.row.querySelectorAll('[data-supply-campus]').forEach(supply => {
+                if (supply.dataset.supplyCampus !== oldName) return;
+                supply.dataset.supplyCampus = name;
+                supply.querySelector('span').firstChild.nodeValue = `${name} · `;
+              });
+              item.row.dataset.campus = Object.keys(item.stock).filter(campus => item.stock[campus] > 0).join(' ') || name;
+            }
+            updateItemRow(item);
+          });
+          if (collection === 'campus') { objects.forEach(object => { if (object.campus === oldName) object.campus = name; }); if (countScope.campus === oldName) countScope.campus = name; }
+          refreshFilterOptions();
+          status(`${collection === 'campus' ? '校区' : '类别'}「${name}」已保存`);
+          showCollection(collection);
+          return;
+        }
+        if (screen === 'object-edit') {
+          const name = String(values.get('name')).trim();
+          if (objects.some(object => object !== selectedObject && object.name === name)) { fail('该使用对象名称已经存在。'); return; }
+          const object = selectedObject || { id: objects.length + 1, devices: [] };
+          ['name', 'type', 'campus', 'note'].forEach(key => { object[key] = String(values.get(key)).trim(); });
+          if (!selectedObject) objects.push(object);
+          status(`使用对象「${name}」已保存`);
+          showObjects();
+          return;
+        }
+        if (screen === 'count-setup') {
+          const nextScope = { campus: String(values.get('campus')), itemId: Number(values.get('item')) };
+          if (countScope.campus !== nextScope.campus || countScope.itemId !== nextScope.itemId) countChecked.clear();
+          countScope = nextScope;
+          showCount(false);
+          return;
+        }
+        if (screen === 'count-check') {
+          const units = countUnits();
+          const found = units.filter(unit => countChecked.has(unit.id));
+          returnScreen = 'count';
+          setScreen('count-result', '盘点已记录', `<div class="asset-operation-summary"><strong>${escape(countScope.campus)} · 本轮共 ${units.length} 件</strong><p class="preview-quantity-result">已核对 ${found.length} · 待核对 ${units.length - found.length}</p><p>${escape(String(values.get('note')).trim() || '本轮没有填写备注。')}</p></div><div class="preview-management-list">${units.map(unit => `<div class="preview-management-row"><strong>${escape(unit.id)}</strong><span class="asset-tag">${countChecked.has(unit.id) ? '已核对' : '待核对'}</span></div>`).join('')}</div><p class="asset-muted">盘点结果仅记录在本页示例中，库存数量未自动改变。</p>`, '', '返回盘点范围');
+          status(`盘点已记录：已核对 ${found.length} 件，待核对 ${units.length - found.length} 件`);
+          return;
+        }
+        if (screen === 'return-quantity') {
+          const campus = String(values.get('campus'));
+          const amount = Number(values.get('quantity'));
+          if (!Number.isSafeInteger(amount) || amount < 1 || amount > (activeItem.borrowedStock[campus] || 0)) { fail('归还数量不能超过所选校区的借出数量。'); return; }
+          activeItem.borrowedStock[campus] -= amount;
+          activeItem.borrowed -= amount;
+          updateItemRow(activeItem);
+          status(`${activeItem.name}已归还 ${amount} ${activeItem.unit}`);
+          showMine();
+          return;
+        }
+        if (screen.startsWith('unit-')) {
+          const action = screen.slice(5);
+          const operation = unitActions[action];
+          const units = selectedUnits();
+          if (!units.length || units.some(unit => unit.state !== operation.state)) { fail('选中单件状态已变化，请返回列表重新选择。'); return; }
+          if (action === 'move' && units.some(unit => unit.campus === values.get('campus'))) { fail('目标校区与选中单件的当前校区相同，请改选目标校区。'); return; }
+          units.forEach(unit => {
+            if (action === 'borrow') { activeItem.borrowed++; activeItem.borrowedStock[unit.campus]++; unit.user = String(values.get('person')).trim(); unit.place = String(values.get('purpose')).trim(); }
+            if (action === 'return') { activeItem.borrowed--; activeItem.borrowedStock[unit.campus]--; unit.user = ''; }
+            unit.state = operation.next;
+            if (values.has('campus')) {
+              const targetCampus = String(values.get('campus'));
+              if (targetCampus !== unit.campus) { activeItem.stock[unit.campus]--; activeItem.stock[targetCampus]++; }
+              unit.campus = targetCampus;
+            }
+            if (values.has('place')) unit.place = String(values.get('place')).trim();
+          });
+          savedMessage = `${units.length} 件已完成${operation.title}。选择已保留，可继续处理。`;
+          updateItemRow(activeItem);
+          status(savedMessage);
+          if (returnScreen === 'mine') showMine(); else showUnits();
+          return;
+        }
+        if (screen === 'edit') {
+          ['name', 'model', 'category', 'unit'].forEach(key => { activeItem[key] = String(values.get(key)).trim(); });
+          updateItemRow(activeItem);
+          status(`${activeItem.name}资料已更新`);
+          closeDialog();
+          return;
+        }
+        if (screen === 'create') {
+          if (!Number.isSafeInteger(Number(values.get('quantity'))) || Number(values.get('quantity')) < 0) { fail('初始数量需要是大于或等于 0 的整数。'); return; }
+          const created = createItem(values);
+          form.reset();
+          view = 'all';
+          viewButtons.forEach(control => control.setAttribute('aria-pressed', String(control.dataset.assetView === 'all')));
+          filter();
+          status(`${created.name}已添加到示例清单`);
+          closeDialog();
+          return;
+        }
+        if (['adjust', 'receipt', 'consume', 'borrow-quantity'].includes(screen)) {
+          const campus = String(values.get('campus'));
+          const current = stockOnHand(activeItem, campus);
+          const amount = Number(values.get('quantity'));
+          if (!Number.isSafeInteger(amount) || amount < (screen === 'adjust' ? 0 : 1)) { fail('请输入有效的整数数量。'); return; }
+          const next = screen === 'adjust' ? amount : screen === 'receipt' ? current + amount : current - amount;
+          if (next < 0) { fail('数量超出所选校区库存，请调整数量。'); return; }
+          if (screen === 'borrow-quantity') { activeItem.borrowed += amount; activeItem.borrowedStock[campus] += amount; }
+          else { activeItem.stock[campus] = next + (activeItem.kind === 'equipment' ? activeItem.borrowedStock[campus] || 0 : 0); activeItem.quantity += next - current; }
+          activeItem.row.dataset.campus = Object.keys(activeItem.stock).filter(key => activeItem.stock[key] > 0).join(' ') || campus;
+          updateItemRow(activeItem);
+          status(`${activeItem.name} · ${campus}${screen === 'borrow-quantity' ? `已登记借用 ${amount} ${activeItem.unit}` : `库存已从 ${current} 调整为 ${next} ${activeItem.unit}`}`);
+          closeDialog();
+        }
+      });
+      dialog.addEventListener('cancel', event => {
+        event.preventDefault();
+        back();
+      });
+      form.addEventListener('submit', event => { event.preventDefault(); filter(); });
+      form.addEventListener('change', filter);
+      form.addEventListener('reset', () => {
+        view = 'all';
+        viewButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.assetView === 'all')));
+        queueMicrotask(filter);
+      });
+      items.forEach(enhanceQuantityMenu);
+      const scanner = document.createElement('a');
+      scanner.className = 'btn'; scanner.href = 'materials-scan-preview.html?task=general'; scanner.textContent = '扫一扫';
+      document.querySelector('.asset-header-actions').prepend(scanner);
+      const searchLabel = document.querySelector('.asset-search');
+      searchLabel.firstChild.replaceWith(Object.assign(document.createElement('span'), { className:'preview-search-label', innerHTML:'<span>搜索物料</span><a href="materials-scan-preview.html?task=search">扫码搜索</a>' }));
+      window.addEventListener('hashchange', () => {
+        const page = location.hash === '#mine' ? 'mine' : 'inventory';
+        if (page !== activePage) { if (page === 'mine') showMine(); else setPage('inventory'); }
+      });
+      if (location.hash === '#mine') showMine();
+    })();
+  </script>
+</body>
+</html>

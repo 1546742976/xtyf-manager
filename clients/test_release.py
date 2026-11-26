@@ -60,11 +60,12 @@ class ReleaseTests(unittest.TestCase):
             return
         if '-OutputDirectory' in command:
             out = Path(command[command.index('-OutputDirectory') + 1])
-            names = [f'XTYF-Manager-Setup-{config["version"]}-x64.exe']
+            arch = command[command.index('-Architecture')+1] if '-Architecture' in command else 'x64'
+            names = [f'XTYF-Manager-Setup-{config["version"]}-{arch}.exe']
         else:
             out = Path(command[command.index('--output-dir') + 1])
             if any(Path(str(arg)).name == 'build_linux.py' for arg in command):
-                names = [f'XTYF-Manager-{config["version"]}-arm64.deb', f'XTYF-Manager-{config["version"]}-x86_64.rpm']
+                names = [f'XTYF-Manager-{config["version"]}-{suffix}' for suffix in ('arm64.deb','amd64.deb','x86_64.rpm','aarch64.rpm')]
             else:
                 names = [f'XTYF-Manager-{config["version"]}.apk']
         out.mkdir(parents=True, exist_ok=True)
@@ -74,8 +75,14 @@ class ReleaseTests(unittest.TestCase):
                 with zipfile.ZipFile(out / name, 'w') as apk:
                     apk.writestr('assets/frontend/asset-manifest.json', (root / 'clients/frontend/dist/asset-manifest.json').read_bytes())
                     apk.writestr('assets/frontend/index.html', b'local page')
+                module.write_json(out / 'android-build.json', {
+                    'version': config['version'], 'versionCode': config['versionCode'],
+                    'certificateSha256': 'ab' * 32, 'signatureVerified': True,
+                    'alignmentVerified': True, 'testSigning': False,
+                    'apkSha256': hashlib.sha256((out / name).read_bytes()).hexdigest(),
+                })
         if out.name == 'windows':
-            module.write_json(out / 'windows-verification.json', {'version':config['version'], 'framework':'tauri', 'architecture':'x64', 'installer':'NSIS', 'configurationTestsPassed':True, 'nativeExecutableVerified':True, 'clientPayloadVerified':True, 'installerPayloadExtracted':True, 'embeddedFrontendVerified':True, 'runtimeUiVerified':False, 'frontendManifestSha256': self.frontend_digest()})
+            module.write_json(out / ('windows-verification.json' if arch=='x64' else 'windows-verification-arm64.json'), {'version':config['version'], 'framework':'tauri', 'architecture':arch, 'installer':'NSIS', 'configurationTestsPassed':True, 'nativeExecutableVerified':True, 'clientPayloadVerified':True, 'installerPayloadExtracted':True, 'embeddedFrontendVerified':True, 'runtimeUiVerified':False, 'frontendManifestSha256': self.frontend_digest()})
         if out.name == 'linux':
             module.write_json(out / 'linux-verification.json', self.verification(config['version']))
 
@@ -91,6 +98,8 @@ class ReleaseTests(unittest.TestCase):
             'localFrontendManifestSha256': self.frontend_digest(),
         }
         return {
+            'ubuntu-amd64': {**common, 'architecture':'x86_64','format':'deb','glibcLimit':'2.35'},
+            'fedora-aarch64': {**common,'architecture':'arm64','format':'rpm'},
             'ubuntu': {**common, 'distribution': 'Ubuntu 22.04', 'architecture': 'arm64', 'format': 'deb', 'glibcLimit': '2.35', 'dependencies': ['libc6 (>= 2.35)']},
             'fedora': {**common, 'distribution': 'Fedora 44/45', 'architecture': 'x86_64', 'format': 'rpm', 'dependencies': ['gtk3'], 'targetRuntimeStatus': 'not-tested', 'fedora45Status': 'pre-release'},
             'builder': {'environment': 'Ubuntu-22.04 WSL x86_64', 'nodeVersion': 'v24.22.0'},
@@ -108,18 +117,20 @@ class ReleaseTests(unittest.TestCase):
                 if match:
                     self.assertNotEqual(match[1], '1.0.10', str(file))
 
-    def test_four_installers_bump_and_cleanup_only_after_success(self):
+    def test_seven_installers_bump_and_cleanup_only_after_success(self):
         unrelated = [self.output / 'windows/user-installer.exe', self.output / 'linux/user-package.deb', self.output / 'linux/user-package.rpm']
         for file in unrelated:
             file.write_bytes(b'keep')
         report = module.release(self.root, self.builder)
         self.assertEqual(report['version'], '1.0.10')
         self.assertEqual(report['android']['versionCode'], 12)
-        self.assertEqual(len(self.calls), 6)
+        self.assertEqual(report['android']['certificateSha256'], 'ab' * 32)
+        self.assertEqual(report['android']['signerComparison'], 'no-baseline')
+        self.assertEqual(len(self.calls), 8)
         self.assertIn('--check', self.calls[0])
-        self.assertEqual(len(report['artifacts']), 4)
+        self.assertEqual(len(report['artifacts']), 7)
         self.assertEqual(report['linux'], self.verification('1.0.10'))
-        self.assertEqual(len((self.output / 'SHA256SUMS.txt').read_text().splitlines()), 4)
+        self.assertEqual(len((self.output / 'SHA256SUMS.txt').read_text().splitlines()), 7)
         self.assertFalse(any(file.exists() for file in self.old))
         self.assertTrue(all(file.exists() for file in unrelated))
         for artifact in report['artifacts']:
@@ -130,6 +141,34 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(lock['packages']['']['version'], '1.0.10')
         manifest = module.ET.parse(self.root / 'clients/android/AndroidManifest.xml').getroot()
         self.assertEqual(manifest.get(f'{{{module.ANDROID_NS}}}versionCode'), '12')
+
+    def test_changed_signer_blocks_release_and_preserves_previous_artifacts(self):
+        previous = module.read_json(self.output / 'build-report.json')
+        previous['android']['certificateSha256'] = 'cd' * 32
+        module.write_json(self.output / 'build-report.json', previous)
+        self.original['dist/clients/build-report.json'] = (self.output / 'build-report.json').read_bytes()
+        with self.assertRaisesRegex(RuntimeError, '签名'):
+            module.release(self.root, self.builder)
+        self.assert_rollback()
+
+    def test_test_signature_or_missing_metadata_cannot_publish(self):
+        for mode in ('test', 'missing', 'wrong-hash', 'not-verified'):
+            with self.subTest(mode=mode):
+                def corrupt(command, root):
+                    self.builder(command, root)
+                    if any(Path(str(arg)).name == 'build_android.py' for arg in command):
+                        path = Path(command[command.index('--output-dir') + 1]) / 'android-build.json'
+                        if mode == 'missing':
+                            path.unlink()
+                        else:
+                            data = module.read_json(path)
+                            data[{'test': 'testSigning', 'wrong-hash': 'apkSha256',
+                                  'not-verified': 'signatureVerified'}[mode]] = {
+                                      'test': True, 'wrong-hash': '0' * 64, 'not-verified': False}[mode]
+                            module.write_json(path, data)
+                with self.assertRaises(RuntimeError):
+                    module.release(self.root, corrupt)
+                self.assert_rollback()
 
     def test_second_build_failure_restores_version_and_old_installers(self):
         def fail_android(command, root):
@@ -142,7 +181,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(module.next_config(self.root)['version'], '1.0.10')
 
     def test_frontend_mismatch_rolls_back_all_packages(self):
-        for platform in ('windows', 'ubuntu', 'fedora', 'android'):
+        for platform in ('windows', 'windows-arm64', 'ubuntu', 'ubuntu-amd64', 'fedora', 'fedora-aarch64', 'android'):
             with self.subTest(platform=platform):
                 def corrupt(command, root):
                     self.builder(command, root)
@@ -153,9 +192,9 @@ class ReleaseTests(unittest.TestCase):
                             with zipfile.ZipFile(path, 'w') as apk:
                                 apk.writestr('assets/frontend/asset-manifest.json', b'{}')
                         else:
-                            path = staging / ('windows/windows-verification.json' if platform == 'windows' else 'linux/linux-verification.json')
+                            path = staging / ('windows/windows-verification.json' if platform == 'windows' else 'windows/windows-verification-arm64.json' if platform == 'windows-arm64' else 'linux/linux-verification.json')
                             value = module.read_json(path)
-                            if platform == 'windows':
+                            if platform.startswith('windows'):
                                 value['frontendManifestSha256'] = 'wrong'
                             else:
                                 value[platform]['localFrontendManifestSha256'] = 'wrong'
@@ -182,7 +221,7 @@ class ReleaseTests(unittest.TestCase):
             self.builder(command, root)
         with self.assertRaises(subprocess.CalledProcessError):
             module.release(self.root, fail_linux)
-        self.assertEqual(len(self.calls), 6)
+        self.assertEqual(len(self.calls), 8)
         self.assert_rollback()
 
     def test_missing_linux_artifact_does_not_publish_partial_release(self):
@@ -366,7 +405,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(report['android']['versionCode'], 11)
         self.assertEqual(report['releaseMode'], 'same-version-rebuild')
         self.assertEqual(report['source'], revision)
-        self.assertEqual(len(self.calls), 6)
+        self.assertEqual(len(self.calls), 8)
         backup = self.output / report['previousReleaseBackup']
         self.assertTrue(backup.is_relative_to(self.output / '.rebuild-backups'))
         for relative in module.VERSION_FILES:

@@ -10,7 +10,7 @@ class TestCollaborationBackend(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
         login = self.admin.post("/login", json={
-            "username": "admin", "password": "123456",
+            "username": "admin", "password": "ci-test-password-only",
         })
         self.assertTrue(login.get_json()["ok"])
 
@@ -33,7 +33,7 @@ class TestCollaborationBackend(unittest.TestCase):
         project_id = self.admin.post("/api/projects", json={"name": "协作项目A"}).get_json()["id"]
         member_id, member_client = self._member("catalog")
 
-        # When: an admin creates a task and its participant edits the task content.
+        # When: an admin creates a task and its participant changes all non-parent settings.
         created = self.admin.post("/api/task", json={
             "title": "协作任务A", "owner_id": member_id,
             "participant_ids": [member_id], "group_ids": [group_id],
@@ -41,6 +41,12 @@ class TestCollaborationBackend(unittest.TestCase):
         })
         self.assertEqual(created.status_code, 200)
         payload = created.get_json()
+        denied = member_client.post(f"/api/task/{payload['id']}", json={
+            "version": payload["version"], "title": "参与者不能移除自己的归属",
+            "owner_id": member_id, "participant_ids": [],
+            "group_ids": [group_id], "project_id": project_id,
+        })
+        self.assertEqual(denied.status_code, 403)
         updated = member_client.post(f"/api/task/{payload['id']}", json={
             "version": payload["version"], "title": "参与者已修改",
         })
@@ -53,13 +59,6 @@ class TestCollaborationBackend(unittest.TestCase):
         self.assertEqual(task["title"], "参与者已修改")
         self.assertEqual(task["group_ids"], [group_id])
         self.assertEqual(task["project_id"], project_id)
-
-        # 归属字段只有管理员/项管可以调整：参与者清空参与成员必须被拒绝。
-        forbidden = member_client.post(f"/api/task/{payload['id']}", json={
-            "version": updated.get_json()["version"], "participant_ids": [],
-        })
-        self.assertEqual(forbidden.status_code, 403, forbidden.get_json())
-        self.assertIn("参与成员", forbidden.get_json()["error"])
 
     def test_version_conflict_and_revision_revert_conflict(self):
         # Given: a task changed in two separate structural revisions.

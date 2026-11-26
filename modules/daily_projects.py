@@ -3,6 +3,9 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 import sqlite3
+import json
+from modules.input_validation import parse_int_text
+from modules.task_assignment_mail import enqueue_assignments, executors
 import re
 
 from flask import Blueprint, current_app, jsonify, redirect, request, send_file, url_for
@@ -94,6 +97,8 @@ def describe(db, row):
     if not described:
         return None
     project = described[0]
+    project['changes'] = [dict(event) for event in db.execute(
+        'SELECT actor_name,action,note,before_json,after_json,created_at FROM daily_changes WHERE project_id=? ORDER BY id DESC LIMIT 50', (project['id'],))]
     project['blocker_events'] = [dict(event) for event in db.execute(
         'SELECT e.*,m.name AS helper_name FROM daily_blocker_events e LEFT JOIN members m ON m.id=e.helper_id WHERE e.project_id=? ORDER BY e.id DESC', (project['id'],))]
     return project
@@ -300,15 +305,21 @@ def effective_status(db, pid, requested):
 
 @bp.post('/api/daily-projects')
 @bp.post('/api/daily-projects/<int:pid>')
-@manager_required
+@login_required
 def save(pid=None):
+    body = request.get_json(silent=True)
+    if pid is not None and (not manager(current_user()) or isinstance(body, dict) and body.get('action') in ('cancel', 'reopen')):
+        return save_personal(pid, body)
     db = get_db()
     try:
         body = request.get_json(silent=True)
         db.execute('BEGIN IMMEDIATE')
         fields, groups, metadata = clean_project(body, db, pid)
+        if not isinstance(body.get('note', ''), str) or len(body.get('note', '')) > 2000:
+            raise ValueError('修改原因最多 2000 字')
         when = stamp()
         old = None
+        previous_executors = executors(db, 'daily', pid) if pid is not None else {}
         if pid is not None:
             integer(pid, '项目 ID')
             old = active_project(db, pid)
@@ -316,9 +327,17 @@ def save(pid=None):
                 db.rollback(); return failure('项目不存在', 404)
             if integer(body.get('version'), '版本') != old['version']:
                 db.rollback(); return failure('项目已修改，请重新加载后再保存', 409)
-            # Closed goals must first be explicitly reopened.
-            if old['status'] in TERMINAL and fields[2] in TERMINAL:
+            if 'created_by' in body:
+                db.rollback(); return failure('创建者身份不能修改', 403)
+            if old['status'] in TERMINAL and fields[2] in TERMINAL and not body.get('correction'):
                 db.rollback(); return failure('请先重新打开项目', 409)
+            if old['status'] in TERMINAL or fields[2] == '已取消' and old['status'] != '已取消':
+                note = body.get('note', '')
+                if not isinstance(note, str) or not note.strip() or len(note) > 2000:
+                    raise ValueError('取消、重新打开或纠错必须填写原因，最多 2000 字')
+            # Closed goals must first be explicitly reopened.
+            if old['status'] in TERMINAL and fields[2] in TERMINAL and fields[2] != old['status']:
+                db.rollback(); return failure('终态变更须先重开', 409)
             versions = body.get('group_versions')
             previous_groups = list(db.execute('SELECT stage,version,enabled FROM daily_groups WHERE project_id=?', (pid,)))
             previously_enabled = {group['stage'] for group in previous_groups if group['enabled']}
@@ -337,7 +356,7 @@ def save(pid=None):
                     db.rollback(); return failure('组进度已变化，请重新加载并核对后提交', 409)
             db.execute('UPDATE daily_projects SET title=?,detail=?,status=?,priority=?,start_date=?,due_date=?,version=version+1,updated_at=? WHERE id=?', (*fields, when, pid))
         else:
-            pid = db.execute('INSERT INTO daily_projects(title,detail,status,priority,start_date,due_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)', (*fields, when, when)).lastrowid
+            pid = db.execute('INSERT INTO daily_projects(title,detail,status,priority,start_date,due_date,created_at,updated_at,created_by) VALUES(?,?,?,?,?,?,?,?,?)', (*fields, when, when, current_user()['id'])).lastrowid
         stages = set(groups)
         stages.update(r['stage'] for r in db.execute('SELECT stage FROM daily_groups WHERE project_id=?', (pid,))
                       if body.get('groups_mode') == 'replace' or r['stage'] in STAGES)
@@ -352,7 +371,7 @@ def save(pid=None):
                 db.executemany('INSERT INTO daily_owners VALUES(?,?,?)', [(pid, stage, mid) for mid in set(groups[stage])])
             else:
                 db.execute('UPDATE daily_groups SET enabled=0 WHERE project_id=? AND stage=?', (pid, stage))
-        reopening = old is not None and old['status'] in TERMINAL
+        reopening = old is not None and old['status'] in TERMINAL and fields[2] not in TERMINAL
         if reopening:
             reopen = body.get('reopen_progress')
             if not isinstance(reopen, dict) or not reopen:
@@ -364,7 +383,7 @@ def save(pid=None):
                 group_progress(db, pid, stage, percent, '重新打开项目，确认实际进度', when)
         elif body.get('reopen_progress'):
             raise ValueError('只有已结束项目需要填写重新打开进度')
-        if fields[2] == '已完成':
+        if fields[2] == '已完成' and not (old is not None and old['status'] == '已完成'):
             for group in db.execute('SELECT stage,progress FROM daily_groups WHERE project_id=? AND enabled=1', (pid,)).fetchall():
                 if group['progress'] != 100:
                     group_progress(db, pid, group['stage'], 100, '手动完成项目，同步组进度', when)
@@ -388,9 +407,92 @@ def save(pid=None):
         if old is not None and not reconcile:
             completed_at = old['completed_at']
         db.execute('UPDATE daily_projects SET status=?,completed_at=? WHERE id=?', (status, completed_at, pid))
+        record_change(db, pid, 'create' if old is None else 'update', body.get('note', ''), dict(old) if old else {}, dict(active_project(db, pid)))
+        enqueue_assignments(db, 'daily', pid, current_user(), previous_executors)
         db.commit()
         return jsonify(ok=True, id=pid, project=describe(db, active_project(db, pid)))
     except (ValueError, TypeError) as exc:
+        db.rollback(); return failure(str(exc))
+    except sqlite3.Error:
+        db.rollback(); return failure('项目保存失败，请重试', 500)
+
+
+def record_change(db, pid, action, note, before, after):
+    user = current_user()
+    db.execute('INSERT INTO daily_changes(project_id,actor_id,actor_name,action,note,before_json,after_json,created_at) VALUES(?,?,?,?,?,?,?,?)',
+               (pid, user['id'], user['name'], action, note, json.dumps(before, ensure_ascii=False), json.dumps(after, ensure_ascii=False), stamp()))
+
+
+def save_personal(pid, body):
+    """Limited creator edits and explicit executor lifecycle operations."""
+    db, user = get_db(), current_user()
+    try:
+        integer(pid, '项目 ID')
+        if not isinstance(body, dict):
+            raise ValueError('请求格式不正确')
+        db.execute('BEGIN IMMEDIATE')
+        old = active_project(db, pid)
+        if old is None:
+            db.rollback(); return failure('项目不存在', 404)
+        own = {r[0] for r in db.execute('SELECT o.stage FROM daily_owners o JOIN daily_groups g USING(project_id,stage) WHERE o.project_id=? AND o.member_id=? AND g.enabled=1', (pid, user['id']))}
+        action = body.get('action')
+        if action not in (None, 'cancel', 'reopen'):
+            raise ValueError('操作不合法')
+        if action is None:
+            if old['created_by'] != user['id'] or set(body) - {'version', 'title', 'detail', 'start_date', 'due_date', 'note'}:
+                db.rollback(); return failure('创建者只能修改标题、说明及计划日期', 403)
+        elif not manager(user) and not own:
+            db.rollback(); return failure('只有执行负责人可以取消或重开', 403)
+        elif set(body) - {'version', 'action', 'note', 'group_versions', 'reopen_progress'}:
+            db.rollback(); return failure('流程操作不能同时改动其他字段', 403)
+        if integer(body.get('version'), '版本') != old['version']:
+            db.rollback(); return failure('项目已修改，请重新核对', 409)
+        note = body.get('note', '')
+        if not isinstance(note, str) or len(note) > 2000 or action and not note.strip():
+            raise ValueError('取消或重开原因必填，最多 2000 字')
+        when = stamp()
+        if action is None:
+            if old['status'] in TERMINAL:
+                db.rollback(); return failure('请先重新打开项目', 409)
+            from modules.input_validation import clean_text
+            from modules.task_validation import validate_dates
+            title = clean_text(body.get('title', old['title']), '目标名称', 200, allow_newlines=False)
+            detail = clean_text(body.get('detail', old['detail']), '目标说明', 10000, required=False)
+            dates = [body.get(key, old[key]) or '' for key in ('start_date', 'due_date')]
+            if any(not isinstance(value, str) for value in dates):
+                raise ValueError('日期格式不合法')
+            error = validate_dates(*dates)
+            if error:
+                raise ValueError(error)
+            db.execute('UPDATE daily_projects SET title=?,detail=?,start_date=?,due_date=? WHERE id=?', (title, detail, *dates, pid))
+        elif action == 'cancel':
+            if old['status'] in TERMINAL:
+                db.rollback(); return failure('已结束项目不能再次取消', 409)
+            close_blocker(db, old, note.strip(), when, 'cancel')
+            db.execute("UPDATE daily_projects SET status='已取消',completed_at=NULL WHERE id=?", (pid,))
+        else:
+            if old['status'] not in TERMINAL:
+                db.rollback(); return failure('只有已结束项目可重开', 409)
+            groups = {r['stage']: dict(r) for r in db.execute('SELECT * FROM daily_groups WHERE project_id=?', (pid,))}
+            versions = body.get('group_versions')
+            if not isinstance(versions, dict) or any(type(v) is not int for v in versions.values()) or versions != {key: g['version'] for key, g in groups.items()}:
+                db.rollback(); return failure('组进度已变化，请重新核对', 409)
+            progress = body.get('reopen_progress')
+            if not isinstance(progress, dict) or not progress:
+                raise ValueError('请填写至少一组实际进度（0–99）')
+            for stage, percent in progress.items():
+                integer(percent, '实际进度', 0, 99)
+                if stage not in groups or not groups[stage]['enabled']:
+                    raise ValueError('只能重开启用组')
+                if not manager(user) and stage not in own:
+                    db.rollback(); return failure('只能重开自己负责的组', 403)
+                group_progress(db, pid, stage, percent, note.strip(), when)
+            db.execute("UPDATE daily_projects SET status='进行中',completed_at=NULL WHERE id=?", (pid,))
+        db.execute('UPDATE daily_projects SET version=version+1,updated_at=? WHERE id=?', (when, pid))
+        record_change(db, pid, action or 'plan', note.strip(), dict(old), dict(active_project(db, pid)))
+        db.commit()
+        return jsonify(ok=True, id=pid, project=describe(db, active_project(db, pid)))
+    except (TypeError, ValueError) as exc:
         db.rollback(); return failure(str(exc))
     except sqlite3.Error:
         db.rollback(); return failure('项目保存失败，请重试', 500)
@@ -465,6 +567,37 @@ def delete(pid):
         db.rollback(); return failure(str(exc))
 
 
+def progress_access(db, pid, stage, version, project_version):
+    user = current_user()
+    if not user:
+        return None, None, failure('登录已失效', 401)
+    project = active_project(db, pid)
+    group = db.execute('SELECT * FROM daily_groups WHERE project_id=? AND stage=?', (pid, stage)).fetchone()
+    if not project or not group:
+        return project, group, failure('项目组不存在', 404)
+    owner = db.execute('SELECT 1 FROM daily_owners WHERE project_id=? AND stage=? AND member_id=?', (pid, stage, user['id'])).fetchone()
+    if not manager(user) and not owner:
+        return project, group, failure('只能更新自己负责的组', 403)
+    if not group['enabled'] or project['status'] in TERMINAL:
+        return project, group, failure('项目或组别为只读状态', 409)
+    if project['version'] != project_version or group['version'] != version:
+        return project, group, failure('分配或进度已变化，请重新加载并核对后提交', 409)
+    return project, group, None
+
+
+@bp.get('/api/daily-projects/<int:pid>/groups/<stage>/preflight')
+@login_required
+def progress_preflight(pid, stage):
+    try:
+        integer(pid, '项目 ID')
+        version = integer(parse_int_text(request.args.get('version', ''), '组版本'), '组版本')
+        project_version = integer(parse_int_text(request.args.get('project_version', ''), '项目版本'), '项目版本')
+        _, _, error = progress_access(get_db(), pid, stage, version, project_version)
+        return error if error is not None else jsonify(ok=True)
+    except ValueError as exc:
+        return failure(str(exc))
+
+
 @bp.route('/api/daily-projects/<int:pid>/groups/<stage>/progress', methods=['GET', 'POST'])
 @login_required
 def progress(pid, stage):
@@ -495,32 +628,30 @@ def progress(pid, stage):
                 value = body.get(key, '')
                 if not value.isascii() or not value.isdecimal():
                     raise ValueError('进度和版本必须为整数')
-                body[key] = int(value)
+                body[key] = parse_int_text(value, '进度和版本')
         percent = integer(body.get('progress'), '进度', 0, 100)
         version = integer(body.get('version'), '组版本')
         project_version = integer(body.get('project_version'), '项目版本')
         note = body.get('note', '')
         if not isinstance(note, str) or len(note) > 2000:
             raise ValueError('备注最多 2000 字')
+        _, _, error = progress_access(db, pid, stage, version, project_version)
+        if error is not None:
+            return error
         files = [f for f in request.files.getlist('files') if f.filename]
         if len(files) > MAX_FILES:
             raise ValueError('一次最多上传 5 张图片')
-        db.execute('BEGIN IMMEDIATE')
-        project = active_project(db, pid)
-        group = db.execute('SELECT * FROM daily_groups WHERE project_id=? AND stage=?', (pid, stage)).fetchone()
-        if not project or not group:
-            db.rollback(); return failure('项目组不存在', 404)
-        owner = db.execute('SELECT 1 FROM daily_owners WHERE project_id=? AND stage=? AND member_id=?', (pid, stage, user['id'])).fetchone()
-        if not manager(user) and not owner:
-            db.rollback(); return failure('只能更新自己负责的组', 403)
-        if not group['enabled'] or project['status'] in TERMINAL:
-            db.rollback(); return failure('项目或组别为只读状态', 409)
-        if project['version'] != project_version or group['version'] != version:
-            db.rollback(); return failure('分配或进度已变化，请重新加载并核对后提交', 409)
-        if percent == group['progress'] and not note.strip() and not files:
-            raise ValueError('请改变进度、填写备注或添加图片')
         images = [prepare_image(f) for f in files]
         staged = stage_images(Path(current_app.config['TASK_ATTACHMENTS_DIR']) / 'daily', images)
+        db.execute('BEGIN IMMEDIATE')
+        user = current_user()
+        if user is None:
+            db.rollback(); cleanup_staged(staged); return failure('登录已失效', 401)
+        project, group, error = progress_access(db, pid, stage, version, project_version)
+        if error is not None:
+            db.rollback(); cleanup_staged(staged); return error
+        if percent == group['progress'] and not note.strip() and not files:
+            raise ValueError('请改变进度、填写备注或添加图片')
         uid = db.execute('INSERT INTO daily_updates(project_id,stage,actor_id,actor_name,progress,note,created_at) VALUES(?,?,?,?,?,?,?)', (pid, stage, user['id'], user['name'], percent, note.strip(), stamp())).lastrowid
         db.execute('UPDATE daily_groups SET progress=?,version=version+1 WHERE project_id=? AND stage=?', (percent, pid, stage))
         when = stamp()

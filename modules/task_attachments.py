@@ -124,6 +124,9 @@ def upload_attachments(task_id: int):
         return jsonify(ok=False, error="请选择截图文件"), 400
     if len(uploads) > MAX_FILES:
         return jsonify(ok=False, error="每次最多上传 5 张截图"), 400
+    description = request.form.get('description', '').strip()
+    if len(description) > 500:
+        return jsonify(ok=False, error='截图描述最多 500 个字符'), 400
     try:
         images = [prepare_image(upload) for upload in uploads]
     except ImageValidationError as error:
@@ -133,7 +136,7 @@ def upload_attachments(task_id: int):
         member_id=user["id"],
         member_name=user["name"],
         role=user["role"],
-        description=request.form.get("description", "").strip(),
+        description=description,
     )
     return _persist_upload(db, command, images)
 

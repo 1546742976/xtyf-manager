@@ -9,7 +9,7 @@ from common import get_db
 class DailyRepairReviewTests(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
-        self.admin.post('/login', json={'username': 'admin', 'password': '123456'})
+        self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
         self.owner = self.admin.get('/api/account/profile').get_json()['profile']['id']
 
     def create(self, **changes):
@@ -37,10 +37,10 @@ class DailyRepairReviewTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         before = self.get(pid)
         self.assertEqual((before['status'], before['progress']), ('进行中', 50))
-        rejected = self.save(before, status='已取消', groups={'mechanical': [self.owner]})
+        rejected = self.save(before, status='已取消', note='结束计划', groups={'mechanical': [self.owner]})
         self.assertEqual(rejected.status_code, 400, rejected.get_json())
         self.assertEqual(self.get(pid), before, 'rejected cancellation must also roll back group disabling')
-        accepted = self.save(before, status='已取消')
+        accepted = self.save(before, status='已取消', note='结束计划')
         self.assertEqual(accepted.status_code, 200, accepted.get_json())
         self.assertEqual((self.get(pid)['status'], self.get(pid)['progress']), ('已取消', 50))
 

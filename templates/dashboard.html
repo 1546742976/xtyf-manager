@@ -25,14 +25,15 @@
 </dialog>
 {% endif %}
 <div class="ws-dashboard-stats" id="dashboard-stats" aria-label="实时任务概览">
-  <div class="ws-dashboard-stat"><span class="ws-label">我的待办</span><strong class="ws-value">—</strong></div>
-  <div class="ws-dashboard-stat"><span class="ws-label">进行中任务</span><strong class="ws-value">—</strong></div>
-  <div class="ws-dashboard-stat"><span class="ws-label">7 天内到期</span><strong class="ws-value">—</strong></div>
-  <div class="ws-dashboard-stat"><span class="ws-label">逾期任务</span><strong class="ws-value">—</strong></div>
+  <a class="ws-dashboard-stat" href="{{ url_for('tasks', type='vehicle', focus='mine') }}"><span class="ws-label">我的待办</span><strong class="ws-value">—</strong></a>
+  <a class="ws-dashboard-stat" href="{{ url_for('tasks', type='vehicle', focus='ongoing') }}"><span class="ws-label">进行中任务</span><strong class="ws-value">—</strong></a>
+  <a class="ws-dashboard-stat" href="{{ url_for('tasks', type='vehicle', focus='due7') }}"><span class="ws-label">7 天内到期</span><strong class="ws-value">—</strong></a>
+  <a class="ws-dashboard-stat" href="{{ url_for('tasks', type='vehicle', focus='overdue') }}"><span class="ws-label">逾期任务</span><strong class="ws-value">—</strong></a>
 </div>
 <div class="ws-dashboard-grid">
   <section class="ws-dashboard-card" aria-label="近期任务">
     <div class="ws-section-lead"><div><h2>近期任务</h2><p class="ws-subtitle">优先显示我负责或参与的任务，再按综合紧急度排序</p></div><span class="theme-decor theme-decor-curious" aria-hidden="true"></span><a href="{{ url_for('tasks') }}">查看全部任务 →</a></div>
+    {% include "_task_state_legend.html" %}
     <div class="ws-task-list" id="dashboard-task-list"><p class="empty">加载中…</p></div>
   </section>
   <div class="ws-dashboard-aside">
@@ -41,12 +42,11 @@
       <div class="ws-quick-grid">
         <a href="{{ url_for('tasks') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-tasks"/></svg>任务中心</a>
         {% if me.role in ('admin', 'manager') %}
-        <a href="/task-alerts" class="ws-quick-link">团队异常</a>
         <a href="{{ url_for('tasks') }}#create" class="ws-quick-link"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>创建任务</a>
         <a href="{{ url_for('members') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-users"/></svg>成员管理</a>
         <a href="/task-alerts" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-tasks"/></svg>团队异常</a>
-        <a href="/funds/" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-money"/></svg>资金台账</a>
         {% endif %}
+        <a href="/funds/" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-money"/></svg>资金台账</a>
         <a href="/invoices/" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-invoice"/></svg>提交发票</a>
         <a href="{{ url_for('account') }}" class="ws-quick-link"><svg aria-hidden="true"><use href="#ws-settings"/></svg>账户设置</a>
       </div>
@@ -62,4 +62,4 @@
   </div>
 </div>
 {% endblock %}
-{% block scripts %}<script src="{{ url_for('static', filename='app.js') }}"></script><script src="{{ url_for('static', filename='ui-dialog.js') }}"></script><script src="{{ url_for('static', filename='task-tree.js') }}"></script><script src="{{ url_for('static', filename='task-board.js') }}"></script><script src="{{ url_for('static', filename='task-history.js') }}"></script><script src="{{ url_for('static', filename='task-progress.js') }}"></script><script src="{{ url_for('static', filename='task-date-defaults.js') }}"></script><script src="{{ url_for('static', filename='task-modal.js') }}"></script><script src="{{ url_for('static', filename='dashboard.js') }}"></script><script src="{{ url_for('static', filename='daily-projects.js') }}"></script><script src="{{ url_for('static', filename='countdown.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='app.js') }}"></script><script src="{{ url_for('static', filename='ui-dialog.js') }}"></script><script src="{{ url_for('static', filename='task-tree.js') }}"></script><script src="{{ url_for('static', filename='task-board.js') }}"></script><script src="{{ url_for('static', filename='task-history.js') }}"></script><script src="{{ url_for('static', filename='task-progress.js') }}"></script><script src="{{ url_for('static', filename='task-date-defaults.js') }}"></script><script src="{{ url_for('static', filename='task-modal.js') }}"></script><script src="{{ url_for('static', filename='dashboard.js') }}"></script><script src="{{ url_for('static', filename='daily-images.js') }}"></script><script src="{{ url_for('static', filename='daily-projects.js') }}"></script><script src="{{ url_for('static', filename='countdown.js') }}"></script>{% endblock %}

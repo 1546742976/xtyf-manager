@@ -1,5 +1,19 @@
 // Amounts arrive as canonical decimal strings; money never passes through Number.
 window.Money = {
+  inputCents: function(value) {
+    var text = String(value == null ? '' : value).trim();
+    var match = /^[+]?((?:\d+(?:\.\d*)?|\.\d+))(?:[eE]([+-]?\d+))?$/.exec(text);
+    if (!match || text.length > 128) throw new Error('金额格式无效');
+    var parts = match[1].split('.'), digits = BigInt(parts.join(''));
+    var shift = Number(match[2] || 0) + 2 - (parts[1] || '').length;
+    if (!digits) return 0n;
+    if (shift > 200) throw new Error('金额超出范围');
+    if (shift < -200) return 0n;
+    var divisor = shift < 0 ? 10n ** BigInt(-shift) : 1n;
+    var numerator = shift < 0 ? digits : digits * 10n ** BigInt(shift);
+    if (numerator > 9223372036854775807n * divisor) throw new Error('金额超出范围');
+    return (numerator * 2n + divisor) / (divisor * 2n);
+  },
   cents: function(value) {
     var text = String(value == null ? '0.00' : value);
     if (!/^-?\d+\.\d{2}$/.test(text)) throw new Error('金额格式无效');

@@ -35,15 +35,15 @@ class TestHomeScreen(unittest.TestCase):
 
     def test_login_and_all_workspace_shells_share_install_metadata(self):
         login = self.client.get('/login')
-        self.assertIn(b'app.webmanifest', login.data)
+        self.assertIn(b'/manifest.webmanifest', login.data)
         self.assertIn(b'data-ios-install', login.data)
-        result = self.client.post('/login', json={'username': 'admin', 'password': '123456'})
+        result = self.client.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
         self.assertEqual(result.status_code, 200)
         for path in ('/', '/account', '/tasks', '/funds/', '/invoices/'):
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertEqual(response.status_code, 200)
-                self.assertIn(b'app.webmanifest', response.data)
+                self.assertIn(b'/manifest.webmanifest', response.data)
                 self.assertIn(b'apple-touch-icon', response.data)
                 self.assertIn(b'apple-mobile-web-app-capable', response.data)
                 self.assertIn('no-store', response.headers['Cache-Control'])

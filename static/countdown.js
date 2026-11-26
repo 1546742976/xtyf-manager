@@ -131,7 +131,7 @@ window.WorkspaceCountdown = (() => {
         if (error.status === 409) {
           blocked = true;
           reload.hidden = false;
-          formMessage("目标已被其他管理员修改。当前输入已保留，请加载最新设置并重新确认后保存。", true);
+          formMessage("目标已被其他超级管理员修改。当前输入已保留，请加载最新设置并重新确认后保存。", true);
         } else if (!error.status) {
           blocked = true;
           reload.hidden = false;

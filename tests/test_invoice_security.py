@@ -13,7 +13,7 @@ class TestInvoiceSecurity(unittest.TestCase):
     def setUp(self):
         self.admin = app_module.app.test_client()
         self.assertTrue(self.admin.post('/login', json={
-            'username': 'admin', 'password': '123456'
+            'username': 'admin', 'password': 'ci-test-password-only'
         }).get_json()['ok'])
         self.name = 'inv_' + uuid4().hex[:12]
         response = self.admin.post('/api/member', json={

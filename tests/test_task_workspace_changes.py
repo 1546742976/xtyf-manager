@@ -9,7 +9,7 @@ class WorkspaceChanges(unittest.TestCase):
     def setUp(self):
         self.app=app_module.app
         self.admin=self.app.test_client()
-        self.admin.post('/login',json={'username':'admin','password':'123456'})
+        self.admin.post('/login',json={'username':'admin','password':'ci-test-password-only'})
         self.clients={}
         self.ids={}
         for role in ('member','manager'):
@@ -20,11 +20,11 @@ class WorkspaceChanges(unittest.TestCase):
 
     def test_management_access_and_create_location(self):
         response=self.clients['member'].get('/manage')
-        self.assertEqual(response.status_code,302)
+        self.assertEqual(response.status_code,403)
         page=self.clients['member'].get('/tasks').get_data(as_text=True)
-        self.assertNotIn('id="new-task-toggle"',page)
+        self.assertIn('id="new-task-toggle"',page)
         self.assertNotIn('href="/manage"',page)
-        self.assertEqual(self.clients['member'].post('/api/task',json={'title':'forged'}).status_code,403)
+        self.assertEqual(self.clients['member'].post('/api/task',json={'title':'member-created'}).status_code,200)
         for client in (self.admin,self.clients['manager']):
             self.assertIn('id="create-form"',client.get('/tasks').get_data(as_text=True))
             self.assertEqual(client.get('/manage').status_code,200)

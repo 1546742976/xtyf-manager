@@ -16,7 +16,7 @@ class AlertsAndTopicLinksTest(unittest.TestCase):
     def setUp(self):
         self.app = app_module.app
         self.admin = self.app.test_client()
-        self.admin.post('/login', json={'username': 'admin', 'password': '123456'})
+        self.admin.post('/login', json={'username': 'admin', 'password': 'ci-test-password-only'})
         self.name = 'repair_' + uuid4().hex[:12]
         self.uid = self.admin.post('/api/member', json={'name': self.name, 'username': self.name,
             'password': 'repair-password', 'role': 'member'}).get_json()['id']
@@ -38,6 +38,17 @@ class AlertsAndTopicLinksTest(unittest.TestCase):
             'submission_id': str(uuid4()), 'title': self.name, 'body': body})
         self.assertEqual(response.status_code, 201, response.get_json())
         return response.get_json()
+
+    def test_assets_and_management_alert_entry_are_rendered(self):
+        """Catch PR split regressions where new JS/CSS/routes are never mounted."""
+        for url in ('/', '/tasks?type=daily', '/discussions'):
+            with self.subTest(url=url):
+                response = self.admin.get(url)
+                self.assertEqual(response.status_code, 200)
+                markup = response.get_data(as_text=True)
+                self.assertIn('item-topics.js', markup)
+                self.assertIn('item-topics.css', markup)
+        self.assertEqual(self.admin.get('/').get_data(as_text=True).count('href="/task-alerts"'), 1)
 
     def test_alerts_permission(self):
         self.assertEqual(self.owner.get('/api/task-alerts').status_code, 403)

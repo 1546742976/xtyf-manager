@@ -74,6 +74,6 @@
   document.addEventListener('daily:saved',event=>{
     setBusy(false);close();location.assign('/tasks?type=daily&project='+event.detail.id);
   });
-  function openHash(){if(location.hash==='#create'){history.replaceState(null,'',location.pathname+location.search);open();}}
+  function openHash(){const match=/^#task=([1-9][0-9]{0,18})$/.exec(location.hash);if(match){const query=new URLSearchParams(location.search);query.set('task',match[1]);location.replace(location.pathname+'?'+query);return;}if(location.hash==='#create'){history.replaceState(null,'',location.pathname+location.search);open();}}
   window.addEventListener('hashchange',openHash);openHash();
 })();

@@ -1,6 +1,6 @@
 "use strict";
 const assert=require('node:assert/strict'),test=require('node:test');
-const {filesError,readThrough,makeAttempt}=require('../../static/discussions.js');
+const {filesError,readThrough,makeAttempt,messageVisibleTo}=require('../../static/discussions.js');
 const MiB=1024*1024;
 test('collaboration file limits accept boundaries and reject excess before sending',()=>{
  assert.equal(filesError(Array.from({length:5},()=>({size:1}))), '');
@@ -47,4 +47,12 @@ test('an old withdrawal patch does not prove an unloaded history gap has been re
  // Only after actually loading and viewing the intervening history can it advance.
  const history=Array.from({length:42},(_,i)=>({id:i+11,author_id:2}));
  assert.equal(readThrough([{id:10,author_id:2},...history],new Set(history.map(m=>m.id)),10,true,1,10),52);
+});
+
+test('withdrawn reply cards disappear for all viewers except their author',()=>{
+ const withdrawn={id:7,author_id:3,withdrawn:true};
+ assert.equal(messageVisibleTo(withdrawn,3),true);
+ assert.equal(messageVisibleTo(withdrawn,2),false);
+ assert.equal(messageVisibleTo(withdrawn,1),false); // administrator is not exempt
+ assert.equal(messageVisibleTo({...withdrawn,withdrawn:false},2),true);
 });

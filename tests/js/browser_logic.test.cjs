@@ -143,7 +143,7 @@ test("task board: escaping, access, status and overdue semantics", () => {
   assert.equal(page.value("canEdit")(task), true);
   assert.equal(page.value("isOverdue")(task), true);
   assert.equal(page.value("daysLeftText")(task), "已逾期 2 天");
-  assert.equal(page.value("daysLeftClass")(task), "red");
+  assert.equal(page.value("daysLeftClass")(task), "orange task-deadline-overdue");
   assert.equal(page.value("isOverdue")({ ...task, status: "已完成" }), false);
   assert.equal(page.value("daysLeftText")({ ...task, days_left: 0 }), "今天截止");
   assert.equal(page.value("daysLeftText")({ ...task, days_left: null }), "未设截止");

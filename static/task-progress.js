@@ -5,14 +5,14 @@ function progressSection(task) {
   return `<section class="modal-section task-progress-section">
     <h3>任务进度 · ${percent}%</h3>
     <div class="progress" role="progressbar" aria-label="当前进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><div class="progress-inner blue" style="width:${percent}%"></div></div>
-    ${canEdit(task) && task.status !== '已取消' ? `<form id="progress-form" class="task-progress-form" enctype="multipart/form-data">
+    ${canEdit(task) && !['已完成','已取消'].includes(task.status) ? `<form id="progress-form" class="task-progress-form" enctype="multipart/form-data">
       <input name="version" type="hidden" value="${Number(task.version)}">
       <div class="progress-edit-row"><label>手动设置进度 <input type="range" name="progress_slider" min="0" max="100" step="1" value="${percent}"></label><label>百分比 <input type="number" name="progress" min="0" max="100" step="1" value="${percent}" required></label></div>
       <p class="field-help">100% 即已完成。${task.status === '已完成' ? '填写低于 100% 的实际进度会重新打开任务。' : '未开始任务提交大于 0% 的进度后自动开始。'}</p>
       <label>进度备注（完成了什么工作）<textarea name="note" rows="3" maxlength="2000" placeholder="例如：完成电机驱动联调、通过实车测试…"></textarea></label>
       <label>附图（可选，最多 5 张）<input type="file" name="files" accept="image/png,image/jpeg,image/webp" multiple></label>
       <div class="progress-submit"><button type="submit" class="btn primary">提交进度记录</button><p class="form-message" role="alert"></p></div>
-    </form>` : `<p class="muted">${task.status === '已取消' ? '已取消任务请先在设置中明确重新打开并填写实际进度。' : '仅负责人、参与成员或管理员可更新进度。'}</p>`}
+    </form>` : `<p class="muted">${task.status === '已取消' ? '已取消任务请先在设置中明确重新打开并填写实际进度。' : '仅负责人、参与成员或超级管理员可更新进度。'}</p>`}
     <div id="task-progress-list" class="progress-timeline"><p class="empty">正在加载进度记录…</p></div>
   </section>`;
 }
@@ -59,6 +59,6 @@ async function loadTaskProgress(task, generation) {
   box.innerHTML = (result.updates || []).map((entry) => `<article class="progress-entry">
     <div class="progress-entry-head"><strong>${Number(entry.progress)}% · ${esc(entry.actor_name)}</strong><time>${esc(entry.created_at)}</time></div>
     ${entry.note ? `<p class="progress-entry-note">${esc(entry.note)}</p>` : ""}
-    ${(entry.images || []).length ? `<div class="progress-entry-images">${entry.images.map((file) => `<a href="${esc(file.url)}" target="_blank" rel="noopener noreferrer" aria-label="查看进度图片"><img src="${esc(file.url)}" alt="${esc(file.name)}" loading="lazy"></a>`).join("")}</div>` : ""}
+    ${(entry.images || []).length ? `<div class="progress-entry-images">${entry.images.map((file) => `<a href="${esc(file.url)}" data-image-preview data-image-name="${esc(file.name)}" aria-label="查看进度图片"><img src="${esc(file.url)}" alt="${esc(file.name)}" loading="lazy"></a>`).join("")}</div>` : ""}
   </article>`).join("") || '<p class="empty">还没有进度记录，可以提交第一条。</p>';
 }

@@ -118,7 +118,7 @@ class TestClientUpdates(unittest.TestCase):
     def test_first_password_gate_allows_updates_but_not_business(self):
         self.publish()
         admin = self.app.test_client()
-        self.assertEqual(admin.post("/login", json={"username": "admin", "password": "123456"}).status_code, 200)
+        self.assertEqual(admin.post("/login", json={"username": "admin", "password": "ci-test-password-only"}).status_code, 200)
         import uuid
         username = "update_" + uuid.uuid4().hex[:12]
         created = admin.post("/api/member", json={"name": username, "username": username, "password": "test-pass-123"})
@@ -137,7 +137,7 @@ class TestClientUpdates(unittest.TestCase):
         payload = self.client.get("/api/client/bootstrap").json
         self.assertEqual(payload["protocolVersion"], 1)
         self.assertEqual(payload["uiCompatibility"], {"protocolMin": 1, "protocolMax": 1})
-        self.client.post("/login", json={"username": "admin", "password": "123456"})
+        self.client.post("/login", json={"username": "admin", "password": "ci-test-password-only"})
         self.assertIn("avatar_url", self.client.get("/api/client/bootstrap").json["user"])
 
     def test_invalid_limits_protocol_and_links_rejected(self):

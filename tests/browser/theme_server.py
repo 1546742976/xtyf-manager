@@ -13,19 +13,12 @@ with tempfile.TemporaryDirectory(prefix='xtyf-theme-demo-') as root:
         'MPLCONFIGDIR':'matplotlib',
     }.items():
         os.environ[key] = str(Path(root) / relative)
-    os.environ['PROGRESS_INITIAL_ADMIN_PASSWORD'] = '123456'
+    os.environ['PROGRESS_INITIAL_ADMIN_PASSWORD'] = 'theme-demo-initial'
     from app import app
     from modules import invoices
     from werkzeug.serving import make_server
     app.jinja_env.auto_reload = True
     invoices.start_invoice_worker = lambda: None
-    # This disposable visual fixture uses the shared manual-test admin password.
-    # Password-change flows are covered by server.py and dedicated member tests.
-    with app.app_context():
-        from common import get_db
-        db = get_db()
-        db.execute("UPDATE members SET must_change_password=0 WHERE username='admin'")
-        db.commit()
     client = app.test_client()
 
     def post(url, body):
@@ -35,7 +28,8 @@ with tempfile.TemporaryDirectory(prefix='xtyf-theme-demo-') as root:
             raise RuntimeError((url, response.get_json()))
         return response.get_json()
 
-    post('/login', {'username':'admin','password':'123456'})
+    post('/login', {'username':'admin','password':'theme-demo-initial'})
+    post('/api/password', {'old':'theme-demo-initial','new':'theme-demo-password'})
     groups = {row['name']:row['id'] for row in client.get('/api/groups').get_json()['groups']}
     project = next(row['id'] for row in client.get('/api/projects').get_json()['projects'] if row['name']=='哨兵')
     for stage, name, tasks in (
@@ -45,8 +39,7 @@ with tempfile.TemporaryDirectory(prefix='xtyf-theme-demo-') as root:
     ):
         member = post('/api/member', {'name':name,'username':stage,'password':'demo-member-password','group_ids':[groups[stage]],'project_ids':[project]})['id']
         for title, start, end, status in tasks:
-            blocker = {'blocker_reason':'等待跨组联调','blocker_next_action':'负责人协调联调时间'} if status == '阻塞' else {}
-            post('/api/task', {'title':title,'owner_id':member,'project_id':project,'start_date':start,'due_date':end,'status':status,**blocker})
+            post('/api/task', {'title':title,'owner_id':member,'project_id':project,'start_date':start,'due_date':end,'status':status, **({'blocker_reason':'等待联调设备','blocker_next_action':'协调资源并回报'} if status == '阻塞' else {})})
     post('/api/task', {'title':'待分配任务','project_id':project})
     post('/api/account/preferences', {'theme': os.environ.get('THEME_DEMO_THEME', 'light')})
     server = make_server('127.0.0.1', int(os.environ.get('THEME_DEMO_PORT', '0')), app, threaded=True)

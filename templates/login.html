@@ -9,23 +9,51 @@
     <h1>巡天御风管理平台</h1>
     <p class="sub">南京航空航天大学 · 巡天御风机甲战队</p>
     <label>用户名
-      <input name="username" autocomplete="username" required autofocus placeholder="请输入用户名">
+      <input name="username" maxlength="64" autocomplete="username" required autofocus placeholder="请输入用户名">
     </label>
     <div class="login-password-field">
       <label for="login-password">密码</label>
       <div class="login-password-control">
-        <input id="login-password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码">
-        <button class="login-password-toggle" type="button" aria-label="显示密码" title="显示密码" aria-controls="login-password">
+        <input id="login-password" name="password" type="password" minlength="8" maxlength="1024" autocomplete="current-password" required placeholder="请输入密码">
+        <button class="login-password-toggle" type="button" aria-label="显示密码" title="显示密码" aria-controls="login-password" aria-pressed="false">
           <svg class="password-show-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>
           <svg class="password-hide-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" hidden><path d="m3 3 18 18M10.6 5.1A12 12 0 0 1 12 5c6.5 0 10 7 10 7a19 19 0 0 1-3 3.8M6.2 6.2A21 21 0 0 0 2 12s3.5 7 10 7a12 12 0 0 0 5.8-1.8M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>
         </button>
       </div>
     </div>
     <button class="btn primary block" type="submit">登录</button>
-    <p class="error hidden" id="login-error"></p>
+    <button class="btn ghost block" id="open-recovery" type="button">忘记密码？</button>
+    <p class="error hidden" id="login-error" role="alert" aria-live="assertive"></p>
+    <p id="login-success" class="hidden" role="status" aria-live="polite"></p>
     <p class="login-footer">巡天御风 · 团队工作空间</p>
     {% include "_ios_install.html" %}
   </form>
+  <section id="recovery-panel" class="login-card hidden" aria-labelledby="recovery-title">
+    <p class="ux-eyebrow">ACCOUNT RECOVERY</p>
+    <h2 id="recovery-title">找回登录密码</h2>
+    <p class="sub">仅支持已在账户设置中验证邮箱的账号。未绑定邮箱请联系管理员重置密码。</p>
+    <form id="recovery-request-form">
+      <label>登录用户名
+        <input name="recovery_username" maxlength="64" autocomplete="username" required placeholder="请输入登录用户名">
+      </label>
+      <button id="recovery-request-submit" class="btn primary block">发送验证码</button>
+    </form>
+    <form id="recovery-confirm-form" class="hidden">
+      <label>邮箱中的六位验证码
+        <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required placeholder="6 位验证码">
+      </label>
+      <label>新密码
+        <input name="new_password" type="password" minlength="8" maxlength="1024" autocomplete="new-password" required>
+      </label>
+      <label>确认新密码
+        <input name="confirm" type="password" minlength="8" maxlength="1024" autocomplete="new-password" required>
+      </label>
+      <button id="recovery-confirm-submit" class="btn primary block">验证并重置密码</button>
+      <button type="button" id="recovery-retry" class="btn ghost block">重新申请验证码</button>
+    </form>
+    <p id="recovery-message" role="status" aria-live="polite"></p>
+    <button type="button" id="back-to-login" class="btn ghost block">返回登录</button>
+  </section>
 </div>
 {% endblock %}
 {% block scripts %}
@@ -38,12 +66,14 @@ passwordToggle.addEventListener('click', () => {
   const label = visible ? '隐藏密码' : '显示密码';
   passwordToggle.setAttribute('aria-label', label);
   passwordToggle.title = label;
+  passwordToggle.setAttribute('aria-pressed', String(visible));
   passwordToggle.querySelector('.password-show-icon').toggleAttribute('hidden', visible);
   passwordToggle.querySelector('.password-hide-icon').toggleAttribute('hidden', !visible);
 });
 document.getElementById('login-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (event.target.querySelector('button[type="submit"]').disabled) return;
+  event.target.querySelectorAll('[aria-invalid]').forEach(input=>input.removeAttribute('aria-invalid'));
   const form = new FormData(event.target);
   const button = event.target.querySelector('button[type="submit"]');
   button.disabled = true;
@@ -68,7 +98,94 @@ document.getElementById('login-form').addEventListener('submit', async (event) =
   } else {
     const el = document.getElementById('login-error');
     el.textContent = data.error || '登录失败';
+    if(res.status===400){const inputs=document.querySelectorAll('#login-form input');inputs.forEach(input=>input.setAttribute('aria-invalid','true'));inputs[0]?.focus();}
     el.classList.remove('hidden');
+  }
+});
+
+const loginForm = document.getElementById('login-form');
+const recoveryPanel = document.getElementById('recovery-panel');
+const recoveryRequestForm = document.getElementById('recovery-request-form');
+const recoveryConfirmForm = document.getElementById('recovery-confirm-form');
+const recoveryMessage = document.getElementById('recovery-message');
+let recoveryUsername = '';
+
+function showRecoveryMessage(message, isError = false) {
+  recoveryMessage.textContent = message;
+  recoveryMessage.classList.toggle('error', isError);
+}
+function toggleRecovery(open) {
+  loginForm.classList.toggle('hidden', open);
+  recoveryPanel.classList.toggle('hidden', !open);
+  if (open) {
+    recoveryRequestForm.querySelector('[name=recovery_username]').value = loginForm.querySelector('[name=username]').value;
+    recoveryRequestForm.querySelector('[name=recovery_username]').focus();
+  } else {
+    recoveryRequestForm.classList.remove('hidden');
+    recoveryConfirmForm.classList.add('hidden');
+    recoveryConfirmForm.reset();
+    showRecoveryMessage('');
+    loginForm.querySelector('[name=password]').focus();
+  }
+}
+async function recoveryPost(url, body) {
+  const response = await BusinessUI.fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  return {status: response.status, data: await response.json().catch(() => ({ok:false,error:'服务器响应异常'}))};
+}
+document.getElementById('open-recovery').addEventListener('click', () => toggleRecovery(true));
+document.getElementById('back-to-login').addEventListener('click', () => toggleRecovery(false));
+document.getElementById('recovery-retry').addEventListener('click', () => {
+  recoveryConfirmForm.classList.add('hidden');
+  recoveryRequestForm.classList.remove('hidden');
+  recoveryRequestForm.querySelector('[name=recovery_username]').value = recoveryUsername;
+  showRecoveryMessage('');
+});
+recoveryRequestForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const button = document.getElementById('recovery-request-submit');
+  recoveryUsername = new FormData(recoveryRequestForm).get('recovery_username').trim();
+  button.disabled = true;
+  try {
+    const {data} = await recoveryPost('/api/password-recovery/request', {username: recoveryUsername});
+    if (!data.ok) throw new Error(data.error || '请求失败');
+    recoveryRequestForm.classList.add('hidden');
+    recoveryConfirmForm.classList.remove('hidden');
+    showRecoveryMessage(data.message);
+    recoveryConfirmForm.querySelector('[name=code]').focus();
+  } catch (error) {
+    showRecoveryMessage(error.message || '网络连接失败，请重试', true);
+  } finally {
+    button.disabled = false;
+  }
+});
+recoveryConfirmForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const values = new FormData(recoveryConfirmForm);
+  if (values.get('new_password') !== values.get('confirm')) {
+    showRecoveryMessage('两次输入的新密码不一致', true);
+    return;
+  }
+  const button = document.getElementById('recovery-confirm-submit');
+  button.disabled = true;
+  try {
+    const {data} = await recoveryPost('/api/password-recovery/confirm', {
+      username: recoveryUsername, code: values.get('code'), new_password: values.get('new_password')
+    });
+    if (!data.ok) throw new Error(data.error || '验证码无效或已过期');
+    loginForm.querySelector('[name=username]').value = recoveryUsername;
+    toggleRecovery(false);
+    const message = document.getElementById('login-success');
+    message.textContent = '密码重置成功，请使用新密码登录';
+    message.classList.remove('hidden');
+    document.getElementById('login-error').classList.add('hidden');
+  } catch (error) {
+    showRecoveryMessage(error.message || '网络连接失败，请重试', true);
+  } finally {
+    button.disabled = false;
   }
 });
 </script>

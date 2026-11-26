@@ -90,19 +90,6 @@ body.modal-open{overflow:hidden}.modal{max-width:880px}.task-settings{margin-top
 }
 
 
-/* Both task-center cards and dashboard entries breathe red when 0–3 days remain. */
-@keyframes task-due-breathe {
-  0%,100% {box-shadow:0 0 0 0 rgba(211,52,74,.08)}
-  50% {box-shadow:0 0 0 3px rgba(211,52,74,.2),0 0 18px rgba(211,52,74,.18)}
-}
-.task.is-due-soon,.ws-task-row.is-due-soon {
-  border:1px solid #d3344a;
-  animation:task-due-breathe 2.4s ease-in-out infinite;
-}
-@media(prefers-reduced-motion:reduce){
-  .task.is-due-soon,.ws-task-row.is-due-soon{animation:none}
-}
-
 /* Local collaboration uses the active palette; content never supplies markup. */
 .panel.collab-hub { display:grid; grid-template-columns:minmax(230px,.72fr) minmax(0,1.65fr); padding:0 !important; overflow:hidden; min-height:560px; height:min(780px,calc(100dvh - 264px)); }
 .collab-hub [hidden], .collab-topic-dialog [hidden] { display:none !important; }
@@ -156,7 +143,7 @@ body.modal-open{overflow:hidden}.modal{max-width:880px}.task-settings{margin-top
 .collab-thread>.collab-composer { max-height:55%; min-height:0; overflow-y:auto; }
 .collab-composer>label, .collab-topic-fields>label { display:grid; gap:8px; font-size:13px; }
 .collab-composer textarea, .collab-composer input[type=text], #collab-new-title { width:100%; max-width:100%; min-width:0; }
-.collab-composer textarea { resize:vertical; min-height:72px; max-height:180px; }
+.collab-composer textarea { min-height:72px; --textarea-max-height:180px; }
 .collab-composer-tools { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
 .collab-composer-tools>[type=submit] { margin-left:auto; }
 .collab-file-button { position:relative; overflow:hidden; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
@@ -195,7 +182,7 @@ body.collab-dialog-open { overflow:hidden; }
   .collab-thread-head #collab-withdraw-topic { grid-row:1; grid-column:2; justify-self:end; margin:0; }
   .collab-messages-scroll { padding:12px; }
   .collab-composer { padding:12px; }
-  .collab-composer textarea { min-height:60px; max-height:130px; font-size:16px; }
+  .collab-composer textarea { min-height:60px; --textarea-max-height:130px; font-size:16px; }
   .collab-limit { flex:1 1 120px; }
   .collab-shortcut { display:none; }
   .collab-composer input { font-size:16px; }
@@ -205,3 +192,7 @@ body.collab-dialog-open { overflow:hidden; }
   .collab-topic-fields { padding:16px; flex:1; align-content:start; }
   .collab-topic-dialog footer { padding:12px 16px calc(12px + env(safe-area-inset-bottom)); justify-content:flex-end; }
 }
+
+/* Only an author sees their own withdrawn reply, with an unmistakable status. */
+.collab-withdrawn-label{font-size:12px;font-weight:650;color:var(--muted);margin-left:auto}
+.collab-message.is-withdrawn{opacity:.82}

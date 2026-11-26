@@ -154,10 +154,10 @@ function treeTaskCard(task, contextual = false) {
   const owner = memberById(task.owner_id);
   const ownerName = owner?.name || (task.owner_id ? `成员 #${Number(task.owner_id)}` : "未分配");
   const progress = Math.max(0, Math.min(100, Number(task.progress) || 0));
-  const classes = ["task", "tree-task-card", task.status === "阻塞" ? "is-blocked" : "", isOverdue(task) ? "overdue" : "", isDueSoon(task) ? "is-due-soon" : "", contextual ? "context-task" : ""].filter(Boolean).join(" ");
+  const classes = ["task", "tree-task-card", taskHighlightClasses(task), contextual ? "context-task" : ""].filter(Boolean).join(" ");
   return `<article class="${classes}" data-task-id="${Number(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${esc(task.title)}${contextual ? "（筛选外关联任务）" : ""}">
     <h3 class="tree-task-title" title="${esc(task.title)}">${esc(task.title)}</h3>
-    <div class="tree-task-meta"><span title="负责人：${esc(ownerName)}">${esc(ownerName)}</span>${badge(task.status, STATUS_CLASS[task.status] || "gray")}</div>
+    <div class="tree-task-meta"><span title="负责人：${esc(ownerName)}">${esc(ownerName)}</span>${badge(task.status, STATUS_CLASS[task.status] || "gray")}${taskAttentionBadge(task, true)}</div>
     <div class="tree-task-progress"><div class="task-progress-heading"><span>任务进度</span><strong>${progress}%</strong></div>
       <div class="progress" role="progressbar" aria-label="任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><div class="progress-inner blue" style="width:${progress}%"></div></div>
     </div>
